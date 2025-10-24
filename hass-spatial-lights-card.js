@@ -33,6 +33,7 @@ class SpatialLightColorCard extends HTMLElement {
     this._snapOnModifier = true;  // if true, requires Alt key to snap
     this._lockPositions = true;
     this._iconRefreshHandle = null;
+    this._iconRehydrateHandle = null;
 
     /** Animation frame / batching */
     this._raf = null;
@@ -63,12 +64,16 @@ class SpatialLightColorCard extends HTMLElement {
     this._boundKeyDown = null;
     this._boundCloseSettings = null;
     this._boundIconsetAdded = null;
+    this._boundMoreInfo = null;
 
     /** Touch affordances */
     this._longPressTimer = null;
     this._longPressTriggered = false;
     this._pendingTap = null;
     this._lastTap = null;
+
+    /** Overlay coordination */
+    this._moreInfoOpen = false;
   }
 
   /** Home Assistant integration */
@@ -243,6 +248,15 @@ class SpatialLightColorCard extends HTMLElement {
       });
       if (unresolved && attempt < 8) {
         this._scheduleIconRefresh(attempt + 1, 250 * (attempt + 1));
+        if (!this._iconRehydrateHandle) {
+          this._iconRehydrateHandle = setTimeout(() => {
+            this._iconRehydrateHandle = null;
+            this._forceIconRerender();
+          }, 120);
+        }
+      } else if (!unresolved && this._iconRehydrateHandle) {
+        clearTimeout(this._iconRehydrateHandle);
+        this._iconRehydrateHandle = null;
       }
     };
 
@@ -258,6 +272,32 @@ class SpatialLightColorCard extends HTMLElement {
     }
   }
 
+  _forceIconRerender() {
+    if (!this.shadowRoot) return;
+    const lights = this.shadowRoot.querySelectorAll('.light');
+    if (!lights.length) return;
+
+    lights.forEach(light => {
+      const existing = light.querySelector('ha-icon[data-icon]');
+      if (!existing) return;
+      const iconName = existing.getAttribute('data-icon');
+      if (!iconName) return;
+      const replacement = document.createElement('ha-icon');
+      replacement.className = existing.className;
+      replacement.setAttribute('data-icon', iconName);
+      replacement.setAttribute('icon', iconName);
+      if (this._hass) {
+        replacement.hass = this._hass;
+      }
+      light.replaceChild(replacement, existing);
+    });
+
+    const raf = typeof requestAnimationFrame === 'function'
+      ? requestAnimationFrame
+      : (cb) => setTimeout(cb, 16);
+    raf(() => this._refreshEntityIcons());
+  }
+
   _toggleEntity(entity) {
     if (!this._hass) return;
     const stateObj = this._hass.states?.[entity];
@@ -269,6 +309,8 @@ class SpatialLightColorCard extends HTMLElement {
   }
 
   _openMoreInfo(entity) {
+    this._moreInfoOpen = true;
+    this._syncOverlayState();
     this.dispatchEvent(new CustomEvent('hass-more-info', {
       detail: { entityId: entity },
       bubbles: true,
@@ -571,6 +613,7 @@ class SpatialLightColorCard extends HTMLElement {
       });
       this._updateControlValues(controlContext);
     }
+    this._syncOverlayState();
     this.updateLights();
     this._refreshEntityIcons();
   }
@@ -640,7 +683,7 @@ class SpatialLightColorCard extends HTMLElement {
         position: absolute; width: 56px; height: 56px; border-radius: var(--radius-full);
         transform: translate(-50%,-50%); cursor: ${this._lockPositions ? 'pointer' : 'grab'};
         display:flex; align-items:center; justify-content:center; flex-direction:column;
-        will-change: transform, left, top, background;
+        will-change: transform, left, top, background; z-index: 1;
       }
       .light::before { content:''; position:absolute; inset:0; border-radius:inherit; background:inherit; box-shadow: var(--shadow-sm); }
       .light.on::after {
@@ -657,15 +700,15 @@ class SpatialLightColorCard extends HTMLElement {
         position: absolute; top: calc(100% + 8px); left: 50%; transform: translateX(-50%);
         padding: 4px 8px; background: var(--surface-elevated); color: var(--text-primary);
         font-size: 11px; font-weight: 600; border-radius: var(--radius-sm); white-space: nowrap; pointer-events: none;
-        opacity: 0; transition: opacity var(--transition-fast); z-index: 40; border: 1px solid var(--border-subtle);
+        opacity: 0; transition: opacity var(--transition-fast); z-index: 5; border: 1px solid var(--border-subtle);
       }
       .light:hover .light-label { opacity: 1; }
 
-      .light.selected { z-index: 10; }
+      .light.selected { z-index: 3; }
       .light.selected::before {
         box-shadow: 0 0 0 2px var(--surface-primary), 0 0 0 4px rgba(99,102,241,0.5), var(--shadow-md);
       }
-      .light.dragging { cursor: grabbing; z-index: 100; transform: translate(-50%,-50%) scale(1.04); }
+      .light.dragging { cursor: grabbing; z-index: 6; transform: translate(-50%,-50%) scale(1.04); }
 
       .selection-box {
         position: absolute; border: 1.5px solid rgba(99,102,241,0.5); background: rgba(99,102,241,0.08);
@@ -786,6 +829,13 @@ class SpatialLightColorCard extends HTMLElement {
       }
 
       .settings-btn:focus-visible, .modal-close:focus-visible, .settings-button:focus-visible { outline: 2px solid var(--accent-primary); outline-offset: 2px; }
+
+      :host(.overlay-active) .light,
+      :host(.overlay-active) .light.selected,
+      :host(.overlay-active) .light.dragging,
+      :host(.overlay-active) .light-label {
+        z-index: 1;
+      }
     `;
   }
 
@@ -963,6 +1013,13 @@ class SpatialLightColorCard extends HTMLElement {
     if (typeof window !== 'undefined') {
       this._boundIconsetAdded = () => this._refreshEntityIcons();
       window.addEventListener('iron-iconset-added', this._boundIconsetAdded);
+      this._boundMoreInfo = (event) => {
+        if (event.detail && 'entityId' in event.detail) {
+          this._moreInfoOpen = Boolean(event.detail.entityId);
+          this._syncOverlayState();
+        }
+      };
+      window.addEventListener('hass-more-info', this._boundMoreInfo, { passive: true });
     }
   }
   disconnectedCallback() {
@@ -979,6 +1036,10 @@ class SpatialLightColorCard extends HTMLElement {
       window.removeEventListener('iron-iconset-added', this._boundIconsetAdded);
       this._boundIconsetAdded = null;
     }
+    if (this._boundMoreInfo && typeof window !== 'undefined') {
+      window.removeEventListener('hass-more-info', this._boundMoreInfo);
+      this._boundMoreInfo = null;
+    }
     if (this._longPressTimer) {
       clearTimeout(this._longPressTimer);
       this._longPressTimer = null;
@@ -987,12 +1048,18 @@ class SpatialLightColorCard extends HTMLElement {
       clearTimeout(this._iconRefreshHandle);
       this._iconRefreshHandle = null;
     }
+    if (this._iconRehydrateHandle) {
+      clearTimeout(this._iconRehydrateHandle);
+      this._iconRehydrateHandle = null;
+    }
     if (this._colorWheelObserver) {
       this._colorWheelObserver.disconnect();
       this._colorWheelObserver = null;
     }
     this._pendingTap = null;
     this._longPressTriggered = false;
+    this._moreInfoOpen = false;
+    this.classList.remove('overlay-active');
   }
 
   _attachEventListeners() {
@@ -1013,6 +1080,7 @@ class SpatialLightColorCard extends HTMLElement {
         this._settingsOpen = !this._settingsOpen;
         if (this._els.settingsPanel) this._els.settingsPanel.classList.toggle('visible', this._settingsOpen);
         this._els.settingsBtn.setAttribute('aria-expanded', String(this._settingsOpen));
+        this._syncOverlayState();
       });
     }
 
@@ -1028,6 +1096,7 @@ class SpatialLightColorCard extends HTMLElement {
         this._settingsOpen = false;
         if (this._els.settingsPanel) this._els.settingsPanel.classList.remove('visible');
         if (this._els.settingsBtn) this._els.settingsBtn.setAttribute('aria-expanded', 'false');
+        this._syncOverlayState();
       }
     };
     document.addEventListener('click', this._boundCloseSettings);
@@ -1065,6 +1134,7 @@ class SpatialLightColorCard extends HTMLElement {
         this._yamlModalOpen = true;
         if (this._els.yamlModal) this._els.yamlModal.classList.add('visible');
         if (this._els.yamlOutput) this._els.yamlOutput.textContent = this._generateYAML();
+        this._syncOverlayState();
       });
     }
 
@@ -1074,6 +1144,7 @@ class SpatialLightColorCard extends HTMLElement {
       closeModal.addEventListener('click', () => {
         this._yamlModalOpen = false;
         if (this._els.yamlModal) this._els.yamlModal.classList.remove('visible');
+        this._syncOverlayState();
       });
     }
     if (this._els.yamlModal) {
@@ -1081,6 +1152,7 @@ class SpatialLightColorCard extends HTMLElement {
         if (e.target === this._els.yamlModal) {
           this._yamlModalOpen = false;
           this._els.yamlModal.classList.remove('visible');
+          this._syncOverlayState();
         }
       });
     }
@@ -1157,6 +1229,15 @@ class SpatialLightColorCard extends HTMLElement {
       if (this._yamlModalOpen) this._yamlModalOpen = false;
       if (this._els.settingsPanel) this._els.settingsPanel.classList.remove('visible');
       if (this._els.yamlModal) this._els.yamlModal.classList.remove('visible');
+      if (this._moreInfoOpen) {
+        this.dispatchEvent(new CustomEvent('hass-more-info', {
+          detail: { entityId: null },
+          bubbles: true,
+          composed: true,
+        }));
+      }
+      this._moreInfoOpen = false;
+      this._syncOverlayState();
       this.updateLights();
     }
     // Select all
@@ -1463,6 +1544,11 @@ class SpatialLightColorCard extends HTMLElement {
     } else {
       this._commitSelection(inside);
     }
+  }
+
+  _syncOverlayState() {
+    const overlayActive = this._settingsOpen || this._yamlModalOpen || this._moreInfoOpen;
+    this.classList.toggle('overlay-active', overlayActive);
   }
 
   /** ---------- Color control ---------- */

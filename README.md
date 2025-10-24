@@ -246,13 +246,20 @@ entities:
 
 ## Installation
 
+### Via HACS (Recommended)
+1. In Home Assistant, go to **HACS → Frontend**.
+2. Choose **Custom repositories** and add this repo (`https://github.com/<your-user>/hass-spatial-lights-card`) as a **Lovelace** type repository while it is pending publication, or search for **Spatial Lights Card** once it is listed.
+3. Install the card and reload your browser when prompted.
+4. Make sure the resource `/hacsfiles/hass-spatial-lights-card.js` is added automatically (or add it manually under *Settings → Dashboards → Resources*).
+
+### Manual Installation
 ```bash
 # Copy file
-cp spatial-light-card.js /config/www/
+cp hass-spatial-lights-card.js /config/www/
 
 # Add to resources
 resources:
-  - url: /local/spatial-light-card.js
+  - url: /local/hass-spatial-lights-card.js
     type: module
 ```
 

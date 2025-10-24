@@ -1,17 +1,3 @@
-/**
- * Spatial Light Color Card - Production Version
- * 
- * Improvements:
- * - Lock positions by default
- * - Controls show current light state (brightness/temp/color)
- * - Mobile multi-select support (long press)
- * - Fixed drag release bug
- * - Optional always-visible controls below canvas
- * - Default entity for controlling lights without selection
- * - Optional settings button visibility
- * - Fixed initial render issue
- */
-
 class SpatialLightColorCard extends HTMLElement {
   constructor() {
     super();

@@ -32,6 +32,7 @@ class SpatialLightColorCard extends HTMLElement {
     this._gridSize = 25;
     this._snapOnModifier = true;  // if true, requires Alt key to snap
     this._lockPositions = true;
+    this._iconRefreshHandle = null;
 
     /** Animation frame / batching */
     this._raf = null;
@@ -73,9 +74,39 @@ class SpatialLightColorCard extends HTMLElement {
       throw new Error('You must specify entities as an array');
     }
 
+    const normalizedPositions = {};
+    if (config.positions && typeof config.positions === 'object') {
+      Object.entries(config.positions).forEach(([entity, pos]) => {
+        if (!pos || typeof pos !== 'object') return;
+        const x = typeof pos.x === 'number' ? pos.x : parseFloat(pos.x);
+        const y = typeof pos.y === 'number' ? pos.y : parseFloat(pos.y);
+        if (Number.isFinite(x) && Number.isFinite(y)) {
+          normalizedPositions[entity] = { x, y };
+        }
+      });
+    }
+
+    let tempMin = null;
+    let tempMax = null;
+    if (Array.isArray(config.temperature_range) && config.temperature_range.length === 2) {
+      const [minVal, maxVal] = config.temperature_range;
+      tempMin = typeof minVal === 'number' ? minVal : parseFloat(minVal);
+      tempMax = typeof maxVal === 'number' ? maxVal : parseFloat(maxVal);
+    } else if (config.temperature_range && typeof config.temperature_range === 'object') {
+      const { min, max } = config.temperature_range;
+      tempMin = typeof min === 'number' ? min : parseFloat(min);
+      tempMax = typeof max === 'number' ? max : parseFloat(max);
+    }
+    if (config.temperature_min != null && !Number.isNaN(parseFloat(config.temperature_min))) {
+      tempMin = parseFloat(config.temperature_min);
+    }
+    if (config.temperature_max != null && !Number.isNaN(parseFloat(config.temperature_max))) {
+      tempMax = parseFloat(config.temperature_max);
+    }
+
     this._config = {
       entities: config.entities,
-      positions: config.positions || {},
+      positions: normalizedPositions,
       title: config.title || '',
       canvas_height: config.canvas_height || 450,
       grid_size: config.grid_size || 25,
@@ -87,6 +118,8 @@ class SpatialLightColorCard extends HTMLElement {
       controls_below: config.controls_below !== false,
       show_entity_icons: config.show_entity_icons || false,
       icon_style: config.icon_style || 'mdi', // 'mdi' or 'emoji' (emoji kept as fallback only)
+      temperature_min: Number.isFinite(tempMin) ? tempMin : null,
+      temperature_max: Number.isFinite(tempMax) ? tempMax : null,
     };
 
     this._gridSize = this._config.grid_size;
@@ -160,12 +193,50 @@ class SpatialLightColorCard extends HTMLElement {
 
   _renderIcon(iconData) {
     if (iconData.type === 'mdi') {
-      return `<ha-icon class="light-icon light-icon-mdi" icon="${iconData.value}"></ha-icon>`;
+      return `<ha-icon class="light-icon light-icon-mdi" data-icon="${iconData.value}" icon="${iconData.value}"></ha-icon>`;
     }
     if (iconData.type === 'emoji') {
       return `<div class="light-icon light-icon-emoji">${iconData.value}</div>`;
     }
-    return `<ha-icon class="light-icon light-icon-mdi" icon="mdi:lightbulb"></ha-icon>`;
+    return `<ha-icon class="light-icon light-icon-mdi" data-icon="mdi:lightbulb" icon="mdi:lightbulb"></ha-icon>`;
+  }
+
+  _scheduleIconRefresh(attempt, delay) {
+    if (this._iconRefreshHandle) {
+      clearTimeout(this._iconRefreshHandle);
+    }
+    this._iconRefreshHandle = setTimeout(() => {
+      this._iconRefreshHandle = null;
+      this._refreshEntityIcons(attempt);
+    }, delay);
+  }
+
+  _refreshEntityIcons(attempt = 0) {
+    if (!this.shadowRoot) return;
+    const icons = this.shadowRoot.querySelectorAll('ha-icon[data-icon]');
+    if (!icons.length) return;
+
+    const applyIcons = () => {
+      icons.forEach(iconEl => {
+        const iconName = iconEl.getAttribute('data-icon');
+        if (!iconName) return;
+        if (iconEl.icon !== iconName) {
+          iconEl.icon = iconName;
+        }
+        if (iconEl.getAttribute('icon') !== iconName) {
+          iconEl.setAttribute('icon', iconName);
+        }
+      });
+    };
+
+    if (customElements.get('ha-icon')) {
+      applyIcons();
+      if (attempt < 3) {
+        this._scheduleIconRefresh(attempt + 1, 250 * (attempt + 1));
+      }
+    } else if (attempt < 5) {
+      this._scheduleIconRefresh(attempt + 1, 300 * (attempt + 1));
+    }
   }
 
   /** ---------- Auto-layout / rearrange ---------- */
@@ -196,6 +267,8 @@ class SpatialLightColorCard extends HTMLElement {
     const rows = Math.ceil(entities.length / cols);
     const spacing = 100 / (cols + 1);
 
+    const previousPositions = this._clonePositions();
+    const newPositions = {};
     entities.forEach((entity, idx) => {
       const col = idx % cols;
       const row = Math.floor(idx / cols);
@@ -203,11 +276,14 @@ class SpatialLightColorCard extends HTMLElement {
         x: spacing * (col + 1),
         y: (100 / (rows + 1)) * (row + 1),
       };
-      this._config.positions[entity] = pos;
+      newPositions[entity] = pos;
     });
 
-    this._saveHistory();
+    this._config.positions = newPositions;
+    this._saveHistory(previousPositions);
+    this._saveHistory(newPositions);
     this._smoothApplyPositions();
+    this.updateLights();
   }
 
   _smoothApplyPositions() {
@@ -230,23 +306,31 @@ class SpatialLightColorCard extends HTMLElement {
   }
 
   /** ---------- History ---------- */
-  _saveHistory() {
+  _saveHistory(snapshot = null) {
+    const snapshotPositions = this._clonePositions(snapshot || this._config.positions);
+    const last = this._history[this._historyIndex];
+    if (last && JSON.stringify(last) === JSON.stringify(snapshotPositions)) return;
+
     this._history = this._history.slice(0, this._historyIndex + 1);
-    this._history.push(JSON.parse(JSON.stringify(this._config.positions)));
-    if (this._history.length > 50) this._history.shift();
-    else this._historyIndex++;
+    this._history.push(snapshotPositions);
+    if (this._history.length > 50) {
+      this._history.shift();
+      this._historyIndex = this._history.length - 1;
+    } else {
+      this._historyIndex++;
+    }
   }
   _undo() {
     if (this._historyIndex > 0) {
       this._historyIndex--;
-      this._config.positions = JSON.parse(JSON.stringify(this._history[this._historyIndex]));
+      this._config.positions = this._clonePositions(this._history[this._historyIndex]);
       this._smoothApplyPositions();
     }
   }
   _redo() {
     if (this._historyIndex < this._history.length - 1) {
       this._historyIndex++;
-      this._config.positions = JSON.parse(JSON.stringify(this._history[this._historyIndex]));
+      this._config.positions = this._clonePositions(this._history[this._historyIndex]);
       this._smoothApplyPositions();
     }
   }
@@ -268,21 +352,92 @@ class SpatialLightColorCard extends HTMLElement {
   }
 
   /** ---------- Aggregated state of selected lights ---------- */
-  _getAverageState() {
-    const controlled = this._selectedLights.size > 0
-      ? [...this._selectedLights]
-      : (this._config.default_entity ? [this._config.default_entity] : []);
-
-    if (controlled.length === 0) {
-      return { brightness: 128, temperature: 4000, color: null };
+  _getControlledEntities() {
+    if (this._selectedLights.size > 0) {
+      return [...this._selectedLights];
     }
+    if (this._config.default_entity) {
+      return [this._config.default_entity];
+    }
+    return [];
+  }
+
+  _clampTemperature(value, range) {
+    if (!range) return value;
+    return Math.max(range.min, Math.min(range.max, value));
+  }
+
+  _clonePositions(source = this._config.positions) {
+    return JSON.parse(JSON.stringify(source || {}));
+  }
+
+  _resolveTemperatureRange(controlled) {
+    const explicitMin = Number.isFinite(this._config.temperature_min) ? this._config.temperature_min : null;
+    const explicitMax = Number.isFinite(this._config.temperature_max) ? this._config.temperature_max : null;
+
+    let minK = explicitMin ?? Infinity;
+    let maxK = explicitMax ?? -Infinity;
+
+    const pool = (controlled && controlled.length > 0) ? controlled : this._config.entities;
+
+    pool.forEach(entity_id => {
+      const st = this._hass?.states?.[entity_id];
+      if (!st) return;
+      const attrs = st.attributes || {};
+
+      const maxMireds = attrs.max_mireds != null ? Number(attrs.max_mireds) : NaN;
+      const minMireds = attrs.min_mireds != null ? Number(attrs.min_mireds) : NaN;
+      if (Number.isFinite(maxMireds) && Number.isFinite(minMireds)) {
+        const warm = Math.round(1000000 / maxMireds);
+        const cool = Math.round(1000000 / minMireds);
+        minK = Math.min(minK, warm);
+        maxK = Math.max(maxK, cool);
+        return;
+      }
+
+      const colorTempKelvin = attrs.color_temp_kelvin != null ? Number(attrs.color_temp_kelvin) : NaN;
+      if (Number.isFinite(colorTempKelvin)) {
+        const current = Math.round(colorTempKelvin);
+        minK = Math.min(minK, current);
+        maxK = Math.max(maxK, current);
+        return;
+      }
+
+      const colorTempMired = attrs.color_temp != null ? Number(attrs.color_temp) : NaN;
+      if (Number.isFinite(colorTempMired)) {
+        const current = Math.round(1000000 / colorTempMired);
+        minK = Math.min(minK, current);
+        maxK = Math.max(maxK, current);
+      }
+    });
+
+    if (!Number.isFinite(minK)) minK = explicitMin ?? 2000;
+    if (!Number.isFinite(maxK)) maxK = explicitMax ?? 6500;
+
+    if (explicitMin != null) minK = explicitMin;
+    if (explicitMax != null) maxK = explicitMax;
+
+    minK = Math.max(1000, Math.round(minK));
+    maxK = Math.min(10000, Math.round(maxK));
+
+    if (minK >= maxK) {
+      const base = Math.max(1000, Math.round((minK + maxK) / 2) || 3000);
+      minK = Math.max(1000, base - 100);
+      maxK = Math.max(minK + 100, base + 100);
+    }
+
+    return { min: minK, max: maxK };
+  }
+
+  _getControlContext() {
+    const controlled = this._getControlledEntities();
 
     let bTot = 0, bCnt = 0;
     let tTot = 0, tCnt = 0;
     let lastRGB = null;
 
     controlled.forEach(id => {
-      const st = this._hass?.states[id];
+      const st = this._hass?.states?.[id];
       if (!st || st.state !== 'on') return;
       if (st.attributes.brightness != null) {
         bTot += st.attributes.brightness; bCnt++;
@@ -291,19 +446,32 @@ class SpatialLightColorCard extends HTMLElement {
         const kelvin = Math.round(1000000 / st.attributes.color_temp);
         tTot += kelvin; tCnt++;
       }
-      if (st.attributes.rgb_color) lastRGB = st.attributes.rgb_color;
+      if (Array.isArray(st.attributes.rgb_color)) {
+        lastRGB = st.attributes.rgb_color;
+      }
     });
 
+    const range = this._resolveTemperatureRange(controlled);
+
+    const avgBrightness = bCnt ? Math.round(bTot / bCnt) : 128;
+    const avgTemperatureRaw = tCnt ? Math.round(tTot / tCnt) : Math.round((range.min + range.max) / 2);
+    const avgTemperature = this._clampTemperature(avgTemperatureRaw, range);
+
     return {
-      brightness: bCnt ? Math.round(bTot / bCnt) : 128,
-      temperature: tCnt ? Math.round(tTot / tCnt) : 4000,
-      color: lastRGB,
+      controlled,
+      avgState: {
+        brightness: avgBrightness,
+        temperature: avgTemperature,
+        color: lastRGB,
+      },
+      tempRange: range,
     };
   }
 
   /** ---------- Rendering ---------- */
   _renderAll() {
-    const avgState = this._getAverageState();
+    const controlContext = this._getControlContext();
+    const avgState = controlContext.avgState;
     const showControls = this._config.always_show_controls || this._selectedLights.size > 0 || this._config.default_entity;
     const controlsPosition = this._config.controls_below ? 'below' : 'floating';
     const showHeader = this._config.title || this._config.show_settings_button;
@@ -318,10 +486,10 @@ class SpatialLightColorCard extends HTMLElement {
           <div class="canvas" id="canvas" role="application" aria-label="Spatial light control area">
             <div class="grid"></div>
             ${this._renderLightsHTML()}
-            ${controlsPosition === 'floating' ? this._renderControlsFloating(showControls, avgState) : ''}
+            ${controlsPosition === 'floating' ? this._renderControlsFloating(showControls, controlContext) : ''}
             ${this._renderSettings()}
           </div>
-          ${controlsPosition === 'below' ? this._renderControlsBelow(avgState) : ''}
+          ${controlsPosition === 'below' ? this._renderControlsBelow(controlContext) : ''}
         </div>
         ${this._renderYamlModal()}
       </ha-card>
@@ -348,9 +516,10 @@ class SpatialLightColorCard extends HTMLElement {
     this._attachEventListeners();
     if ((showControls || this._config.always_show_controls) && this._els.colorWheel) {
       this.drawColorWheel();
-      this._updateControlValues(avgState);
+      this._updateControlValues(controlContext);
     }
     this.updateLights();
+    this._refreshEntityIcons();
   }
 
   _styles() {
@@ -613,7 +782,9 @@ class SpatialLightColorCard extends HTMLElement {
     }).join('');
   }
 
-  _renderControlsFloating(visible, avgState) {
+  _renderControlsFloating(visible, controlContext) {
+    const { avgState, tempRange } = controlContext;
+    const clampedTemp = this._clampTemperature(avgState.temperature, tempRange);
     return `
       <div class="controls-floating ${visible ? 'visible' : ''}" id="controlsFloating" role="region" aria-label="Light controls" aria-live="polite">
         <canvas id="colorWheelMini" class="color-wheel-mini" width="256" height="256" role="img" aria-label="Color picker"></canvas>
@@ -625,15 +796,17 @@ class SpatialLightColorCard extends HTMLElement {
           </div>
           <div class="slider-row">
             <span class="slider-icon" aria-hidden="true">🌡️</span>
-            <input type="range" class="slider temperature" id="temperatureSlider" min="2000" max="6500" value="${avgState.temperature}" aria-label="Color temperature">
-            <span class="slider-value" id="temperatureValue">${avgState.temperature}K</span>
+            <input type="range" class="slider temperature" id="temperatureSlider" min="${tempRange.min}" max="${tempRange.max}" value="${clampedTemp}" aria-label="Color temperature">
+            <span class="slider-value" id="temperatureValue">${clampedTemp}K</span>
           </div>
         </div>
       </div>
     `;
   }
 
-  _renderControlsBelow(avgState) {
+  _renderControlsBelow(controlContext) {
+    const { avgState, tempRange } = controlContext;
+    const clampedTemp = this._clampTemperature(avgState.temperature, tempRange);
     return `
       <div class="controls-below" id="controlsBelow" role="region" aria-label="Light controls" aria-live="polite">
         <canvas id="colorWheelMini" class="color-wheel-mini" width="256" height="256" role="img" aria-label="Color picker"></canvas>
@@ -645,8 +818,8 @@ class SpatialLightColorCard extends HTMLElement {
           </div>
           <div class="slider-row">
             <span class="slider-icon" aria-hidden="true">🌡️</span>
-            <input type="range" class="slider temperature" id="temperatureSlider" min="2000" max="6500" value="${avgState.temperature}" aria-label="Color temperature">
-            <span class="slider-value" id="temperatureValue">${avgState.temperature}K</span>
+            <input type="range" class="slider temperature" id="temperatureSlider" min="${tempRange.min}" max="${tempRange.max}" value="${clampedTemp}" aria-label="Color temperature">
+            <span class="slider-value" id="temperatureValue">${clampedTemp}K</span>
           </div>
         </div>
       </div>
@@ -700,18 +873,31 @@ class SpatialLightColorCard extends HTMLElement {
     `;
   }
 
-  _updateControlValues(avgState) {
+  _updateControlValues(controlContext) {
+    const context = controlContext || { avgState: { brightness: 128, temperature: 4000 }, tempRange: { min: 2000, max: 6500 } };
+    const { avgState, tempRange } = context;
+    const brightness = Number.isFinite(avgState?.brightness) ? avgState.brightness : 128;
+    const temperature = Number.isFinite(avgState?.temperature)
+      ? this._clampTemperature(avgState.temperature, tempRange)
+      : this._clampTemperature(4000, tempRange);
+
     if (this._els.brightnessSlider) {
-      this._els.brightnessSlider.value = String(avgState.brightness);
+      this._els.brightnessSlider.value = String(brightness);
     }
     if (this._els.brightnessValue) {
-      this._els.brightnessValue.textContent = `${Math.round((avgState.brightness / 255) * 100)}%`;
+      this._els.brightnessValue.textContent = `${Math.round((brightness / 255) * 100)}%`;
     }
     if (this._els.temperatureSlider) {
-      this._els.temperatureSlider.value = String(avgState.temperature);
+      if (this._els.temperatureSlider.min !== String(tempRange.min)) {
+        this._els.temperatureSlider.min = String(tempRange.min);
+      }
+      if (this._els.temperatureSlider.max !== String(tempRange.max)) {
+        this._els.temperatureSlider.max = String(tempRange.max);
+      }
+      this._els.temperatureSlider.value = String(temperature);
     }
     if (this._els.temperatureValue) {
-      this._els.temperatureValue.textContent = `${avgState.temperature}K`;
+      this._els.temperatureValue.textContent = `${temperature}K`;
     }
   }
 
@@ -730,6 +916,10 @@ class SpatialLightColorCard extends HTMLElement {
     if (this._longPressTimer) {
       clearTimeout(this._longPressTimer);
       this._longPressTimer = null;
+    }
+    if (this._iconRefreshHandle) {
+      clearTimeout(this._iconRefreshHandle);
+      this._iconRefreshHandle = null;
     }
     this._pendingTap = null;
     this._longPressTriggered = false;
@@ -867,6 +1057,7 @@ class SpatialLightColorCard extends HTMLElement {
         light.insertAdjacentHTML('afterbegin', this._renderIcon(iconData));
       }
     });
+    this._refreshEntityIcons();
   }
 
   _commitSelection(newSelection) {
@@ -1001,10 +1192,7 @@ class SpatialLightColorCard extends HTMLElement {
       };
       targetLight.classList.add('dragging');
       // Pre-history snapshot if necessary
-      if (this._history.length === 0 ||
-          JSON.stringify(this._history[this._historyIndex]) !== JSON.stringify(this._config.positions)) {
-        this._saveHistory();
-      }
+      this._saveHistory();
       return;
     }
 
@@ -1128,6 +1316,9 @@ class SpatialLightColorCard extends HTMLElement {
 
   _cancelActiveInteractions() {
     this._dragState = null;
+    if (this.shadowRoot) {
+      this.shadowRoot.querySelectorAll('.light.dragging').forEach(node => node.classList.remove('dragging'));
+    }
     if (this._selectionBox) {
       this._selectionBox.remove();
       this._selectionBox = null;
@@ -1332,14 +1523,15 @@ class SpatialLightColorCard extends HTMLElement {
 
     // Update controls to reflect averaged state
     if (this._config.always_show_controls || this._selectedLights.size > 0 || this._config.default_entity) {
-      const avgState = this._getAverageState();
-      this._updateControlValues(avgState);
+      const controlContext = this._getControlContext();
+      this._updateControlValues(controlContext);
       // Show/hide floating controls if used
       if (this._els.controlsFloating) {
         const visible = this._config.always_show_controls || this._selectedLights.size > 0 || this._config.default_entity;
         this._els.controlsFloating.classList.toggle('visible', visible);
       }
     }
+    this._refreshEntityIcons();
   }
 
   /** ---------- YAML generation ---------- */
@@ -1354,6 +1546,8 @@ class SpatialLightColorCard extends HTMLElement {
     if (!this._config.show_settings_button) yaml += `show_settings_button: false\n`;
     if (this._config.show_entity_icons) yaml += `show_entity_icons: true\n`;
     if (this._config.icon_style !== 'mdi') yaml += `icon_style: ${this._config.icon_style}\n`;
+    if (Number.isFinite(this._config.temperature_min)) yaml += `temperature_min: ${Math.round(this._config.temperature_min)}\n`;
+    if (Number.isFinite(this._config.temperature_max)) yaml += `temperature_max: ${Math.round(this._config.temperature_max)}\n`;
 
     yaml += `entities:\n`;
     this._config.entities.forEach(ent => { yaml += `${indent}- ${ent}\n`; });

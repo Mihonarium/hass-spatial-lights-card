@@ -2,892 +2,877 @@ class SpatialLightColorCard extends HTMLElement {
   constructor() {
     super();
     this.attachShadow({ mode: 'open' });
-    
-    // State
+
+    /** Core state */
     this._config = {};
     this._hass = null;
+
+    /** Selection & interactions */
     this._selectedLights = new Set();
-    this._hoveredLight = null;
-    this._dragState = null;
-    this._selectionBox = null;
-    this._selectionStart = null;
+    this._dragState = null;             // { entity, startX, startY, initialLeft, initialTop, rect, moved }
+    this._selectionBox = null;          // HTMLElement for rubberband selection
+    this._selectionStart = null;        // { x, y } in canvas coords
+    this._selectionModeAdditive = false;
+    this._selectionBase = null;
+
+    /** UI state */
     this._settingsOpen = false;
     this._yamlModalOpen = false;
+
+    /** History (positions undo/redo) */
     this._history = [];
     this._historyIndex = -1;
+
+    /** Pending user inputs (debounced applies) */
+    this._pendingBrightness = null;
+    this._pendingTemperature = null;
+    this._pendingColor = null;
+
+    /** Settings */
+    this._gridSize = 25;
+    this._snapOnModifier = true;  // if true, requires Alt key to snap
+    this._lockPositions = true;
+    this._iconRefreshHandle = null;
+
+    /** Animation frame / batching */
+    this._raf = null;
+    this._colorWheelActive = false;
+    this._colorWheelObserver = null;
+
+    /** Cached DOM refs (stable after first render) */
+    this._els = {
+      canvas: null,
+      controlsFloating: null,
+      controlsBelow: null,
+      brightnessSlider: null,
+      brightnessValue: null,
+      temperatureSlider: null,
+      temperatureValue: null,
+      colorWheel: null,
+      settingsBtn: null,
+      settingsPanel: null,
+      lockToggle: null,
+      iconToggle: null,
+      rearrangeBtn: null,
+      exportBtn: null,
+      yamlModal: null,
+      yamlOutput: null,
+    };
+
+    /** Global bindings */
+    this._boundKeyDown = null;
+    this._boundCloseSettings = null;
+    this._boundIconsetAdded = null;
+
+    /** Touch affordances */
     this._longPressTimer = null;
     this._longPressTriggered = false;
-    
-    // Settings
-    this._gridSize = 25;
-    this._snapOnModifier = true;
-    this._lockPositions = true; // DEFAULT TO LOCKED
+    this._pendingTap = null;
+    this._lastTap = null;
   }
 
+  /** Home Assistant integration */
   setConfig(config) {
     if (!config.entities || !Array.isArray(config.entities)) {
       throw new Error('You must specify entities as an array');
     }
 
+    const normalizedPositions = {};
+    if (config.positions && typeof config.positions === 'object') {
+      Object.entries(config.positions).forEach(([entity, pos]) => {
+        if (!pos || typeof pos !== 'object') return;
+        const x = typeof pos.x === 'number' ? pos.x : parseFloat(pos.x);
+        const y = typeof pos.y === 'number' ? pos.y : parseFloat(pos.y);
+        if (Number.isFinite(x) && Number.isFinite(y)) {
+          normalizedPositions[entity] = { x, y };
+        }
+      });
+    }
+
+    let tempMin = null;
+    let tempMax = null;
+    if (Array.isArray(config.temperature_range) && config.temperature_range.length === 2) {
+      const [minVal, maxVal] = config.temperature_range;
+      tempMin = typeof minVal === 'number' ? minVal : parseFloat(minVal);
+      tempMax = typeof maxVal === 'number' ? maxVal : parseFloat(maxVal);
+    } else if (config.temperature_range && typeof config.temperature_range === 'object') {
+      const { min, max } = config.temperature_range;
+      tempMin = typeof min === 'number' ? min : parseFloat(min);
+      tempMax = typeof max === 'number' ? max : parseFloat(max);
+    }
+    if (config.temperature_min != null && !Number.isNaN(parseFloat(config.temperature_min))) {
+      tempMin = parseFloat(config.temperature_min);
+    }
+    if (config.temperature_max != null && !Number.isNaN(parseFloat(config.temperature_max))) {
+      tempMax = parseFloat(config.temperature_max);
+    }
+
     this._config = {
       entities: config.entities,
-      positions: config.positions || {},
-      title: config.title || 'Lights',
+      positions: normalizedPositions,
+      title: config.title || '',
       canvas_height: config.canvas_height || 450,
       grid_size: config.grid_size || 25,
       label_mode: config.label_mode || 'smart',
       label_overrides: config.label_overrides || {},
-      show_settings_button: config.show_settings_button !== false, // Default true
-      always_show_controls: config.always_show_controls || false, // Default false
-      default_entity: config.default_entity || null, // Default none
-      controls_below: config.controls_below !== false // Default true (below canvas)
+      show_settings_button: config.show_settings_button !== false,
+      always_show_controls: config.always_show_controls || false,
+      default_entity: config.default_entity || null,
+      controls_below: config.controls_below !== false,
+      show_entity_icons: config.show_entity_icons || false,
+      icon_style: config.icon_style || 'mdi', // 'mdi' or 'emoji' (emoji kept as fallback only)
+      temperature_min: Number.isFinite(tempMin) ? tempMin : null,
+      temperature_max: Number.isFinite(tempMax) ? tempMax : null,
     };
 
     this._gridSize = this._config.grid_size;
-    
-    // Auto-layout for unpositioned lights
     this._initializePositions();
-    
-    // Don't render yet - wait for hass
   }
 
   set hass(hass) {
     const firstTime = !this._hass;
     this._hass = hass;
-    
-    // Render on first hass assignment
     if (firstTime) {
-      this.render();
+      this._renderAll();
     } else {
       this.updateLights();
     }
   }
 
-  /**
-   * SMART LABEL GENERATION
-   */
+  /** ---------- Label system ---------- */
   _generateLabel(entity_id) {
     if (this._config.label_overrides[entity_id]) {
       return this._config.label_overrides[entity_id];
     }
+    const st = this._hass?.states[entity_id];
+    if (!st) return '?';
 
-    const state = this._hass?.states[entity_id];
-    if (!state) return '?';
+    const name = st.attributes.friendly_name || entity_id;
+    const allNames = this._config.entities.map(e => this._hass?.states[e]?.attributes.friendly_name || e);
 
-    const name = state.attributes.friendly_name || entity_id;
-    
-    // Get all names for context
-    const allNames = this._config.entities.map(e => 
-      this._hass?.states[e]?.attributes.friendly_name || e
-    );
-
-    // Strategy 1: Look for trailing numbers
-    const numberMatch = name.match(/(\d+)$/);
-    if (numberMatch) {
-      const baseName = name.substring(0, name.length - numberMatch[0].length).trim();
-      const number = numberMatch[0];
-      const similarCount = allNames.filter(n => n.startsWith(baseName)).length;
-      
-      if (similarCount > 1) {
-        const initials = this._getInitials(baseName);
-        return initials + number;
+    // 1) trailing numbers
+    const m = name.match(/(\d+)$/);
+    if (m) {
+      const base = name.substring(0, name.length - m[0].length).trim();
+      const n = m[0];
+      const similar = allNames.filter(nm => nm.startsWith(base)).length;
+      if (similar > 1) {
+        return this._getInitials(base) + n;
       }
     }
-
-    // Strategy 2: Look for directional words
+    // 2) directional
     const words = name.split(/\s+/);
-    const directions = ['left', 'right', 'center', 'front', 'back', 'top', 'bottom'];
-    const dirWord = words.find(w => directions.includes(w.toLowerCase()));
-    
+    const dirs = ['left', 'right', 'center', 'front', 'back', 'top', 'bottom', 'north', 'south', 'east', 'west'];
+    const dirWord = words.find(w => dirs.includes(w.toLowerCase()));
     if (dirWord) {
       const baseWords = words.filter(w => w !== dirWord);
       const initials = baseWords.slice(0, 2).map(w => w[0]).join('');
-      return initials.toUpperCase() + dirWord[0].toUpperCase();
+      return (initials + dirWord[0]).toUpperCase();
     }
-
-    // Strategy 3: Smart abbreviation
     return this._getInitials(name);
   }
 
   _getInitials(text) {
-    const stopWords = ['the', 'a', 'an', 'light', 'lamp', 'bulb'];
-    const words = text.split(/\s+/)
-      .filter(w => w.length > 0 && !stopWords.includes(w.toLowerCase()));
-    
-    if (words.length === 0) return text.substring(0, 2).toUpperCase();
-    if (words.length === 1) return words[0].substring(0, 2).toUpperCase();
-    
-    return words.slice(0, 3).map(w => w[0]).join('').toUpperCase();
+    const stop = ['the', 'a', 'an', 'light', 'lamp', 'bulb'];
+    const ws = text.split(/\s+/).filter(w => w && !stop.includes(w.toLowerCase()));
+    if (ws.length === 0) return text.substring(0, 2).toUpperCase();
+    if (ws.length === 1) return ws[0].substring(0, 2).toUpperCase();
+    return ws.slice(0, 3).map(w => w[0]).join('').toUpperCase();
   }
 
-  /**
-   * AUTO-LAYOUT
-   */
-  _initializePositions() {
-    const unpositioned = this._config.entities.filter(e => !this._config.positions[e]);
-    if (unpositioned.length === 0) return;
+  /** ---------- Icon system (SVG via HA components) ---------- */
+  _getEntityIconData(entity_id) {
+    const st = this._hass?.states[entity_id];
+    if (!st) return { type: 'mdi', value: 'mdi:lightbulb' };
+    const icon = st.attributes.icon || 'mdi:lightbulb';
+    if (this._config.icon_style === 'emoji') {
+      // Fallback only; discouraged in this upgrade
+      return { type: 'emoji', value: '💡' };
+    }
+    if (icon.startsWith('mdi:')) return { type: 'mdi', value: icon };
+    // HA sometimes sets arbitrary icon strings; attempt to feed into ha-icon anyway
+    return { type: 'mdi', value: icon };
+  }
 
-    const cols = Math.ceil(Math.sqrt(unpositioned.length * 1.5));
-    const rows = Math.ceil(unpositioned.length / cols);
+  _renderIcon(iconData) {
+    if (iconData.type === 'mdi') {
+      return `<ha-icon class="light-icon light-icon-mdi" data-icon="${iconData.value}" icon="${iconData.value}"></ha-icon>`;
+    }
+    if (iconData.type === 'emoji') {
+      return `<div class="light-icon light-icon-emoji">${iconData.value}</div>`;
+    }
+    return `<ha-icon class="light-icon light-icon-mdi" data-icon="mdi:lightbulb" icon="mdi:lightbulb"></ha-icon>`;
+  }
+
+  _scheduleIconRefresh(attempt, delay) {
+    if (this._iconRefreshHandle) {
+      clearTimeout(this._iconRefreshHandle);
+    }
+    this._iconRefreshHandle = setTimeout(() => {
+      this._iconRefreshHandle = null;
+      this._refreshEntityIcons(attempt);
+    }, delay);
+  }
+
+  _refreshEntityIcons(attempt = 0) {
+    if (!this.shadowRoot) return;
+    const icons = this.shadowRoot.querySelectorAll('ha-icon[data-icon]');
+    if (!icons.length) return;
+
+    const applyIcons = () => {
+      icons.forEach(iconEl => {
+        const iconName = iconEl.getAttribute('data-icon');
+        if (!iconName) return;
+        if (iconEl.icon !== iconName) {
+          iconEl.icon = iconName;
+        }
+        if (iconEl.getAttribute('icon') !== iconName) {
+          iconEl.setAttribute('icon', iconName);
+        }
+        if (this._hass && iconEl.hass !== this._hass) {
+          iconEl.hass = this._hass;
+        }
+      });
+    };
+
+    const ensureDefined = () => {
+      applyIcons();
+      const unresolved = Array.from(icons).some(iconEl => {
+        if (!iconEl.shadowRoot) return true;
+        return !iconEl.shadowRoot.querySelector('ha-svg-icon, svg');
+      });
+      if (unresolved && attempt < 8) {
+        this._scheduleIconRefresh(attempt + 1, 250 * (attempt + 1));
+      }
+    };
+
+    if (typeof customElements === 'undefined') {
+      ensureDefined();
+      return;
+    }
+
+    if (customElements.get('ha-icon')) {
+      ensureDefined();
+    } else if (attempt < 8) {
+      customElements.whenDefined('ha-icon').then(() => this._refreshEntityIcons(attempt + 1));
+    }
+  }
+
+  _toggleEntity(entity) {
+    if (!this._hass) return;
+    const stateObj = this._hass.states?.[entity];
+    if (!stateObj) return;
+    const [domain] = entity.split('.');
+    if (domain !== 'light') return;
+    const service = stateObj.state === 'on' ? 'turn_off' : 'turn_on';
+    this._hass.callService('light', service, { entity_id: entity });
+  }
+
+  _openMoreInfo(entity) {
+    this.dispatchEvent(new CustomEvent('hass-more-info', {
+      detail: { entityId: entity },
+      bubbles: true,
+      composed: true,
+    }));
+  }
+
+  /** ---------- Auto-layout / rearrange ---------- */
+  _initializePositions() {
+    const unpos = this._config.entities.filter(e => !this._config.positions[e]);
+    if (unpos.length === 0) return;
+
+    const cols = Math.ceil(Math.sqrt(unpos.length * 1.5));
+    const rows = Math.ceil(unpos.length / cols);
     const spacing = 100 / (cols + 1);
-    
-    unpositioned.forEach((entity, index) => {
-      const col = index % cols;
-      const row = Math.floor(index / cols);
-      
+
+    unpos.forEach((entity, idx) => {
+      const col = idx % cols;
+      const row = Math.floor(idx / cols);
       this._config.positions[entity] = {
         x: spacing * (col + 1),
-        y: (100 / (rows + 1)) * (row + 1)
+        y: (100 / (rows + 1)) * (row + 1),
       };
     });
   }
 
-  /**
-   * HISTORY
-   */
-  _saveHistory() {
-    this._history = this._history.slice(0, this._historyIndex + 1);
-    this._history.push(JSON.parse(JSON.stringify(this._config.positions)));
-    if (this._history.length > 50) this._history.shift();
-    else this._historyIndex++;
+  _rearrangeAllLights() {
+    // Cancel any active interactions first
+    this._cancelActiveInteractions();
+
+    const entities = this._config.entities;
+    const cols = Math.ceil(Math.sqrt(entities.length * 1.5));
+    const rows = Math.ceil(entities.length / cols);
+    const spacing = 100 / (cols + 1);
+
+    const previousPositions = this._clonePositions();
+    const newPositions = {};
+    entities.forEach((entity, idx) => {
+      const col = idx % cols;
+      const row = Math.floor(idx / cols);
+      const pos = {
+        x: spacing * (col + 1),
+        y: (100 / (rows + 1)) * (row + 1),
+      };
+      newPositions[entity] = pos;
+    });
+
+    this._config.positions = newPositions;
+    this._saveHistory(previousPositions);
+    this._saveHistory(newPositions);
+    this._smoothApplyPositions();
+    this.updateLights();
   }
 
+  _smoothApplyPositions() {
+    // Smoothly transition existing DOM nodes instead of full re-render
+    const lights = this.shadowRoot.querySelectorAll('.light');
+    lights.forEach(light => {
+      const entity = light.dataset.entity;
+      const pos = this._config.positions[entity];
+      if (pos) {
+        light.style.transition = 'left 200ms ease, top 200ms ease';
+        light.style.left = `${pos.x}%`;
+        light.style.top = `${pos.y}%`;
+        // Remove transition after complete to avoid future lag
+        setTimeout(() => {
+          if (light) light.style.transition = '';
+        }, 250);
+      }
+    });
+    // Controls may rely on selection state; keep as-is.
+  }
+
+  /** ---------- History ---------- */
+  _saveHistory(snapshot = null) {
+    const snapshotPositions = this._clonePositions(snapshot || this._config.positions);
+    const last = this._history[this._historyIndex];
+    if (last && JSON.stringify(last) === JSON.stringify(snapshotPositions)) return;
+
+    this._history = this._history.slice(0, this._historyIndex + 1);
+    this._history.push(snapshotPositions);
+    if (this._history.length > 50) {
+      this._history.shift();
+      this._historyIndex = this._history.length - 1;
+    } else {
+      this._historyIndex++;
+    }
+  }
   _undo() {
     if (this._historyIndex > 0) {
       this._historyIndex--;
-      this._config.positions = JSON.parse(JSON.stringify(this._history[this._historyIndex]));
-      this.render();
+      this._config.positions = this._clonePositions(this._history[this._historyIndex]);
+      this._smoothApplyPositions();
     }
   }
-
   _redo() {
     if (this._historyIndex < this._history.length - 1) {
       this._historyIndex++;
-      this._config.positions = JSON.parse(JSON.stringify(this._history[this._historyIndex]));
-      this.render();
+      this._config.positions = this._clonePositions(this._history[this._historyIndex]);
+      this._smoothApplyPositions();
     }
   }
 
-  /**
-   * GRID SNAPPING
-   */
+  /** ---------- Grid snap ---------- */
   _shouldSnap(event) {
     return event?.altKey || !this._snapOnModifier;
   }
-
   _snapToGrid(x, y, event) {
     if (!this._shouldSnap(event)) return { x, y };
-    
-    const canvas = this.shadowRoot.getElementById('canvas');
+    const canvas = this._els.canvas;
     if (!canvas) return { x, y };
-    
     const rect = canvas.getBoundingClientRect();
-    const pixelX = (x / 100) * rect.width;
-    const pixelY = (y / 100) * rect.height;
-    
-    const snappedX = Math.round(pixelX / this._gridSize) * this._gridSize;
-    const snappedY = Math.round(pixelY / this._gridSize) * this._gridSize;
-    
-    return {
-      x: (snappedX / rect.width) * 100,
-      y: (snappedY / rect.height) * 100
-    };
+    const px = (x / 100) * rect.width;
+    const py = (y / 100) * rect.height;
+    const sx = Math.round(px / this._gridSize) * this._gridSize;
+    const sy = Math.round(py / this._gridSize) * this._gridSize;
+    return { x: (sx / rect.width) * 100, y: (sy / rect.height) * 100 };
   }
 
-  /**
-   * GET CURRENT VALUES FROM SELECTED LIGHTS
-   */
-  _getAverageState() {
-    const controlledEntities = this._selectedLights.size > 0 
-      ? Array.from(this._selectedLights)
-      : (this._config.default_entity ? [this._config.default_entity] : []);
-    
-    if (controlledEntities.length === 0) {
-      return { brightness: 128, temperature: 3500, color: null };
+  /** ---------- Aggregated state of selected lights ---------- */
+  _getControlledEntities() {
+    if (this._selectedLights.size > 0) {
+      return [...this._selectedLights];
     }
+    if (this._config.default_entity) {
+      return [this._config.default_entity];
+    }
+    return [];
+  }
 
-    let totalBrightness = 0;
-    let totalTemp = 0;
-    let brightCount = 0;
-    let tempCount = 0;
-    let lastColor = null;
+  _clampTemperature(value, range) {
+    if (!range) return value;
+    return Math.max(range.min, Math.min(range.max, value));
+  }
 
-    controlledEntities.forEach(entity_id => {
-      const state = this._hass?.states[entity_id];
-      if (!state || state.state !== 'on') return;
+  _clonePositions(source = this._config.positions) {
+    return JSON.parse(JSON.stringify(source || {}));
+  }
 
-      if (state.attributes.brightness !== undefined) {
-        totalBrightness += state.attributes.brightness;
-        brightCount++;
+  _resolveTemperatureRange(controlled) {
+    const explicitMin = Number.isFinite(this._config.temperature_min) ? this._config.temperature_min : null;
+    const explicitMax = Number.isFinite(this._config.temperature_max) ? this._config.temperature_max : null;
+
+    let minK = explicitMin ?? Infinity;
+    let maxK = explicitMax ?? -Infinity;
+
+    const pool = (controlled && controlled.length > 0) ? controlled : this._config.entities;
+
+    pool.forEach(entity_id => {
+      const st = this._hass?.states?.[entity_id];
+      if (!st) return;
+      const attrs = st.attributes || {};
+
+      const maxMireds = attrs.max_mireds != null ? Number(attrs.max_mireds) : NaN;
+      const minMireds = attrs.min_mireds != null ? Number(attrs.min_mireds) : NaN;
+      if (Number.isFinite(maxMireds) && Number.isFinite(minMireds)) {
+        const warm = Math.round(1000000 / maxMireds);
+        const cool = Math.round(1000000 / minMireds);
+        minK = Math.min(minK, warm);
+        maxK = Math.max(maxK, cool);
+        return;
       }
 
-      if (state.attributes.color_temp !== undefined) {
-        const kelvin = Math.round(1000000 / state.attributes.color_temp);
-        totalTemp += kelvin;
-        tempCount++;
+      const colorTempKelvin = attrs.color_temp_kelvin != null ? Number(attrs.color_temp_kelvin) : NaN;
+      if (Number.isFinite(colorTempKelvin)) {
+        const current = Math.round(colorTempKelvin);
+        minK = Math.min(minK, current);
+        maxK = Math.max(maxK, current);
+        return;
       }
 
-      if (state.attributes.rgb_color) {
-        lastColor = state.attributes.rgb_color;
+      const colorTempMired = attrs.color_temp != null ? Number(attrs.color_temp) : NaN;
+      if (Number.isFinite(colorTempMired)) {
+        const current = Math.round(1000000 / colorTempMired);
+        minK = Math.min(minK, current);
+        maxK = Math.max(maxK, current);
       }
     });
 
+    if (!Number.isFinite(minK)) minK = explicitMin ?? 2000;
+    if (!Number.isFinite(maxK)) maxK = explicitMax ?? 6500;
+
+    if (explicitMin != null) minK = explicitMin;
+    if (explicitMax != null) maxK = explicitMax;
+
+    minK = Math.max(1000, Math.round(minK));
+    maxK = Math.min(10000, Math.round(maxK));
+
+    if (minK >= maxK) {
+      const base = Math.max(1000, Math.round((minK + maxK) / 2) || 3000);
+      minK = Math.max(1000, base - 100);
+      maxK = Math.max(minK + 100, base + 100);
+    }
+
+    return { min: minK, max: maxK };
+  }
+
+  _getControlContext() {
+    const controlled = this._getControlledEntities();
+
+    let bTot = 0, bCnt = 0;
+    let tTot = 0, tCnt = 0;
+    let lastRGB = null;
+
+    controlled.forEach(id => {
+      const st = this._hass?.states?.[id];
+      if (!st || st.state !== 'on') return;
+      if (st.attributes.brightness != null) {
+        bTot += st.attributes.brightness; bCnt++;
+      }
+      if (st.attributes.color_temp != null) {
+        const kelvin = Math.round(1000000 / st.attributes.color_temp);
+        tTot += kelvin; tCnt++;
+      }
+      if (Array.isArray(st.attributes.rgb_color)) {
+        lastRGB = st.attributes.rgb_color;
+      }
+    });
+
+    const range = this._resolveTemperatureRange(controlled);
+
+    const avgBrightness = bCnt ? Math.round(bTot / bCnt) : 128;
+    const avgTemperatureRaw = tCnt ? Math.round(tTot / tCnt) : Math.round((range.min + range.max) / 2);
+    const avgTemperature = this._clampTemperature(avgTemperatureRaw, range);
+
     return {
-      brightness: brightCount > 0 ? Math.round(totalBrightness / brightCount) : 128,
-      temperature: tempCount > 0 ? Math.round(totalTemp / tempCount) : 3500,
-      color: lastColor
+      controlled,
+      avgState: {
+        brightness: avgBrightness,
+        temperature: avgTemperature,
+        color: lastRGB,
+      },
+      tempRange: range,
     };
   }
 
-  /**
-   * RENDERING
-   */
-  render() {
-    if (!this.shadowRoot || !this._hass) return;
-
-    const avgState = this._getAverageState();
+  /** ---------- Rendering ---------- */
+  _renderAll() {
+    const controlContext = this._getControlContext();
+    const avgState = controlContext.avgState;
     const showControls = this._config.always_show_controls || this._selectedLights.size > 0 || this._config.default_entity;
     const controlsPosition = this._config.controls_below ? 'below' : 'floating';
+    const showHeader = this._config.title || this._config.show_settings_button;
 
     this.shadowRoot.innerHTML = `
       <style>
-        * { box-sizing: border-box; }
-        
-        :host {
-          --bg-primary: #0d0d0d;
-          --bg-secondary: #1a1a1a;
-          --text-primary: rgba(255, 255, 255, 0.95);
-          --text-secondary: rgba(255, 255, 255, 0.6);
-          --text-tertiary: rgba(255, 255, 255, 0.35);
-          --border-subtle: rgba(255, 255, 255, 0.08);
-          --selection-glow: rgba(100, 150, 255, 0.4);
-          --grid-dots: rgba(255, 255, 255, 0.04);
-        }
-        
-        ha-card {
-          background: var(--bg-primary);
-          overflow: hidden;
-        }
-
-        /* HEADER - Minimal */
-        .header {
-          padding: 16px 20px;
-          display: flex;
-          justify-content: space-between;
-          align-items: center;
-          border-bottom: 1px solid var(--border-subtle);
-        }
-
-        .title {
-          font-size: 16px;
-          font-weight: 500;
-          color: var(--text-secondary);
-          margin: 0;
-          letter-spacing: 0.3px;
-        }
-
-        .settings-btn {
-          width: 32px;
-          height: 32px;
-          border: none;
-          background: transparent;
-          color: var(--text-tertiary);
-          border-radius: 6px;
-          cursor: pointer;
-          font-size: 18px;
-          transition: all 0.2s ease;
-          display: flex;
-          align-items: center;
-          justify-content: center;
-        }
-
-        .settings-btn:hover {
-          background: var(--bg-secondary);
-          color: var(--text-secondary);
-        }
-
-        /* CANVAS - The Hero */
-        .canvas-wrapper {
-          position: relative;
-        }
-
-        .canvas {
-          position: relative;
-          width: 100%;
-          height: ${this._config.canvas_height}px;
-          background: var(--bg-primary);
-          overflow: hidden;
-          cursor: default;
-          user-select: none;
-          touch-action: none;
-        }
-
-        /* Subtle grid - always visible but quiet */
-        .grid {
-          position: absolute;
-          inset: 0;
-          background-image: radial-gradient(circle, var(--grid-dots) 1px, transparent 1px);
-          background-size: ${this._gridSize}px ${this._gridSize}px;
-          pointer-events: none;
-          opacity: 1;
-        }
-
-        /* LIGHT ORBS - Clean, minimal */
-        .light {
-          position: absolute;
-          width: 52px;
-          height: 52px;
-          border-radius: 50%;
-          transform: translate(-50%, -50%);
-          cursor: ${this._lockPositions ? 'pointer' : 'grab'};
-          transition: transform 0.2s cubic-bezier(0.4, 0, 0.2, 1),
-                      box-shadow 0.2s cubic-bezier(0.4, 0, 0.2, 1);
-          user-select: none;
-          display: flex;
-          align-items: center;
-          justify-content: center;
-        }
-
-        /* Light appearance based on state */
-        .light::before {
-          content: '';
-          position: absolute;
-          inset: 0;
-          border-radius: 50%;
-          background: inherit;
-          box-shadow: 
-            0 4px 16px rgba(0, 0, 0, 0.3),
-            inset 0 2px 8px rgba(0, 0, 0, 0.2);
-        }
-
-        /* Subtle glow when on */
-        .light.on::after {
-          content: '';
-          position: absolute;
-          inset: -8px;
-          border-radius: 50%;
-          background: inherit;
-          filter: blur(12px);
-          opacity: 0.3;
-          z-index: -1;
-        }
-
-        /* Off state - subtle gray */
-        .light.off {
-          background: linear-gradient(135deg, #2a2a2a 0%, #1a1a1a 100%) !important;
-          opacity: 0.5;
-        }
-
-        .light.off::after {
-          display: none;
-        }
-
-        /* Hover - show label */
-        .light-label {
-          position: absolute;
-          top: calc(100% + 8px);
-          left: 50%;
-          transform: translateX(-50%);
-          padding: 4px 8px;
-          background: var(--bg-secondary);
-          color: var(--text-primary);
-          font-size: 11px;
-          font-weight: 600;
-          border-radius: 4px;
-          white-space: nowrap;
-          pointer-events: none;
-          opacity: 0;
-          transition: opacity 0.15s ease;
-          z-index: 100;
-          box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
-        }
-
-        .light:hover .light-label {
-          opacity: 1;
-        }
-
-        /* Selection - soft glow */
-        .light.selected {
-          z-index: 10;
-        }
-
-        .light.selected::before {
-          box-shadow: 
-            0 0 0 2px rgba(255, 255, 255, 0.5),
-            0 0 0 4px var(--selection-glow),
-            0 4px 16px rgba(0, 0, 0, 0.3),
-            inset 0 2px 8px rgba(0, 0, 0, 0.2);
-        }
-
-        /* Dragging */
-        .light.dragging {
-          cursor: grabbing;
-          z-index: 100;
-          transform: translate(-50%, -50%) scale(1.05);
-        }
-
-        /* Selection box */
-        .selection-box {
-          position: absolute;
-          border: 1px solid var(--selection-glow);
-          background: rgba(100, 150, 255, 0.08);
-          pointer-events: none;
-          border-radius: 2px;
-        }
-
-        /* FLOATING CONTROLS - Contextual */
-        .controls-floating {
-          position: absolute;
-          bottom: 20px;
-          left: 50%;
-          transform: translateX(-50%);
-          background: rgba(26, 26, 26, 0.95);
-          backdrop-filter: blur(20px);
-          border: 1px solid var(--border-subtle);
-          border-radius: 12px;
-          padding: 16px 20px;
-          display: flex;
-          gap: 20px;
-          align-items: center;
-          box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
-          opacity: 0;
-          pointer-events: none;
-          transition: opacity 0.2s ease;
-          z-index: 50;
-        }
-
-        .controls-floating.visible {
-          opacity: 1;
-          pointer-events: auto;
-        }
-
-        /* CONTROLS BELOW CANVAS - Always visible variant */
-        .controls-below {
-          padding: 20px;
-          border-top: 1px solid var(--border-subtle);
-          background: var(--bg-primary);
-          display: ${showControls ? 'flex' : 'none'};
-          gap: 24px;
-          align-items: center;
-          justify-content: center;
-        }
-
-        /* Color picker */
-        .color-wheel-mini {
-          width: 120px;
-          height: 120px;
-          border-radius: 50%;
-          cursor: pointer;
-          box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
-          flex-shrink: 0;
-        }
-
-        .color-wheel-mini:active {
-          transform: scale(0.98);
-        }
-
-        /* Sliders */
-        .slider-group {
-          display: flex;
-          flex-direction: column;
-          gap: 12px;
-          min-width: 180px;
-          flex: 1;
-          max-width: 400px;
-        }
-
-        .slider-row {
-          display: flex;
-          align-items: center;
-          gap: 12px;
-        }
-
-        .slider-icon {
-          font-size: 16px;
-          opacity: 0.6;
-          flex-shrink: 0;
-        }
-
-        .slider {
-          flex: 1;
-          -webkit-appearance: none;
-          height: 4px;
-          border-radius: 2px;
-          background: rgba(255, 255, 255, 0.1);
-          outline: none;
-        }
-
-        .slider::-webkit-slider-thumb {
-          -webkit-appearance: none;
-          width: 16px;
-          height: 16px;
-          border-radius: 50%;
-          background: white;
-          cursor: pointer;
-          box-shadow: 0 2px 6px rgba(0, 0, 0, 0.3);
-        }
-
-        .slider::-moz-range-thumb {
-          width: 16px;
-          height: 16px;
-          border-radius: 50%;
-          background: white;
-          cursor: pointer;
-          border: none;
-          box-shadow: 0 2px 6px rgba(0, 0, 0, 0.3);
-        }
-
-        .slider-value {
-          font-size: 13px;
-          color: var(--text-secondary);
-          min-width: 45px;
-          text-align: right;
-          font-weight: 500;
-          flex-shrink: 0;
-        }
-
-        /* SETTINGS PANEL */
-        .settings-panel {
-          position: absolute;
-          top: 60px;
-          right: 20px;
-          background: rgba(26, 26, 26, 0.98);
-          backdrop-filter: blur(20px);
-          border: 1px solid var(--border-subtle);
-          border-radius: 12px;
-          padding: 16px;
-          min-width: 240px;
-          box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
-          opacity: 0;
-          pointer-events: none;
-          transition: opacity 0.2s ease;
-          z-index: 100;
-        }
-
-        .settings-panel.visible {
-          opacity: 1;
-          pointer-events: auto;
-        }
-
-        .settings-section {
-          margin-bottom: 16px;
-        }
-
-        .settings-section:last-child {
-          margin-bottom: 0;
-        }
-
-        .settings-label {
-          font-size: 12px;
-          color: var(--text-tertiary);
-          text-transform: uppercase;
-          letter-spacing: 0.5px;
-          margin-bottom: 8px;
-          font-weight: 600;
-        }
-
-        .settings-option {
-          display: flex;
-          align-items: center;
-          justify-content: space-between;
-          padding: 8px 0;
-          color: var(--text-secondary);
-          font-size: 14px;
-        }
-
-        .toggle {
-          width: 40px;
-          height: 22px;
-          background: rgba(255, 255, 255, 0.1);
-          border-radius: 11px;
-          position: relative;
-          cursor: pointer;
-          transition: background 0.2s ease;
-        }
-
-        .toggle.on {
-          background: rgba(100, 150, 255, 0.6);
-        }
-
-        .toggle::after {
-          content: '';
-          position: absolute;
-          width: 18px;
-          height: 18px;
-          background: white;
-          border-radius: 50%;
-          top: 2px;
-          left: 2px;
-          transition: left 0.2s ease;
-          box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
-        }
-
-        .toggle.on::after {
-          left: 20px;
-        }
-
-        .settings-button {
-          width: 100%;
-          padding: 10px;
-          background: rgba(255, 255, 255, 0.05);
-          border: 1px solid var(--border-subtle);
-          color: var(--text-secondary);
-          border-radius: 6px;
-          cursor: pointer;
-          font-size: 13px;
-          font-weight: 500;
-          transition: all 0.2s ease;
-          margin-top: 8px;
-        }
-
-        .settings-button:hover {
-          background: rgba(255, 255, 255, 0.08);
-          border-color: rgba(255, 255, 255, 0.15);
-        }
-
-        /* YAML MODAL */
-        .modal-overlay {
-          position: fixed;
-          inset: 0;
-          background: rgba(0, 0, 0, 0.7);
-          backdrop-filter: blur(4px);
-          display: none;
-          align-items: center;
-          justify-content: center;
-          z-index: 1000;
-        }
-
-        .modal-overlay.visible {
-          display: flex;
-        }
-
-        .modal {
-          background: var(--bg-secondary);
-          border: 1px solid var(--border-subtle);
-          border-radius: 12px;
-          padding: 24px;
-          max-width: 600px;
-          width: 90%;
-          max-height: 80vh;
-          overflow: auto;
-          box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
-        }
-
-        .modal-header {
-          display: flex;
-          justify-content: space-between;
-          align-items: center;
-          margin-bottom: 16px;
-        }
-
-        .modal-title {
-          font-size: 16px;
-          font-weight: 600;
-          color: var(--text-primary);
-        }
-
-        .modal-close {
-          width: 32px;
-          height: 32px;
-          border: none;
-          background: transparent;
-          color: var(--text-tertiary);
-          border-radius: 6px;
-          cursor: pointer;
-          font-size: 20px;
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          transition: all 0.2s ease;
-        }
-
-        .modal-close:hover {
-          background: rgba(255, 255, 255, 0.08);
-          color: var(--text-secondary);
-        }
-
-        .yaml-output {
-          background: var(--bg-primary);
-          border: 1px solid var(--border-subtle);
-          border-radius: 6px;
-          padding: 16px;
-          font-family: 'SF Mono', 'Monaco', 'Consolas', monospace;
-          font-size: 12px;
-          line-height: 1.6;
-          color: var(--text-primary);
-          white-space: pre;
-          overflow-x: auto;
-          user-select: all;
-        }
-
-        .modal-hint {
-          margin-top: 12px;
-          font-size: 12px;
-          color: var(--text-tertiary);
-          text-align: center;
-        }
-
-        /* Responsive */
-        @media (max-width: 768px) {
-          .controls-floating,
-          .controls-below {
-            flex-direction: column;
-            gap: 16px;
-          }
-          
-          .controls-floating {
-            left: 20px;
-            right: 20px;
-            transform: none;
-          }
-          
-          .slider-group {
-            width: 100%;
-          }
-        }
+        ${this._styles()}
       </style>
-      
       <ha-card>
-        <div class="header">
-          <div class="title">${this._config.title}</div>
-          ${this._config.show_settings_button ? `
-            <button class="settings-btn" id="settingsBtn" aria-label="Settings">⚙</button>
-          ` : ''}
-        </div>
-        
+        ${showHeader ? this._renderHeader() : ''}
         <div class="canvas-wrapper">
-          <div class="canvas" id="canvas">
+          <div class="canvas" id="canvas" role="application" aria-label="Spatial light control area">
             <div class="grid"></div>
-            ${this._renderLights()}
-            ${controlsPosition === 'floating' ? this._renderControlsFloating(showControls, avgState) : ''}
+            ${this._renderLightsHTML()}
+            ${controlsPosition === 'floating' ? this._renderControlsFloating(showControls, controlContext) : ''}
             ${this._renderSettings()}
           </div>
-          
-          ${controlsPosition === 'below' ? this._renderControlsBelow(avgState) : ''}
+          ${controlsPosition === 'below' ? this._renderControlsBelow(controlContext) : ''}
         </div>
-        
         ${this._renderYamlModal()}
       </ha-card>
     `;
 
+    // Cache refs once
+    this._els.canvas = this.shadowRoot.getElementById('canvas');
+    this._els.controlsFloating = this.shadowRoot.getElementById('controlsFloating');
+    this._els.controlsBelow = this.shadowRoot.getElementById('controlsBelow');
+    this._els.brightnessSlider = this.shadowRoot.getElementById('brightnessSlider');
+    this._els.brightnessValue = this.shadowRoot.getElementById('brightnessValue');
+    this._els.temperatureSlider = this.shadowRoot.getElementById('temperatureSlider');
+    this._els.temperatureValue = this.shadowRoot.getElementById('temperatureValue');
+    this._els.colorWheel = this.shadowRoot.getElementById('colorWheelMini');
+    this._els.settingsBtn = this.shadowRoot.getElementById('settingsBtn');
+    this._els.settingsPanel = this.shadowRoot.getElementById('settingsPanel');
+    this._els.lockToggle = this.shadowRoot.getElementById('lockToggle');
+    this._els.iconToggle = this.shadowRoot.getElementById('iconToggle');
+    this._els.rearrangeBtn = this.shadowRoot.getElementById('rearrangeBtn');
+    this._els.exportBtn = this.shadowRoot.getElementById('exportBtn');
+    this._els.yamlModal = this.shadowRoot.getElementById('yamlModal');
+    this._els.yamlOutput = this.shadowRoot.getElementById('yamlOutput');
+
+    if (this._colorWheelObserver) {
+      this._colorWheelObserver.disconnect();
+      this._colorWheelObserver = null;
+    }
+    if (this._els.colorWheel && typeof window !== 'undefined' && 'ResizeObserver' in window) {
+      this._colorWheelObserver = new ResizeObserver(() => {
+        this.drawColorWheel();
+      });
+      this._colorWheelObserver.observe(this._els.colorWheel);
+    }
+
     this._attachEventListeners();
-    if ((showControls || this._config.always_show_controls) && this.shadowRoot.getElementById('colorWheelMini')) {
-      this.drawColorWheel();
-      this._updateControlValues(avgState);
+    if ((showControls || this._config.always_show_controls) && this._els.colorWheel) {
+      const raf = typeof requestAnimationFrame === 'function'
+        ? requestAnimationFrame
+        : (cb) => setTimeout(cb, 16);
+      raf(() => {
+        this.drawColorWheel();
+      });
+      this._updateControlValues(controlContext);
     }
     this.updateLights();
+    this._refreshEntityIcons();
   }
 
-  _renderLights() {
+  _styles() {
+    return `
+      * { box-sizing: border-box; margin: 0; padding: 0; }
+      :host {
+        --surface-primary: #0a0a0a;
+        --surface-secondary: #141414;
+        --surface-tertiary: #1a1a1a;
+        --surface-elevated: #1f1f1f;
+
+        --text-primary: #ffffff;
+        --text-secondary: rgba(255,255,255,0.7);
+        --text-tertiary: rgba(255,255,255,0.45);
+
+        --border-subtle: rgba(255,255,255,0.06);
+        --border-medium: rgba(255,255,255,0.12);
+
+        --accent-primary: #6366f1;
+
+        --grid-dots: rgba(255,255,255,0.035);
+
+        --shadow-sm: 0 1px 2px rgba(0,0,0,0.35);
+        --shadow-md: 0 4px 8px rgba(0,0,0,0.45);
+
+        --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Helvetica Neue', Arial, sans-serif;
+
+        --radius-sm: 6px; --radius-md: 8px; --radius-lg: 12px; --radius-full: 9999px;
+
+        --transition-fast: 120ms cubic-bezier(0.4,0,0.2,1);
+        --transition-base: 200ms cubic-bezier(0.4,0,0.2,1);
+      }
+      @media (prefers-reduced-motion: reduce) {
+        :host { --transition-fast: 0ms; --transition-base: 0ms; }
+        * { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
+      }
+      ha-card { background: var(--surface-primary); overflow: hidden; font-family: var(--font-sans); }
+
+      .header {
+        padding: 16px 20px; display: flex; justify-content: space-between; align-items: center;
+        border-bottom: 1px solid var(--border-subtle); background: var(--surface-secondary);
+      }
+      .title { font-size: 14px; font-weight: 600; color: var(--text-secondary); letter-spacing: -0.01em; }
+      .settings-btn {
+        width: 32px; height: 32px; border: none; background: transparent; color: var(--text-tertiary);
+        border-radius: var(--radius-sm); cursor: pointer; font-size: 18px; display: flex; align-items: center; justify-content: center;
+        transition: transform var(--transition-fast), background var(--transition-fast), color var(--transition-fast);
+      }
+      .settings-btn:hover { background: var(--surface-tertiary); color: var(--text-secondary); transform: rotate(24deg); }
+      .settings-btn:active { transform: rotate(24deg) scale(0.96); }
+      .settings-btn:focus-visible { outline: 2px solid var(--accent-primary); outline-offset: 2px; }
+
+      .canvas-wrapper { position: relative; }
+      .canvas {
+        position: relative; width: 100%; height: ${this._config.canvas_height}px; background: var(--surface-primary);
+        overflow: hidden; user-select: none; touch-action: none;
+      }
+      .grid {
+        position: absolute; inset: 0;
+        background-image: radial-gradient(circle, var(--grid-dots) 1px, transparent 1px);
+        background-size: ${this._gridSize}px ${this._gridSize}px; pointer-events: none;
+      }
+
+      .light {
+        position: absolute; width: 56px; height: 56px; border-radius: var(--radius-full);
+        transform: translate(-50%,-50%); cursor: ${this._lockPositions ? 'pointer' : 'grab'};
+        display:flex; align-items:center; justify-content:center; flex-direction:column;
+        will-change: transform, left, top, background;
+      }
+      .light::before { content:''; position:absolute; inset:0; border-radius:inherit; background:inherit; box-shadow: var(--shadow-sm); }
+      .light.on::after {
+        content:''; position:absolute; inset:-6px; border-radius:inherit; background:inherit; filter: blur(10px);
+        opacity: 0.22; z-index: -1;
+      }
+      .light.off { background: linear-gradient(135deg,#2a2a2a 0%, #1a1a1a 100%) !important; opacity: 0.45; }
+      .light.off::after { display:none; }
+
+      .light-icon-emoji { font-size: 22px; line-height: 1; filter: drop-shadow(0 1px 2px rgba(0,0,0,0.6)); }
+      .light-icon-mdi { --mdc-icon-size: 22px; color: rgba(255,255,255,0.92); filter: drop-shadow(0 1px 2px rgba(0,0,0,0.6)); }
+
+      .light-label {
+        position: absolute; top: calc(100% + 8px); left: 50%; transform: translateX(-50%);
+        padding: 4px 8px; background: var(--surface-elevated); color: var(--text-primary);
+        font-size: 11px; font-weight: 600; border-radius: var(--radius-sm); white-space: nowrap; pointer-events: none;
+        opacity: 0; transition: opacity var(--transition-fast); z-index: 40; border: 1px solid var(--border-subtle);
+      }
+      .light:hover .light-label { opacity: 1; }
+
+      .light.selected { z-index: 10; }
+      .light.selected::before {
+        box-shadow: 0 0 0 2px var(--surface-primary), 0 0 0 4px rgba(99,102,241,0.5), var(--shadow-md);
+      }
+      .light.dragging { cursor: grabbing; z-index: 100; transform: translate(-50%,-50%) scale(1.04); }
+
+      .selection-box {
+        position: absolute; border: 1.5px solid rgba(99,102,241,0.5); background: rgba(99,102,241,0.08);
+        border-radius: 8px; pointer-events: none; backdrop-filter: blur(2px);
+      }
+
+      .controls-floating {
+        position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%);
+        background: rgba(20,20,20,0.95); backdrop-filter: blur(16px) saturate(160%);
+        border: 1px solid var(--border-medium); border-radius: 12px; padding: 16px 20px;
+        display: flex; gap: 20px; align-items: center; box-shadow: var(--shadow-md);
+        opacity: 0; pointer-events: none; transition: opacity var(--transition-base);
+        z-index: 50;
+      }
+      .controls-floating.visible { opacity: 1; pointer-events: auto; }
+
+      .controls-below {
+        padding: 20px; border-top: 1px solid var(--border-subtle); background: var(--surface-secondary);
+        display: ${this._config.always_show_controls || this._selectedLights.size > 0 || this._config.default_entity ? 'flex' : 'none'};
+        gap: 24px; align-items: center; justify-content: center;
+      }
+
+      .color-wheel-mini {
+        width: 128px; height: 128px; border-radius: 9999px; cursor: pointer;
+        border: 2px solid var(--border-subtle); box-shadow: var(--shadow-sm); flex-shrink: 0;
+      }
+
+      .slider-group { display:flex; flex-direction:column; gap:12px; min-width: 220px; flex:1; max-width: 480px; }
+      .slider-row { display:flex; align-items:center; gap:12px; }
+      .slider-icon { font-size: 16px; opacity: 0.65; width: 20px; text-align:center; flex-shrink:0; }
+
+      .slider {
+        flex:1; -webkit-appearance:none; height:8px; border-radius:9999px; background: var(--surface-tertiary);
+        outline:none; position:relative; cursor:pointer; border:1px solid var(--border-subtle);
+      }
+      .slider.temperature {
+        background: linear-gradient(to right,
+          #ff9944 0%,
+          #ffd480 30%,
+          #ffffff 50%,
+          #87ceeb 70%,
+          #4d9fff 100%
+        );
+        border: 1px solid rgba(255,255,255,0.1);
+      }
+      .slider::-webkit-slider-thumb {
+        -webkit-appearance:none; width:20px; height:20px; border-radius:9999px;
+        background: var(--text-primary); border:2px solid var(--surface-primary); box-shadow: var(--shadow-sm);
+        transition: transform var(--transition-fast);
+      }
+      .slider::-webkit-slider-thumb:hover { transform: scale(1.08); }
+      .slider::-moz-range-thumb {
+        width:20px; height:20px; border-radius:9999px; background: var(--text-primary);
+        border:2px solid var(--surface-primary); box-shadow: var(--shadow-sm);
+      }
+      .slider-value { font-size: 13px; color: var(--text-secondary); min-width: 52px; text-align:right; font-weight: 600; }
+
+      .settings-panel {
+        position: absolute; top: 16px; right: 16px;
+        background: rgba(20,20,20,0.98); backdrop-filter: blur(16px) saturate(160%);
+        border:1px solid var(--border-medium); border-radius:12px; padding:16px; min-width: 260px;
+        box-shadow: var(--shadow-md); opacity:0; pointer-events:none; transform: translateY(-6px);
+        transition: opacity var(--transition-base), transform var(--transition-base); z-index:100;
+      }
+      .settings-panel.visible { opacity:1; pointer-events:auto; transform: translateY(0); }
+      .settings-section { margin-bottom: 12px; }
+      .settings-section:last-child { margin-bottom: 0; }
+      .settings-label { font-size:11px; color: var(--text-tertiary); text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 6px; font-weight: 700; }
+      .settings-option { display:flex; align-items:center; justify-content:space-between; padding: 6px 0; color: var(--text-secondary); font-size:14px; }
+
+      .toggle {
+        width: 44px; height:24px; background: var(--surface-tertiary); border:1px solid var(--border-subtle);
+        border-radius: 9999px; position:relative; cursor:pointer; transition: all var(--transition-base);
+      }
+      .toggle.on { background: var(--accent-primary); border-color: var(--accent-primary); }
+      .toggle::after {
+        content:''; position:absolute; width:18px; height:18px; background: var(--text-primary); border-radius: 9999px; top:2px; left:2px;
+        transition: left 220ms cubic-bezier(0.34,1.56,0.64,1);
+      }
+      .toggle.on::after { left: calc(100% - 20px); }
+
+      .settings-button {
+        width:100%; padding: 8px 10px; background: var(--surface-tertiary); border:1px solid var(--border-subtle);
+        color: var(--text-secondary); border-radius: 8px; cursor:pointer; font-size:13px; font-weight:600;
+        transition: background var(--transition-fast), border-color var(--transition-fast), transform var(--transition-fast);
+      }
+      .settings-button:hover { background: var(--surface-elevated); border-color: var(--border-medium); color: var(--text-primary); }
+      .settings-button:active { transform: scale(0.98); }
+
+      .modal-overlay {
+        position: fixed; inset: 0; background: rgba(0,0,0,0.8); backdrop-filter: blur(8px);
+        display:none; align-items:center; justify-content:center; z-index:1000; padding:16px;
+      }
+      .modal-overlay.visible { display:flex; }
+      .modal {
+        background: var(--surface-secondary); border:1px solid var(--border-medium); border-radius:12px; padding:20px; max-width: 700px; width:100%; max-height: 80vh; overflow:auto; box-shadow: var(--shadow-md);
+      }
+      .modal-header { display:flex; justify-content:space-between; align-items:center; margin-bottom:12px; }
+      .modal-title { font-size:18px; font-weight:600; color: var(--text-primary); letter-spacing: -0.01em; }
+      .modal-close {
+        width: 32px; height:32px; border:none; background:transparent; color: var(--text-tertiary);
+        border-radius:8px; cursor:pointer; font-size:24px; display:flex; align-items:center; justify-content:center;
+        transition: background var(--transition-fast), color var(--transition-fast), transform var(--transition-fast);
+      }
+      .modal-close:hover { background: var(--surface-tertiary); color: var(--text-secondary); }
+      .modal-close:active { transform: scale(0.96); }
+      .yaml-output {
+        background: var(--surface-primary); border:1px solid var(--border-subtle); border-radius: 8px; padding: 12px;
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+        font-size: 12px; line-height: 1.6; color: var(--text-primary); white-space: pre; overflow-x: auto; user-select: all;
+      }
+      .modal-hint { margin-top: 8px; font-size:12px; color: var(--text-tertiary); text-align:center; }
+
+      @media (max-width: 768px) {
+        .controls-floating, .controls-below { flex-direction:column; gap: 16px; }
+        .controls-floating { left: 16px; right: 16px; width: auto; transform: none; }
+        .light { width: 50px; height: 50px; }
+      }
+
+      .settings-btn:focus-visible, .modal-close:focus-visible, .settings-button:focus-visible { outline: 2px solid var(--accent-primary); outline-offset: 2px; }
+    `;
+  }
+
+  _renderHeader() {
+    return `
+      <div class="header">
+        <div class="title">${this._config.title}</div>
+        ${this._config.show_settings_button ? `
+          <button class="settings-btn" id="settingsBtn" aria-label="Settings" aria-expanded="${this._settingsOpen}">⚙</button>
+        ` : ''}
+      </div>
+    `;
+  }
+
+  _renderLightsHTML() {
     return this._config.entities.map(entity_id => {
       const pos = this._config.positions[entity_id] || { x: 50, y: 50 };
-      const state = this._hass?.states[entity_id];
-      if (!state) return '';
+      const st = this._hass?.states[entity_id];
+      if (!st) return '';
 
-      const isOn = state.state === 'on';
+      const isOn = st.state === 'on';
       const isSelected = this._selectedLights.has(entity_id);
       const label = this._generateLabel(entity_id);
-      
+
       let color = '#2a2a2a';
-      if (isOn && state.attributes.rgb_color) {
-        const [r, g, b] = state.attributes.rgb_color;
+      if (isOn && st.attributes.rgb_color) {
+        const [r, g, b] = st.attributes.rgb_color;
         color = `rgb(${r}, ${g}, ${b})`;
       } else if (isOn) {
         color = '#ffa500';
       }
 
+      const iconData = this._config.show_entity_icons ? this._getEntityIconData(entity_id) : null;
+
       return `
-        <div 
-          class="light ${isOn ? 'on' : 'off'} ${isSelected ? 'selected' : ''}"
-          style="left: ${pos.x}%; top: ${pos.y}%; background: ${color};"
-          data-entity="${entity_id}"
-          tabindex="0"
-          role="button"
-          aria-label="${state.attributes.friendly_name}"
-          aria-pressed="${isSelected}"
-        >
+        <div class="light ${isOn ? 'on' : 'off'} ${isSelected ? 'selected' : ''}"
+             style="left:${pos.x}%; top:${pos.y}%; background:${color};"
+             data-entity="${entity_id}"
+             tabindex="0"
+             role="button"
+             aria-label="${st.attributes.friendly_name || entity_id}"
+             aria-pressed="${isSelected}">
+          ${iconData ? this._renderIcon(iconData) : ''}
           <div class="light-label">${label}</div>
         </div>
       `;
     }).join('');
   }
 
-  _renderControlsFloating(visible, avgState) {
+  _renderControlsFloating(visible, controlContext) {
+    const { avgState, tempRange } = controlContext;
+    const clampedTemp = this._clampTemperature(avgState.temperature, tempRange);
     return `
-      <div class="controls-floating ${visible ? 'visible' : ''}" id="controlsFloating">
-        <canvas 
-          id="colorWheelMini" 
-          class="color-wheel-mini" 
-          width="240" 
-          height="240"
-        ></canvas>
-        
+      <div class="controls-floating ${visible ? 'visible' : ''}" id="controlsFloating" role="region" aria-label="Light controls" aria-live="polite">
+        <canvas id="colorWheelMini" class="color-wheel-mini" width="256" height="256" role="img" aria-label="Color picker"></canvas>
         <div class="slider-group">
           <div class="slider-row">
-            <span class="slider-icon">💡</span>
-            <input 
-              type="range" 
-              class="slider" 
-              id="brightnessSlider"
-              min="0" 
-              max="255" 
-              value="${avgState.brightness}"
-            >
-            <span class="slider-value" id="brightnessValue">${Math.round((avgState.brightness / 255) * 100)}%</span>
+            <span class="slider-icon" aria-hidden="true">💡</span>
+            <input type="range" class="slider" id="brightnessSlider" min="0" max="255" value="${avgState.brightness}" aria-label="Brightness">
+            <span class="slider-value" id="brightnessValue">${Math.round((avgState.brightness/255)*100)}%</span>
           </div>
-          
           <div class="slider-row">
-            <span class="slider-icon">🌡️</span>
-            <input 
-              type="range" 
-              class="slider" 
-              id="temperatureSlider"
-              min="2000" 
-              max="6500" 
-              value="${avgState.temperature}"
-            >
-            <span class="slider-value" id="temperatureValue">${avgState.temperature}K</span>
+            <span class="slider-icon" aria-hidden="true">🌡️</span>
+            <input type="range" class="slider temperature" id="temperatureSlider" min="${tempRange.min}" max="${tempRange.max}" value="${clampedTemp}" aria-label="Color temperature">
+            <span class="slider-value" id="temperatureValue">${clampedTemp}K</span>
           </div>
         </div>
       </div>
     `;
   }
 
-  _renderControlsBelow(avgState) {
+  _renderControlsBelow(controlContext) {
+    const { avgState, tempRange } = controlContext;
+    const clampedTemp = this._clampTemperature(avgState.temperature, tempRange);
     return `
-      <div class="controls-below" id="controlsBelow">
-        <canvas 
-          id="colorWheelMini" 
-          class="color-wheel-mini" 
-          width="240" 
-          height="240"
-        ></canvas>
-        
+      <div class="controls-below" id="controlsBelow" role="region" aria-label="Light controls" aria-live="polite">
+        <canvas id="colorWheelMini" class="color-wheel-mini" width="256" height="256" role="img" aria-label="Color picker"></canvas>
         <div class="slider-group">
           <div class="slider-row">
-            <span class="slider-icon">💡</span>
-            <input 
-              type="range" 
-              class="slider" 
-              id="brightnessSlider"
-              min="0" 
-              max="255" 
-              value="${avgState.brightness}"
-            >
-            <span class="slider-value" id="brightnessValue">${Math.round((avgState.brightness / 255) * 100)}%</span>
+            <span class="slider-icon" aria-hidden="true">💡</span>
+            <input type="range" class="slider" id="brightnessSlider" min="0" max="255" value="${avgState.brightness}" aria-label="Brightness">
+            <span class="slider-value" id="brightnessValue">${Math.round((avgState.brightness/255)*100)}%</span>
           </div>
-          
           <div class="slider-row">
-            <span class="slider-icon">🌡️</span>
-            <input 
-              type="range" 
-              class="slider" 
-              id="temperatureSlider"
-              min="2000" 
-              max="6500" 
-              value="${avgState.temperature}"
-            >
-            <span class="slider-value" id="temperatureValue">${avgState.temperature}K</span>
+            <span class="slider-icon" aria-hidden="true">🌡️</span>
+            <input type="range" class="slider temperature" id="temperatureSlider" min="${tempRange.min}" max="${tempRange.max}" value="${clampedTemp}" aria-label="Color temperature">
+            <span class="slider-value" id="temperatureValue">${clampedTemp}K</span>
           </div>
         </div>
       </div>
@@ -896,22 +881,29 @@ class SpatialLightColorCard extends HTMLElement {
 
   _renderSettings() {
     return `
-      <div class="settings-panel ${this._settingsOpen ? 'visible' : ''}" id="settingsPanel">
+      <div class="settings-panel ${this._settingsOpen ? 'visible' : ''}" id="settingsPanel" role="dialog" aria-label="Settings">
         <div class="settings-section">
           <div class="settings-label">Positioning</div>
           <div class="settings-option">
             <span>Lock Positions</span>
-            <div class="toggle ${this._lockPositions ? 'on' : ''}" id="lockToggle"></div>
+            <button class="toggle ${this._lockPositions ? 'on' : ''}" id="lockToggle" role="switch" aria-checked="${this._lockPositions}" aria-label="Lock positions"></button>
           </div>
         </div>
-        
+        <div class="settings-section">
+          <div class="settings-label">Display</div>
+          <div class="settings-option">
+            <span>Show Entity Icons</span>
+            <button class="toggle ${this._config.show_entity_icons ? 'on' : ''}" id="iconToggle" role="switch" aria-checked="${this._config.show_entity_icons}" aria-label="Show entity icons"></button>
+          </div>
+        </div>
+        <div class="settings-section">
+          <div class="settings-label">Layout</div>
+          <button class="settings-button" id="rearrangeBtn">Rearrange All Lights</button>
+        </div>
         <div class="settings-section">
           <div class="settings-label">Grid</div>
-          <div class="settings-option">
-            <span>Size: ${this._gridSize}px</span>
-          </div>
+          <div class="settings-option"><span>Size: ${this._gridSize}px</span></div>
         </div>
-        
         <div class="settings-section">
           <button class="settings-button" id="exportBtn">Export Configuration</button>
         </div>
@@ -921,661 +913,778 @@ class SpatialLightColorCard extends HTMLElement {
 
   _renderYamlModal() {
     return `
-      <div class="modal-overlay ${this._yamlModalOpen ? 'visible' : ''}" id="yamlModal">
+      <div class="modal-overlay ${this._yamlModalOpen ? 'visible' : ''}" id="yamlModal" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
         <div class="modal">
           <div class="modal-header">
-            <span class="modal-title">Configuration YAML</span>
-            <button class="modal-close" id="closeModal">×</button>
+            <span class="modal-title" id="modalTitle">Configuration YAML</span>
+            <button class="modal-close" id="closeModal" aria-label="Close">×</button>
           </div>
-          <div class="yaml-output" id="yamlOutput">${this._generateYAML()}</div>
+          <div class="yaml-output" id="yamlOutput" role="textbox" aria-multiline="true" aria-readonly="true">${this._generateYAML()}</div>
           <div class="modal-hint">Select all (Cmd/Ctrl+A) and copy (Cmd/Ctrl+C)</div>
         </div>
       </div>
     `;
   }
 
-  /**
-   * UPDATE CONTROL VALUES
-   */
-  _updateControlValues(avgState) {
-    const brightnessSlider = this.shadowRoot.getElementById('brightnessSlider');
-    const brightnessValue = this.shadowRoot.getElementById('brightnessValue');
-    const temperatureSlider = this.shadowRoot.getElementById('temperatureSlider');
-    const temperatureValue = this.shadowRoot.getElementById('temperatureValue');
+  _updateControlValues(controlContext) {
+    const context = controlContext || { avgState: { brightness: 128, temperature: 4000 }, tempRange: { min: 2000, max: 6500 } };
+    const { avgState, tempRange } = context;
+    const brightness = Number.isFinite(avgState?.brightness) ? avgState.brightness : 128;
+    const temperature = Number.isFinite(avgState?.temperature)
+      ? this._clampTemperature(avgState.temperature, tempRange)
+      : this._clampTemperature(4000, tempRange);
 
-    if (brightnessSlider) {
-      brightnessSlider.value = avgState.brightness;
+    if (this._els.brightnessSlider) {
+      this._els.brightnessSlider.value = String(brightness);
     }
-    if (brightnessValue) {
-      brightnessValue.textContent = `${Math.round((avgState.brightness / 255) * 100)}%`;
+    if (this._els.brightnessValue) {
+      this._els.brightnessValue.textContent = `${Math.round((brightness / 255) * 100)}%`;
     }
-    if (temperatureSlider) {
-      temperatureSlider.value = avgState.temperature;
+    if (this._els.temperatureSlider) {
+      if (this._els.temperatureSlider.min !== String(tempRange.min)) {
+        this._els.temperatureSlider.min = String(tempRange.min);
+      }
+      if (this._els.temperatureSlider.max !== String(tempRange.max)) {
+        this._els.temperatureSlider.max = String(tempRange.max);
+      }
+      this._els.temperatureSlider.value = String(temperature);
     }
-    if (temperatureValue) {
-      temperatureValue.textContent = `${avgState.temperature}K`;
+    if (this._els.temperatureValue) {
+      this._els.temperatureValue.textContent = `${temperature}K`;
     }
   }
 
-  /**
-   * EVENT HANDLING
-   */
+  /** ---------- Events ---------- */
   connectedCallback() {
-    this._boundGlobalMouseUp = (e) => this._handleGlobalMouseUp(e);
-    this._boundGlobalMouseMove = (e) => this._handleGlobalMouseMove(e);
-    this._boundKeyDown = (e) => this._handleKeyDown(e);
-    
-    document.addEventListener('keydown', this._boundKeyDown);
+    if (!this._boundKeyDown) {
+      this._boundKeyDown = (e) => this._handleKeyDown(e);
+      document.addEventListener('keydown', this._boundKeyDown);
+    }
+    if (typeof window !== 'undefined') {
+      this._boundIconsetAdded = () => this._refreshEntityIcons();
+      window.addEventListener('iron-iconset-added', this._boundIconsetAdded);
+    }
   }
-
   disconnectedCallback() {
-    if (this._boundGlobalMouseUp) {
-      document.removeEventListener('mouseup', this._boundGlobalMouseUp);
-      document.removeEventListener('touchend', this._boundGlobalMouseUp);
-    }
-    if (this._boundGlobalMouseMove) {
-      document.removeEventListener('mousemove', this._boundGlobalMouseMove);
-      document.removeEventListener('touchmove', this._boundGlobalMouseMove);
-    }
     if (this._boundKeyDown) {
       document.removeEventListener('keydown', this._boundKeyDown);
+      this._boundKeyDown = null;
     }
+    if (this._raf) cancelAnimationFrame(this._raf);
+    if (this._boundCloseSettings) {
+      document.removeEventListener('click', this._boundCloseSettings);
+      this._boundCloseSettings = null;
+    }
+    if (this._boundIconsetAdded && typeof window !== 'undefined') {
+      window.removeEventListener('iron-iconset-added', this._boundIconsetAdded);
+      this._boundIconsetAdded = null;
+    }
+    if (this._longPressTimer) {
+      clearTimeout(this._longPressTimer);
+      this._longPressTimer = null;
+    }
+    if (this._iconRefreshHandle) {
+      clearTimeout(this._iconRefreshHandle);
+      this._iconRefreshHandle = null;
+    }
+    if (this._colorWheelObserver) {
+      this._colorWheelObserver.disconnect();
+      this._colorWheelObserver = null;
+    }
+    this._pendingTap = null;
+    this._longPressTriggered = false;
   }
 
   _attachEventListeners() {
-    // Settings button
-    const settingsBtn = this.shadowRoot.getElementById('settingsBtn');
-    if (settingsBtn) {
-      settingsBtn.addEventListener('click', (e) => {
+    // Pointer events on canvas (unified)
+    if (this._els.canvas) {
+      this._els.canvas.addEventListener('pointerdown', (e) => this._onPointerDown(e));
+      this._els.canvas.addEventListener('pointermove', (e) => this._onPointerMove(e));
+      this._els.canvas.addEventListener('pointerup', (e) => this._onPointerUp(e));
+      this._els.canvas.addEventListener('pointercancel', (e) => this._onPointerCancel(e));
+      this._els.canvas.addEventListener('dblclick', (e) => this._handleCanvasDoubleClick(e));
+      this._els.canvas.addEventListener('contextmenu', (e) => this._handleCanvasContextMenu(e));
+    }
+
+    // Settings button (no full re-render)
+    if (this._els.settingsBtn) {
+      this._els.settingsBtn.addEventListener('click', (e) => {
         e.stopPropagation();
         this._settingsOpen = !this._settingsOpen;
-        this.render();
+        if (this._els.settingsPanel) this._els.settingsPanel.classList.toggle('visible', this._settingsOpen);
+        this._els.settingsBtn.setAttribute('aria-expanded', String(this._settingsOpen));
       });
     }
 
-    // Close settings when clicking outside
-    const closeSettings = (e) => {
-      if (this._settingsOpen && 
-          !e.target.closest('.settings-panel') && 
-          !e.target.closest('.settings-btn')) {
+    // Close settings when clicking outside (delegate to document)
+    if (this._boundCloseSettings) {
+      document.removeEventListener('click', this._boundCloseSettings);
+      this._boundCloseSettings = null;
+    }
+    this._boundCloseSettings = (e) => {
+      if (this._settingsOpen &&
+        !e.target.closest('.settings-panel') &&
+        !e.target.closest('.settings-btn')) {
         this._settingsOpen = false;
-        this.render();
+        if (this._els.settingsPanel) this._els.settingsPanel.classList.remove('visible');
+        if (this._els.settingsBtn) this._els.settingsBtn.setAttribute('aria-expanded', 'false');
       }
     };
-    document.addEventListener('click', closeSettings);
+    document.addEventListener('click', this._boundCloseSettings);
 
-    // Lock toggle
-    const lockToggle = this.shadowRoot.getElementById('lockToggle');
-    if (lockToggle) {
-      lockToggle.addEventListener('click', () => {
+    if (this._els.lockToggle) {
+      this._els.lockToggle.addEventListener('click', () => {
         this._lockPositions = !this._lockPositions;
-        this.render();
+        this._els.lockToggle.classList.toggle('on', this._lockPositions);
+        this._els.lockToggle.setAttribute('aria-checked', String(this._lockPositions));
+        // Update cursor affordance without re-render:
+        this.shadowRoot.querySelectorAll('.light').forEach(l => {
+          l.style.cursor = this._lockPositions ? 'pointer' : 'grab';
+        });
       });
     }
 
-    // Export button
-    const exportBtn = this.shadowRoot.getElementById('exportBtn');
-    if (exportBtn) {
-      exportBtn.addEventListener('click', () => {
+    if (this._els.iconToggle) {
+      this._els.iconToggle.addEventListener('click', () => {
+        this._config.show_entity_icons = !this._config.show_entity_icons;
+        this._els.iconToggle.classList.toggle('on', this._config.show_entity_icons);
+        this._els.iconToggle.setAttribute('aria-checked', String(this._config.show_entity_icons));
+        // Update light contents
+        this._rerenderLightIconsOnly();
+      });
+    }
+
+    if (this._els.rearrangeBtn) {
+      this._els.rearrangeBtn.addEventListener('click', () => {
+        this._rearrangeAllLights();
+      });
+    }
+
+    if (this._els.exportBtn) {
+      this._els.exportBtn.addEventListener('click', () => {
         this._yamlModalOpen = true;
-        this.render();
+        if (this._els.yamlModal) this._els.yamlModal.classList.add('visible');
+        if (this._els.yamlOutput) this._els.yamlOutput.textContent = this._generateYAML();
       });
     }
 
-    // Close modal
+    // Modal close
     const closeModal = this.shadowRoot.getElementById('closeModal');
     if (closeModal) {
       closeModal.addEventListener('click', () => {
         this._yamlModalOpen = false;
-        this.render();
+        if (this._els.yamlModal) this._els.yamlModal.classList.remove('visible');
       });
     }
-
-    // Close modal on overlay click
-    const modalOverlay = this.shadowRoot.getElementById('yamlModal');
-    if (modalOverlay) {
-      modalOverlay.addEventListener('click', (e) => {
-        if (e.target === modalOverlay) {
+    if (this._els.yamlModal) {
+      this._els.yamlModal.addEventListener('click', (e) => {
+        if (e.target === this._els.yamlModal) {
           this._yamlModalOpen = false;
-          this.render();
+          this._els.yamlModal.classList.remove('visible');
         }
       });
     }
 
-    // Light orbs
-    const lights = this.shadowRoot.querySelectorAll('.light');
-    lights.forEach(light => {
-      // Mouse events
-      light.addEventListener('mousedown', (e) => this._handleLightMouseDown(e, light));
-      light.addEventListener('click', (e) => this._handleLightClick(e, light));
-      
-      // Touch events for mobile multi-select
-      light.addEventListener('touchstart', (e) => {
-        this._handleLightTouchStart(e, light);
+    // Controls events
+    if (this._els.colorWheel) {
+      this._els.colorWheel.addEventListener('pointerdown', (e) => {
+        this._colorWheelActive = true;
+        e.preventDefault();
+        e.target.setPointerCapture?.(e.pointerId);
+        this._handleColorWheelPointer(e);
       });
-      light.addEventListener('touchend', (e) => {
-        this._handleLightTouchEnd(e, light);
+      this._els.colorWheel.addEventListener('pointermove', (e) => {
+        if (this._colorWheelActive) {
+          e.preventDefault();
+          this._handleColorWheelPointer(e);
+        }
       });
-    });
-
-    // Canvas for selection box
-    const canvas = this.shadowRoot.getElementById('canvas');
-    if (canvas) {
-      canvas.addEventListener('mousedown', (e) => this._handleCanvasMouseDown(e));
-      canvas.addEventListener('touchstart', (e) => this._handleCanvasTouchStart(e));
+      this._els.colorWheel.addEventListener('pointerup', (e) => {
+        this._colorWheelActive = false;
+        e.target.releasePointerCapture?.(e.pointerId);
+      });
+      this._els.colorWheel.addEventListener('pointercancel', (e) => {
+        this._colorWheelActive = false;
+        e.target.releasePointerCapture?.(e.pointerId);
+      });
     }
-
-    // Color wheel
-    const colorWheel = this.shadowRoot.getElementById('colorWheelMini');
-    if (colorWheel) {
-      colorWheel.addEventListener('mousedown', (e) => this._handleColorWheelClick(e));
-      colorWheel.addEventListener('touchstart', (e) => this._handleColorWheelClick(e));
+    if (this._els.brightnessSlider) {
+      this._els.brightnessSlider.addEventListener('input', (e) => this._handleBrightnessInput(e));
+      this._els.brightnessSlider.addEventListener('change', () => this._handleBrightnessChange());
     }
-
-    // Sliders
-    const brightnessSlider = this.shadowRoot.getElementById('brightnessSlider');
-    const temperatureSlider = this.shadowRoot.getElementById('temperatureSlider');
-    
-    if (brightnessSlider) {
-      brightnessSlider.addEventListener('input', (e) => this._handleBrightnessChange(e));
+    if (this._els.temperatureSlider) {
+      this._els.temperatureSlider.addEventListener('input', (e) => this._handleTemperatureInput(e));
+      this._els.temperatureSlider.addEventListener('change', () => this._handleTemperatureChange());
     }
-    if (temperatureSlider) {
-      temperatureSlider.addEventListener('input', (e) => this._handleTemperatureChange(e));
-    }
-
-    // Global listeners
-    document.addEventListener('mouseup', this._boundGlobalMouseUp);
-    document.addEventListener('touchend', this._boundGlobalMouseUp);
-    document.addEventListener('mousemove', this._boundGlobalMouseMove);
-    document.addEventListener('touchmove', this._boundGlobalMouseMove, { passive: false });
   }
 
+  _rerenderLightIconsOnly() {
+    const nodes = this.shadowRoot.querySelectorAll('.light');
+    nodes.forEach(light => {
+      const entity = light.dataset.entity;
+      const iconWrap = light.querySelector('.light-icon, ha-icon, ha-svg-icon, .light-icon-emoji');
+      if (iconWrap) iconWrap.remove();
+      if (this._config.show_entity_icons) {
+        const iconData = this._getEntityIconData(entity);
+        light.insertAdjacentHTML('afterbegin', this._renderIcon(iconData));
+      }
+    });
+    this._refreshEntityIcons();
+  }
+
+  _commitSelection(newSelection) {
+    const updatedSelection = new Set(newSelection);
+    this._selectedLights.clear();
+    updatedSelection.forEach(entity => this._selectedLights.add(entity));
+    this.updateLights();
+    const shouldDrawWheel =
+      (this._config.always_show_controls || this._selectedLights.size > 0 || this._config.default_entity) &&
+      Boolean(this._els.colorWheel);
+    if (shouldDrawWheel) {
+      this.drawColorWheel();
+    }
+  }
+
+  /** ---------- Keyboard ---------- */
   _handleKeyDown(e) {
-    if ((e.ctrlKey || e.metaKey) && e.key === 'z' && !e.shiftKey) {
-      e.preventDefault();
-      this._undo();
-    }
-    
-    if ((e.ctrlKey || e.metaKey) && (e.key === 'y' || (e.key === 'z' && e.shiftKey))) {
-      e.preventDefault();
-      this._redo();
-    }
-    
+    // Undo/Redo
+    if ((e.ctrlKey || e.metaKey) && e.key === 'z' && !e.shiftKey) { e.preventDefault(); this._undo(); }
+    if ((e.ctrlKey || e.metaKey) && (e.key === 'y' || (e.key === 'Z' && e.shiftKey))) { e.preventDefault(); this._redo(); }
+    // Escape → deselect and close panels
     if (e.key === 'Escape') {
       this._selectedLights.clear();
-      this.render();
+      if (this._settingsOpen) this._settingsOpen = false;
+      if (this._yamlModalOpen) this._yamlModalOpen = false;
+      if (this._els.settingsPanel) this._els.settingsPanel.classList.remove('visible');
+      if (this._els.yamlModal) this._els.yamlModal.classList.remove('visible');
+      this.updateLights();
+    }
+    // Select all
+    if ((e.ctrlKey || e.metaKey) && e.key === 'a') {
+      e.preventDefault();
+      this._selectedLights.clear();
+      this._config.entities.forEach(ent => this._selectedLights.add(ent));
+      this.updateLights();
+      if (this._els.colorWheel) this.drawColorWheel();
+    }
+    // Optional: movement with arrows if unlocked
+    if (!this._lockPositions && this._selectedLights.size > 0) {
+      const step = e.altKey ? 1 : 0.5; // fine control with Alt
+      let moved = false;
+      const delta = { x: 0, y: 0 };
+      if (e.key === 'ArrowLeft') { delta.x = -step; moved = true; }
+      if (e.key === 'ArrowRight') { delta.x = step; moved = true; }
+      if (e.key === 'ArrowUp') { delta.y = -step; moved = true; }
+      if (e.key === 'ArrowDown') { delta.y = step; moved = true; }
+      if (moved) {
+        e.preventDefault();
+        this._selectedLights.forEach(entity => {
+          const pos = this._config.positions[entity] || { x: 50, y: 50 };
+          const nx = Math.max(0, Math.min(100, pos.x + delta.x));
+          const ny = Math.max(0, Math.min(100, pos.y + delta.y));
+          this._config.positions[entity] = { x: nx, y: ny };
+        });
+        this._smoothApplyPositions();
+        this._saveHistory();
+      }
     }
   }
 
-  /**
-   * MOBILE TOUCH SUPPORT FOR MULTI-SELECT
-   */
-  _handleLightTouchStart(e, light) {
-    const entity_id = light.dataset.entity;
-    
-    // Start long press timer for multi-select
-    this._longPressTimer = setTimeout(() => {
-      this._longPressTriggered = true;
-      // Vibrate if supported
-      if (navigator.vibrate) {
-        navigator.vibrate(50);
-      }
-      // Toggle selection
-      if (this._selectedLights.has(entity_id)) {
-        this._selectedLights.delete(entity_id);
-      } else {
-        this._selectedLights.add(entity_id);
-      }
-      this.render();
-      if (this._selectedLights.size > 0) {
-        this.drawColorWheel();
-      }
-    }, 500); // 500ms long press
+  /** ---------- Pointer (unified mouse/touch/pen) ---------- */
+  _onPointerDown(e) {
+    if (!this._els.canvas) return;
+    e.target.setPointerCapture?.(e.pointerId);
 
-    // Also handle dragging
-    if (!this._lockPositions) {
-      this._handleLightMouseDown(e, light);
+    const targetLight = e.target.closest('.light');
+    if (targetLight) {
+      const entity = targetLight.dataset.entity;
+      const pointerType = e.pointerType || 'mouse';
+      if (this._lockPositions) {
+        const additive = e.shiftKey || e.ctrlKey || e.metaKey;
+        if (this._longPressTimer) {
+          clearTimeout(this._longPressTimer);
+          this._longPressTimer = null;
+        }
+        this._longPressTriggered = false;
+        const longPressDelay = pointerType === 'mouse' ? 650 : 500;
+        this._longPressTimer = setTimeout(() => {
+          this._longPressTimer = null;
+          this._longPressTriggered = true;
+          this._pendingTap = null;
+          this._lastTap = null;
+          if (pointerType !== 'mouse' && typeof navigator !== 'undefined' && navigator.vibrate) {
+            navigator.vibrate(30);
+          }
+          this._openMoreInfo(entity);
+        }, longPressDelay);
+        if (pointerType === 'touch' || pointerType === 'pen') {
+          this._pendingTap = {
+            entity,
+            pointerId: e.pointerId,
+            startX: e.clientX,
+            startY: e.clientY,
+            additive,
+            pointerType,
+          };
+        } else {
+          const newSelection = new Set(this._selectedLights);
+          if (additive) {
+            if (newSelection.has(entity)) newSelection.delete(entity);
+            else newSelection.add(entity);
+          } else {
+            newSelection.clear();
+            newSelection.add(entity);
+          }
+          this._commitSelection(newSelection);
+        }
+        return;
+      }
+
+      if (!this._selectedLights.has(entity)) {
+        const additive = e.shiftKey || e.ctrlKey || e.metaKey;
+        const newSelection = new Set(this._selectedLights);
+        if (!additive) newSelection.clear();
+        newSelection.add(entity);
+        this._commitSelection(newSelection);
+      }
+
+      this._pendingTap = null;
+      if (this._longPressTimer) {
+        clearTimeout(this._longPressTimer);
+        this._longPressTimer = null;
+      }
+      this._longPressTriggered = false;
+
+      // Begin drag
+      const rect = this._els.canvas.getBoundingClientRect();
+      this._dragState = {
+        entity,
+        startX: e.clientX,
+        startY: e.clientY,
+        initialLeft: parseFloat(targetLight.style.left),
+        initialTop: parseFloat(targetLight.style.top),
+        rect,
+        moved: false,
+      };
+      targetLight.classList.add('dragging');
+      // Pre-history snapshot if necessary
+      this._saveHistory();
+      return;
+    }
+
+    // Start canvas selection rubberband
+    if (e.target.id === 'canvas' || e.target.classList.contains('grid')) {
+      const rect = this._els.canvas.getBoundingClientRect();
+      this._selectionStart = { x: e.clientX - rect.left, y: e.clientY - rect.top };
+      this._selectionBox = document.createElement('div');
+      this._selectionBox.className = 'selection-box';
+      this._els.canvas.appendChild(this._selectionBox);
+      this._selectionModeAdditive = e.shiftKey || e.ctrlKey || e.metaKey;
+      this._selectionBase = this._selectionModeAdditive ? new Set(this._selectedLights) : null;
+      if (!this._selectionModeAdditive) {
+        this._selectedLights.clear();
+        this.updateLights();
+      }
     }
   }
 
-  _handleLightTouchEnd(e, light) {
-    // Clear long press timer
+  _onPointerMove(e) {
+    if (this._pendingTap && e.pointerId === this._pendingTap.pointerId) {
+      const dx = e.clientX - this._pendingTap.startX;
+      const dy = e.clientY - this._pendingTap.startY;
+      if (Math.hypot(dx, dy) > 12) {
+        if (this._longPressTimer) {
+          clearTimeout(this._longPressTimer);
+          this._longPressTimer = null;
+        }
+        this._pendingTap = null;
+        this._lastTap = null;
+      }
+    }
+
+    if (this._dragState) {
+      e.preventDefault();
+      if (this._raf) cancelAnimationFrame(this._raf);
+      this._raf = requestAnimationFrame(() => {
+        this._raf = null;
+        const { rect, startX, startY, initialLeft, initialTop, entity } = this._dragState;
+        const dx = e.clientX - startX;
+        const dy = e.clientY - startY;
+        if (Math.abs(dx) > 3 || Math.abs(dy) > 3) this._dragState.moved = true;
+
+        let xPercent = initialLeft + (dx / rect.width) * 100;
+        let yPercent = initialTop + (dy / rect.height) * 100;
+        const snapped = this._snapToGrid(xPercent, yPercent, e);
+        xPercent = Math.max(0, Math.min(100, snapped.x));
+        yPercent = Math.max(0, Math.min(100, snapped.y));
+
+        const node = this.shadowRoot.querySelector(`.light[data-entity="${entity}"]`);
+        if (node) {
+          node.style.left = `${xPercent}%`;
+          node.style.top = `${yPercent}%`;
+        }
+      });
+      return;
+    }
+
+    if (this._selectionBox && this._selectionStart) {
+      e.preventDefault();
+      const rect = this._els.canvas.getBoundingClientRect();
+      const x = e.clientX - rect.left;
+      const y = e.clientY - rect.top;
+      const left = Math.min(this._selectionStart.x, x);
+      const top = Math.min(this._selectionStart.y, y);
+      const width = Math.abs(x - this._selectionStart.x);
+      const height = Math.abs(y - this._selectionStart.y);
+      Object.assign(this._selectionBox.style, {
+        left: `${left}px`, top: `${top}px`, width: `${width}px`, height: `${height}px`,
+      });
+      this._selectLightsInBox(left, top, width, height);
+    }
+  }
+
+  _onPointerUp(e) {
+    e.target.releasePointerCapture?.(e.pointerId);
+    if (this._dragState) {
+      const { entity, moved } = this._dragState;
+      const node = this.shadowRoot.querySelector(`.light[data-entity="${entity}"]`);
+      if (node) {
+        node.classList.remove('dragging');
+        const finalLeft = parseFloat(node.style.left);
+        const finalTop = parseFloat(node.style.top);
+        this._config.positions[entity] = { x: finalLeft, y: finalTop };
+      }
+      if (moved) {
+        this._saveHistory();
+      }
+      this._dragState = null;
+    }
+
+    if (this._selectionBox) {
+      this._selectionBox.remove();
+      this._selectionBox = null;
+      this._selectionStart = null;
+      this._selectionBase = null;
+      this._selectionModeAdditive = false;
+    }
+
     if (this._longPressTimer) {
       clearTimeout(this._longPressTimer);
       this._longPressTimer = null;
     }
 
-    // If long press was triggered, don't do normal click
-    if (this._longPressTriggered) {
-      this._longPressTriggered = false;
-      e.preventDefault();
-      return;
+    if (this._pendingTap && e.pointerId === this._pendingTap.pointerId) {
+      if (!this._longPressTriggered) {
+        const now = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+        const isTouch = this._pendingTap.pointerType === 'touch' || this._pendingTap.pointerType === 'pen';
+        if (isTouch && this._lastTap && this._lastTap.entity === this._pendingTap.entity && (now - this._lastTap.time) < 350) {
+          this._toggleEntity(this._pendingTap.entity);
+          this._lastTap = null;
+        } else {
+          if (isTouch) {
+            this._lastTap = { entity: this._pendingTap.entity, time: now };
+          } else {
+            this._lastTap = null;
+          }
+          const newSelection = this._pendingTap.additive
+            ? new Set(this._selectedLights)
+            : new Set();
+          if (this._pendingTap.additive && newSelection.has(this._pendingTap.entity)) {
+            newSelection.delete(this._pendingTap.entity);
+          } else {
+            newSelection.add(this._pendingTap.entity);
+          }
+          this._commitSelection(newSelection);
+        }
+      }
+      this._pendingTap = null;
     }
 
-    // Normal tap = single select (if not dragging)
-    if (!this._dragState) {
-      this._handleLightClick(e, light);
-    }
+    this._longPressTriggered = false;
   }
 
-  _handleLightMouseDown(e, light) {
-    if (this._lockPositions) return;
-    
+  _onPointerCancel() {
+    this._cancelActiveInteractions();
+  }
+
+  _handleCanvasDoubleClick(e) {
+    const targetLight = e.target.closest('.light');
+    if (!targetLight) return;
+    const entity = targetLight.dataset.entity;
+    if (!entity) return;
     e.preventDefault();
-    e.stopPropagation();
-    
-    const entity_id = light.dataset.entity;
-    const canvas = this.shadowRoot.getElementById('canvas');
-    const rect = canvas.getBoundingClientRect();
-    
-    const clientX = e.touches ? e.touches[0].clientX : e.clientX;
-    const clientY = e.touches ? e.touches[0].clientY : e.clientY;
-    
-    const currentLeft = parseFloat(light.style.left);
-    const currentTop = parseFloat(light.style.top);
-    
-    this._dragState = {
-      entity: entity_id,
-      startX: clientX,
-      startY: clientY,
-      initialLeft: currentLeft,
-      initialTop: currentTop,
-      canvasRect: rect,
-      moved: false // Track if actually moved
-    };
-    
-    light.classList.add('dragging');
-    
-    // Save history
-    if (this._history.length === 0 || 
-        JSON.stringify(this._history[this._historyIndex]) !== JSON.stringify(this._config.positions)) {
-      this._saveHistory();
-    }
+    this._toggleEntity(entity);
+    this._lastTap = null;
   }
 
-  _handleLightClick(e, light) {
-    // If we were dragging, don't select
-    if (this._dragState?.moved) {
-      return;
-    }
-    
-    e.stopPropagation();
-    const entity_id = light.dataset.entity;
-    
-    if (e.shiftKey) {
-      // Multi-select
-      if (this._selectedLights.has(entity_id)) {
-        this._selectedLights.delete(entity_id);
-      } else {
-        this._selectedLights.add(entity_id);
-      }
-    } else {
-      // Single select
-      this._selectedLights.clear();
-      this._selectedLights.add(entity_id);
-    }
-    
-    this.render();
-    if (this._selectedLights.size > 0) {
-      this.drawColorWheel();
-    }
+  _handleCanvasContextMenu(e) {
+    const targetLight = e.target.closest('.light');
+    if (!targetLight) return;
+    const entity = targetLight.dataset.entity;
+    if (!entity) return;
+    e.preventDefault();
+    this._openMoreInfo(entity);
+    this._lastTap = null;
   }
 
-  _handleCanvasMouseDown(e) {
-    if (e.target.id !== 'canvas' && !e.target.classList.contains('grid')) return;
-    
-    const canvas = this.shadowRoot.getElementById('canvas');
-    const rect = canvas.getBoundingClientRect();
-    
-    const clientX = e.touches ? e.touches[0].clientX : e.clientX;
-    const clientY = e.touches ? e.touches[0].clientY : e.clientY;
-    
-    const x = clientX - rect.left;
-    const y = clientY - rect.top;
-    
-    this._selectionStart = { x, y };
-    this._selectionBox = document.createElement('div');
-    this._selectionBox.className = 'selection-box';
-    canvas.appendChild(this._selectionBox);
-    
-    if (!e.shiftKey) {
-      this._selectedLights.clear();
-      this.render();
+  _cancelActiveInteractions() {
+    this._dragState = null;
+    if (this.shadowRoot) {
+      this.shadowRoot.querySelectorAll('.light.dragging').forEach(node => node.classList.remove('dragging'));
     }
-  }
-
-  _handleCanvasTouchStart(e) {
-    if (e.target.id !== 'canvas' && !e.target.classList.contains('grid')) return;
-    this._handleCanvasMouseDown(e);
-  }
-
-  _handleGlobalMouseMove(e) {
-    // Handle light dragging
-    if (this._dragState) {
-      e.preventDefault();
-      
-      const clientX = e.touches ? e.touches[0].clientX : e.clientX;
-      const clientY = e.touches ? e.touches[0].clientY : e.clientY;
-      
-      const deltaX = clientX - this._dragState.startX;
-      const deltaY = clientY - this._dragState.startY;
-      
-      // Mark as moved if dragged more than 5px
-      if (Math.abs(deltaX) > 5 || Math.abs(deltaY) > 5) {
-        this._dragState.moved = true;
-      }
-      
-      const rect = this._dragState.canvasRect;
-      const deltaXPercent = (deltaX / rect.width) * 100;
-      const deltaYPercent = (deltaY / rect.height) * 100;
-      
-      let newLeft = this._dragState.initialLeft + deltaXPercent;
-      let newTop = this._dragState.initialTop + deltaYPercent;
-      
-      // Apply snapping
-      const snapped = this._snapToGrid(newLeft, newTop, e);
-      newLeft = snapped.x;
-      newTop = snapped.y;
-      
-      // Clamp to bounds
-      newLeft = Math.max(0, Math.min(100, newLeft));
-      newTop = Math.max(0, Math.min(100, newTop));
-      
-      const light = this.shadowRoot.querySelector(`[data-entity="${this._dragState.entity}"]`);
-      if (light) {
-        light.style.left = `${newLeft}%`;
-        light.style.top = `${newTop}%`;
-      }
-      
-      return;
-    }
-    
-    // Handle selection box
-    if (this._selectionBox && this._selectionStart) {
-      e.preventDefault();
-      
-      const canvas = this.shadowRoot.getElementById('canvas');
-      const rect = canvas.getBoundingClientRect();
-      
-      const clientX = e.touches ? e.touches[0].clientX : e.clientX;
-      const clientY = e.touches ? e.touches[0].clientY : e.clientY;
-      
-      const currentX = clientX - rect.left;
-      const currentY = clientY - rect.top;
-      
-      const left = Math.min(this._selectionStart.x, currentX);
-      const top = Math.min(this._selectionStart.y, currentY);
-      const width = Math.abs(currentX - this._selectionStart.x);
-      const height = Math.abs(currentY - this._selectionStart.y);
-      
-      this._selectionBox.style.left = `${left}px`;
-      this._selectionBox.style.top = `${top}px`;
-      this._selectionBox.style.width = `${width}px`;
-      this._selectionBox.style.height = `${height}px`;
-      
-      this._selectLightsInBox(left, top, width, height);
-    }
-  }
-
-  _handleGlobalMouseUp(e) {
-    // Handle drag end - FIX: Properly clear drag state
-    if (this._dragState) {
-      const light = this.shadowRoot.querySelector(`[data-entity="${this._dragState.entity}"]`);
-      if (light) {
-        light.classList.remove('dragging');
-        
-        const finalLeft = parseFloat(light.style.left);
-        const finalTop = parseFloat(light.style.top);
-        
-        this._config.positions[this._dragState.entity] = { 
-          x: finalLeft, 
-          y: finalTop 
-        };
-      }
-      
-      this._dragState = null; // CRITICAL: Clear drag state
-      return;
-    }
-
-    // Handle selection box end
     if (this._selectionBox) {
       this._selectionBox.remove();
       this._selectionBox = null;
-      this._selectionStart = null;
-      this.render();
-      if (this._selectedLights.size > 0) {
-        this.drawColorWheel();
-      }
     }
+    this._selectionBase = null;
+    this._selectionModeAdditive = false;
+    if (this._longPressTimer) {
+      clearTimeout(this._longPressTimer);
+      this._longPressTimer = null;
+    }
+    this._pendingTap = null;
+    this._longPressTriggered = false;
   }
 
   _selectLightsInBox(left, top, width, height) {
     const lights = this.shadowRoot.querySelectorAll('.light');
-    const canvas = this.shadowRoot.getElementById('canvas');
-    const rect = canvas.getBoundingClientRect();
-
+    const rect = this._els.canvas.getBoundingClientRect();
+    const inside = new Set();
     lights.forEach(light => {
-      const lightRect = light.getBoundingClientRect();
-      const lightX = lightRect.left - rect.left + lightRect.width / 2;
-      const lightY = lightRect.top - rect.top + lightRect.height / 2;
-
-      if (lightX >= left && lightX <= left + width && 
-          lightY >= top && lightY <= top + height) {
-        this._selectedLights.add(light.dataset.entity);
-        light.classList.add('selected');
+      const r = light.getBoundingClientRect();
+      const cx = r.left - rect.left + r.width / 2;
+      const cy = r.top - rect.top + r.height / 2;
+      if (cx >= left && cx <= left + width && cy >= top && cy <= top + height) {
+        inside.add(light.dataset.entity);
       }
     });
+    if (this._selectionModeAdditive && this._selectionBase) {
+      this._commitSelection(new Set([...this._selectionBase, ...inside]));
+    } else {
+      this._commitSelection(inside);
+    }
   }
 
-  /**
-   * COLOR CONTROL
-   */
-  _handleColorWheelClick(e) {
-    const controlledEntities = this._selectedLights.size > 0 
-      ? Array.from(this._selectedLights)
+  /** ---------- Color control ---------- */
+  _handleColorWheelPointer(e) {
+    const controlled = this._selectedLights.size > 0
+      ? [...this._selectedLights]
       : (this._config.default_entity ? [this._config.default_entity] : []);
-    
-    if (controlledEntities.length === 0) return;
+    if (controlled.length === 0) return;
 
-    const canvas = this.shadowRoot.getElementById('colorWheelMini');
+    const canvas = this._els.colorWheel;
     const rect = canvas.getBoundingClientRect();
-    
-    const clientX = e.touches ? e.touches[0].clientX : e.clientX;
-    const clientY = e.touches ? e.touches[0].clientY : e.clientY;
-    
-    const x = clientX - rect.left;
-    const y = clientY - rect.top;
+    const x = (e.clientX - rect.left) * (canvas.width / rect.width);
+    const y = (e.clientY - rect.top) * (canvas.height / rect.height);
 
-    const scaleX = canvas.width / rect.width;
-    const scaleY = canvas.height / rect.height;
-    const scaledX = x * scaleX;
-    const scaledY = y * scaleY;
-
-    this._applyColorFromWheel(scaledX, scaledY, controlledEntities);
-  }
-
-  _applyColorFromWheel(x, y, entities) {
-    const canvas = this.shadowRoot.getElementById('colorWheelMini');
     const ctx = canvas.getContext('2d');
     const imageData = ctx.getImageData(Math.floor(x), Math.floor(y), 1, 1);
-    const [r, g, b] = imageData.data;
+    const [r, g, b, a] = imageData.data;
+    if (a === 0) return; // click outside painted area (shouldn't happen with full wheel)
 
-    entities.forEach(entity_id => {
+    this._pendingColor = [r, g, b];
+    // Apply immediately (color picks feel best immediate)
+    controlled.forEach(entity_id => {
       this._hass.callService('light', 'turn_on', {
-        entity_id: entity_id,
-        rgb_color: [r, g, b]
+        entity_id,
+        rgb_color: this._pendingColor,
       });
     });
+    this._pendingColor = null;
   }
 
-  _handleBrightnessChange(e) {
-    const controlledEntities = this._selectedLights.size > 0 
-      ? Array.from(this._selectedLights)
+  _handleBrightnessInput(e) {
+    const val = parseInt(e.target.value, 10);
+    if (this._els.brightnessValue) this._els.brightnessValue.textContent = `${Math.round((val / 255) * 100)}%`;
+    this._pendingBrightness = val;
+  }
+  _handleBrightnessChange() {
+    if (this._pendingBrightness == null) return;
+    const controlled = this._selectedLights.size > 0
+      ? [...this._selectedLights]
       : (this._config.default_entity ? [this._config.default_entity] : []);
-    
-    if (controlledEntities.length === 0) return;
+    if (controlled.length === 0) { this._pendingBrightness = null; return; }
 
-    const brightness = parseInt(e.target.value);
-    const brightnessValue = this.shadowRoot.getElementById('brightnessValue');
-    if (brightnessValue) {
-      brightnessValue.textContent = `${Math.round((brightness / 255) * 100)}%`;
-    }
-
-    controlledEntities.forEach(entity_id => {
-      this._hass.callService('light', 'turn_on', {
-        entity_id: entity_id,
-        brightness: brightness
-      });
+    const b = this._pendingBrightness;
+    controlled.forEach(entity_id => {
+      this._hass.callService('light', 'turn_on', { entity_id, brightness: b });
     });
+    this._pendingBrightness = null;
   }
 
-  _handleTemperatureChange(e) {
-    const controlledEntities = this._selectedLights.size > 0 
-      ? Array.from(this._selectedLights)
+  _handleTemperatureInput(e) {
+    const k = parseInt(e.target.value, 10);
+    if (this._els.temperatureValue) this._els.temperatureValue.textContent = `${k}K`;
+    this._pendingTemperature = k;
+  }
+  _handleTemperatureChange() {
+    if (this._pendingTemperature == null) return;
+    const controlled = this._selectedLights.size > 0
+      ? [...this._selectedLights]
       : (this._config.default_entity ? [this._config.default_entity] : []);
-    
-    if (controlledEntities.length === 0) return;
+    if (controlled.length === 0) { this._pendingTemperature = null; return; }
 
-    const temperature = parseInt(e.target.value);
-    const temperatureValue = this.shadowRoot.getElementById('temperatureValue');
-    if (temperatureValue) {
-      temperatureValue.textContent = `${temperature}K`;
-    }
-
-    const mireds = Math.round(1000000 / temperature);
-
-    controlledEntities.forEach(entity_id => {
-      this._hass.callService('light', 'turn_on', {
-        entity_id: entity_id,
-        color_temp: mireds
-      });
+    const mireds = Math.round(1000000 / this._pendingTemperature);
+    controlled.forEach(entity_id => {
+      this._hass.callService('light', 'turn_on', { entity_id, color_temp: mireds });
     });
+    this._pendingTemperature = null;
   }
 
   drawColorWheel() {
-    const canvas = this.shadowRoot.getElementById('colorWheelMini');
+    const canvas = this._els.colorWheel;
     if (!canvas) return;
-
     const ctx = canvas.getContext('2d');
-    const centerX = canvas.width / 2;
-    const centerY = canvas.height / 2;
-    const radius = canvas.width / 2;
+    if (!ctx) return;
+
+    const rect = canvas.getBoundingClientRect();
+    const dpr = (typeof window !== 'undefined' && window.devicePixelRatio) ? window.devicePixelRatio : 1;
+    const fallbackSize = Number(canvas.getAttribute('width')) || 256;
+    const cssSize = Math.max(rect.width, rect.height) > 0
+      ? Math.min(rect.width || fallbackSize, rect.height || fallbackSize)
+      : fallbackSize;
+    const pixelSize = Math.max(1, Math.round(cssSize * dpr));
+
+    if (canvas.width !== pixelSize || canvas.height !== pixelSize) {
+      canvas.width = pixelSize;
+      canvas.height = pixelSize;
+    }
 
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-    for (let angle = 0; angle < 360; angle += 1) {
-      const startAngle = (angle - 90) * Math.PI / 180;
-      const endAngle = (angle - 89) * Math.PI / 180;
+    const radius = pixelSize / 2;
+    const imageData = ctx.createImageData(pixelSize, pixelSize);
+    const data = imageData.data;
 
-      for (let r = 0; r < radius; r += 1) {
-        const sat = (r / radius) * 100;
-        const hue = angle;
-        
-        ctx.beginPath();
-        ctx.arc(centerX, centerY, r, startAngle, endAngle);
-        ctx.strokeStyle = `hsl(${hue}, ${sat}%, 50%)`;
-        ctx.lineWidth = 2;
-        ctx.stroke();
+    const hslToRgb = (h, s, l) => {
+      if (s === 0) {
+        const val = Math.round(l * 255);
+        return [val, val, val];
+      }
+      const hue2rgb = (p, q, t) => {
+        if (t < 0) t += 1;
+        if (t > 1) t -= 1;
+        if (t < 1 / 6) return p + (q - p) * 6 * t;
+        if (t < 1 / 2) return q;
+        if (t < 2 / 3) return p + (q - p) * (2 / 3 - t) * 6;
+        return p;
+      };
+      const q = l < 0.5 ? l * (1 + s) : l + s - l * s;
+      const p = 2 * l - q;
+      const r = hue2rgb(p, q, h + 1 / 3);
+      const g = hue2rgb(p, q, h);
+      const b = hue2rgb(p, q, h - 1 / 3);
+      return [Math.round(r * 255), Math.round(g * 255), Math.round(b * 255)];
+    };
+
+    for (let y = 0; y < pixelSize; y += 1) {
+      for (let x = 0; x < pixelSize; x += 1) {
+        const dx = x + 0.5 - radius;
+        const dy = y + 0.5 - radius;
+        const dist = Math.sqrt(dx * dx + dy * dy);
+        if (dist > radius) continue;
+
+        const sat = Math.min(1, dist / radius);
+        const hue = (Math.atan2(dy, dx) * 180 / Math.PI + 360) % 360;
+        const lightness = 0.45 + (1 - sat) * 0.35;
+        const [r, g, b] = hslToRgb(hue / 360, sat, lightness);
+
+        const idx = (y * pixelSize + x) * 4;
+        data[idx] = r;
+        data[idx + 1] = g;
+        data[idx + 2] = b;
+        data[idx + 3] = 255;
       }
     }
 
-    // White center
-    const gradient = ctx.createRadialGradient(centerX, centerY, 0, centerX, centerY, radius * 0.2);
-    gradient.addColorStop(0, 'rgba(255, 255, 255, 1)');
-    gradient.addColorStop(1, 'rgba(255, 255, 255, 0)');
-    ctx.fillStyle = gradient;
+    ctx.putImageData(imageData, 0, 0);
+
+    ctx.save();
+    ctx.lineWidth = Math.max(1, 1.5 * dpr);
+    ctx.strokeStyle = 'rgba(255,255,255,0.2)';
     ctx.beginPath();
-    ctx.arc(centerX, centerY, radius * 0.2, 0, Math.PI * 2);
-    ctx.fill();
+    ctx.arc(radius, radius, radius - ctx.lineWidth / 2, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.restore();
   }
 
+  /** ---------- Light updates ---------- */
   updateLights() {
     if (!this._hass) return;
-    
     const lights = this.shadowRoot.querySelectorAll('.light');
     lights.forEach(light => {
-      const entity_id = light.dataset.entity;
-      const state = this._hass.states[entity_id];
-      if (!state) return;
+      const id = light.dataset.entity;
+      const st = this._hass.states[id];
+      if (!st) return;
+      const isOn = st.state === 'on';
 
-      const isOn = state.state === 'on';
-      
       let color = '#2a2a2a';
-      if (isOn && state.attributes.rgb_color) {
-        const [r, g, b] = state.attributes.rgb_color;
+      if (isOn && st.attributes.rgb_color) {
+        const [r, g, b] = st.attributes.rgb_color;
         color = `rgb(${r}, ${g}, ${b})`;
       } else if (isOn) {
         color = '#ffa500';
       }
 
-      light.style.background = isOn ? color : 'linear-gradient(135deg, #2a2a2a 0%, #1a1a1a 100%)';
+      light.style.background = isOn ? color : 'linear-gradient(135deg,#2a2a2a 0%, #1a1a1a 100%)';
       light.classList.toggle('off', !isOn);
       light.classList.toggle('on', isOn);
+
+      // Ensure selected styling matches current selection set
+      const selected = this._selectedLights.has(id);
+      light.classList.toggle('selected', selected);
     });
 
-    // Update control values if controls are visible
+    // Update controls to reflect averaged state
     if (this._config.always_show_controls || this._selectedLights.size > 0 || this._config.default_entity) {
-      const avgState = this._getAverageState();
-      this._updateControlValues(avgState);
+      const controlContext = this._getControlContext();
+      this._updateControlValues(controlContext);
+      // Show/hide floating controls if used
+      if (this._els.controlsFloating) {
+        const visible = this._config.always_show_controls || this._selectedLights.size > 0 || this._config.default_entity;
+        this._els.controlsFloating.classList.toggle('visible', visible);
+      }
     }
+    if ((this._config.always_show_controls || this._selectedLights.size > 0 || this._config.default_entity) && this._els.colorWheel) {
+      this.drawColorWheel();
+    }
+    this._refreshEntityIcons();
   }
 
-  /**
-   * YAML GENERATION
-   */
+  /** ---------- YAML generation ---------- */
   _generateYAML() {
     const indent = '  ';
     let yaml = `type: custom:spatial-light-color-card\n`;
-    yaml += `title: ${this._config.title}\n`;
+    if (this._config.title) yaml += `title: ${this._config.title}\n`;
     yaml += `canvas_height: ${this._config.canvas_height}\n`;
-    
-    if (this._config.default_entity) {
-      yaml += `default_entity: ${this._config.default_entity}\n`;
-    }
-    
-    if (this._config.always_show_controls) {
-      yaml += `always_show_controls: true\n`;
-    }
-    
-    if (!this._config.controls_below) {
-      yaml += `controls_below: false\n`;
-    }
-    
-    if (!this._config.show_settings_button) {
-      yaml += `show_settings_button: false\n`;
-    }
-    
+    if (this._config.default_entity) yaml += `default_entity: ${this._config.default_entity}\n`;
+    if (this._config.always_show_controls) yaml += `always_show_controls: true\n`;
+    if (!this._config.controls_below) yaml += `controls_below: false\n`;
+    if (!this._config.show_settings_button) yaml += `show_settings_button: false\n`;
+    if (this._config.show_entity_icons) yaml += `show_entity_icons: true\n`;
+    if (this._config.icon_style !== 'mdi') yaml += `icon_style: ${this._config.icon_style}\n`;
+    if (Number.isFinite(this._config.temperature_min)) yaml += `temperature_min: ${Math.round(this._config.temperature_min)}\n`;
+    if (Number.isFinite(this._config.temperature_max)) yaml += `temperature_max: ${Math.round(this._config.temperature_max)}\n`;
+
     yaml += `entities:\n`;
-    this._config.entities.forEach(entity => {
-      yaml += `${indent}- ${entity}\n`;
-    });
-    
+    this._config.entities.forEach(ent => { yaml += `${indent}- ${ent}\n`; });
+
     yaml += `positions:\n`;
-    Object.entries(this._config.positions).forEach(([entity, pos]) => {
-      yaml += `${indent}${entity}:\n`;
+    Object.entries(this._config.positions).forEach(([ent, pos]) => {
+      yaml += `${indent}${ent}:\n`;
       yaml += `${indent}${indent}x: ${pos.x.toFixed(2)}\n`;
       yaml += `${indent}${indent}y: ${pos.y.toFixed(2)}\n`;
     });
-
     return yaml;
   }
 
-  getCardSize() {
-    return 8;
-  }
-
+  getCardSize() { return 8; }
   static getStubConfig() {
     return {
-      entities: [],
-      positions: {},
-      title: 'Lights',
-      canvas_height: 450,
-      grid_size: 25,
-      label_mode: 'smart',
-      show_settings_button: true,
-      always_show_controls: false,
-      controls_below: true,
-      default_entity: null
+      entities: [], positions: {}, title: '',
+      canvas_height: 450, grid_size: 25, label_mode: 'smart',
+      show_settings_button: true, always_show_controls: false, controls_below: true,
+      default_entity: null, show_entity_icons: false, icon_style: 'mdi',
     };
   }
 }
@@ -1586,6 +1695,6 @@ window.customCards = window.customCards || [];
 window.customCards.push({
   type: 'spatial-light-color-card',
   name: 'Spatial Light Color Card',
-  description: 'Minimalist spatial light control with intelligent interactions',
-  preview: true
+  description: 'Refined spatial light control with intelligent interactions and polished design',
+  preview: true,
 });

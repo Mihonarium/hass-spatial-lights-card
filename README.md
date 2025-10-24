@@ -1,6 +1,35 @@
 # HASS-Spatial-Lights-Card
-Spatial Light Card for Home Assistant
 
+The Spatial Lights Card lets you place and control multiple Home Assistant lights on a 2D canvas, making it easy to build room layouts and manage zones at a glance.
+
+> 💡 **Tip:** Add a screenshot or GIF of your layout here so new users can see the card in action.
+
+---
+
+## Table of Contents
+
+1. [Features](#features)
+2. [Installation](#installation)
+3. [Quick Start](#-quick-start)
+4. [Configuration Reference](#-all-configuration-options)
+5. [Usage Tips](#-usage)
+6. [Common Workflows](#-common-workflows)
+7. [Visual Layout Options](#-visual-options)
+8. [Locking & Positioning](#-lockunlock)
+9. [Example Setups](#-example-setups)
+10. [Troubleshooting](#troubleshooting)
+
+---
+
+## Features
+
+- Interactive 2D layout to position lights exactly where they are in a room.
+- Multi-select and batch control color, brightness, and temperature.
+- Optional default entity for whole-room adjustments.
+- Toggleable floating/below controls to match your dashboard style.
+- Built-in position locking and export tools for hassle-free editing.
+
+---
 
 ## Installation
 
@@ -8,21 +37,30 @@ Spatial Light Card for Home Assistant
 1. In Home Assistant, go to **HACS → Frontend**.
 2. Choose **Custom repositories** and add this repo (`https://github.com/Mihonarium/hass-spatial-lights-card`) as a **Lovelace** type repository while it is pending publication, or search for **Spatial Lights Card** once it is listed.
 3. Install the card and reload your browser when prompted.
+4. Add the resource automatically through HACS, or confirm it exists under **Settings → Dashboards → Resources**.
 
 ### Manual Installation
 ```bash
 # Copy file
 cp hass-spatial-lights-card.js /config/www/
 
-# Add to resources
+# Add to resources (configuration.yaml or UI)
 resources:
   - url: /local/hass-spatial-lights-card.js
     type: module
 ```
 
+### Requirements
+- Home Assistant 2023.8 or newer (Lovelace dashboards).
+- Lights that expose standard color/brightness attributes.
+
 ---
 
 ## 🎯 Quick Start
+
+1. Install the resource using one of the methods above.
+2. Open **Settings → Dashboards → (three dots) → Edit dashboard**.
+3. Choose **Add card → Custom: Spatial Lights Card** (or **Manual** and paste YAML).
 
 ### Minimal Setup
 ```yaml
@@ -81,105 +119,65 @@ positions:
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `title` | string | "Lights" | Card title |
-| `entities` | list | required | Light entities |
-| `positions` | map | {} | Light positions (x, y) |
-| `canvas_height` | number | 450 | Canvas height in pixels |
-| `grid_size` | number | 25 | Grid size in pixels |
-| `label_mode` | string | "smart" | Label generation mode |
-| `label_overrides` | map | {} | Custom labels per entity |
-| `show_settings_button` | boolean | true | Show settings gear |
-| `always_show_controls` | boolean | false | Always show color controls |
-| `controls_below` | boolean | true | Controls below canvas |
-| `default_entity` | string | null | Entity to control when nothing selected |
+| `title` | string | `"Lights"` | Card title |
+| `entities` | list | **required** | Light entities to display |
+| `positions` | map | `{}` | Per-entity x/y positions from 0–100 (percentage) |
+| `canvas_height` | number | `450` | Canvas height in pixels |
+| `grid_size` | number | `25` | Grid spacing in pixels when snapping |
+| `label_mode` | string | `"smart"` | Label generation mode (`smart`, `friendly_name`, `entity_id`) |
+| `label_overrides` | map | `{}` | Map entity_id → custom label |
+| `show_settings_button` | boolean | `true` | Display settings gear in card header |
+| `always_show_controls` | boolean | `false` | Always show color controls even when nothing selected |
+| `controls_below` | boolean | `true` | Render controls below (`true`) or floating over (`false`) |
+| `default_entity` | string | `null` | Entity to control when nothing is selected |
+
+> ℹ️ **Label modes:** `smart` uses friendly names when available, falling back to entity IDs. Override individual entities with `label_overrides`.
 
 ---
 
 ## 🎨 Usage
 
 ### Desktop
-- **Click** to select light
-- **Shift+Click** to add to selection
-- **Drag** to select area (if nothing selected first)
-- **Unlock** in settings to drag lights
-- **Alt+Drag** to snap to grid
+- **Click** to select a light.
+- **Shift+Click** to add to the current selection.
+- **Drag** to create a marquee selection (when nothing is selected).
+- **Unlock** in settings to drag lights around the canvas.
+- **Alt+Drag** a light to snap its position to the grid size.
 
 ### Mobile
-- **Tap** to select light
-- **Long press** (500ms) to add to selection
-- **Drag** to select area
-- **Unlock** in settings to drag lights
+- **Tap** to select a light.
+- **Long press** (~500 ms) to add to the selection.
+- **Drag** with an empty selection to select an area.
+- **Unlock** in settings to drag lights.
 
 ### Controls
-- **Color Wheel** - Click to set color
-- **Brightness** - Drag slider
-- **Temperature** - Drag slider
-- **Default Entity** - Controls this when nothing selected
+- **Color wheel** — tap anywhere to set hue and saturation.
+- **Brightness slider** — drag horizontally or vertically (depending on theme) to set brightness.
+- **Temperature slider** — adjust white-temperature capable lights.
+- **Default entity** — when configured, controls this entity if no light is selected.
 
 ---
 
-## 💡 Common Configurations
+## 💡 Common Workflows
 
-### 1. Quick Control Panel
-```yaml
-# Always visible, below canvas, control all lights
-always_show_controls: true
-controls_below: true
-default_entity: light.all_living_room
-```
-**Use case:** Daily light control, no position changes needed
-
-### 2. Spatial Controller
-```yaml
-# Select individual lights, floating controls
-always_show_controls: false
-controls_below: false
-```
-**Use case:** Precise control of individual lights
-
-### 3. Production Setup
-```yaml
-# Locked, clean, always accessible
-show_settings_button: false
-always_show_controls: true
-controls_below: true
-default_entity: light.room_group
-```
-**Use case:** Wall tablet, kiosk mode, family use
-
-### 4. Design Mode
-```yaml
-# Unlocked, settings visible
-show_settings_button: true
-always_show_controls: false
-# Don't set positions yet
-```
-**Use case:** Initial setup, arranging lights
-
----
-
-## 🔧 Workflow
-
-### Initial Setup
-1. Add card with `entities` only
-2. Lights appear in auto-layout
-3. Click ⚙ → Unlock positions
-4. Drag lights to real positions
-5. Click ⚙ → Export configuration
-6. Copy YAML and paste into config
-7. Optional: Set `show_settings_button: false`
+### Designing a Layout
+1. Add all relevant light entities to the card.
+2. Click the **⚙** icon and disable **Lock positions**.
+3. Drag each light to match its real-world location.
+4. Optional: Enable **Snap to grid** (Alt/Option while dragging) for perfect alignment.
+5. Click **Export configuration** to capture current positions into YAML.
+6. Paste the exported YAML into your dashboard configuration.
+7. Re-enable **Lock positions** for everyday use.
 
 ### Daily Use
-1. Select light(s) you want to control
-2. Adjust color/brightness
-3. Click away to deselect
-4. Or use `default_entity` to control all
+1. Select the light(s) you want to control.
+2. Adjust color, brightness, and temperature from the controls.
+3. Click/tap away to deselect, or rely on `default_entity` to control the whole room.
 
-### Mobile Use
-1. Tap to select
-2. Long press to add more
-3. Adjust with sliders
-4. Tap away to deselect
+### Mobile Tips
+1. Tap to select, long-press to extend the selection.
+2. Drag the selection rectangle for quick grouping.
+3. Use `always_show_controls: true` if you prefer persistent sliders on small screens.
 
 ---
 
@@ -189,34 +187,32 @@ always_show_controls: false
 ```yaml
 controls_below: false
 ```
-- Appear over canvas when lights selected
-- Clean, minimal
-- Auto-hide when nothing selected
+- Controls appear over the canvas when lights are selected.
+- Minimal overlay that hides automatically when nothing is selected.
 
-### Below Controls
+### Controls Below the Canvas
 ```yaml
 controls_below: true
 always_show_controls: true
 ```
-- Always visible below canvas
-- Never cover lights
-- Quick access
+- Controls remain visible below the layout for quick access.
+- Ideal when you never want controls to cover the floor plan.
 
 ---
 
 ## 🔒 Lock/Unlock
 
 ### Default: Locked ✅
-- Can't accidentally move lights
-- Safe for daily use
-- Can still select and control
+- Prevents accidental movement of light positions.
+- Safe for daily dashboards.
+- Full control access without editing the layout.
 
-### To Rearrange:
-1. Click ⚙ (settings)
-2. Toggle "Lock Positions" off
-3. Drag lights
-4. Toggle back on when done
-5. Export updated YAML
+### To Rearrange
+1. Click the **⚙** icon (settings).
+2. Toggle **Lock positions** off.
+3. Drag lights to new coordinates.
+4. Toggle **Lock positions** back on when finished.
+5. Export the updated YAML so the layout persists.
 
 ---
 
@@ -268,23 +264,23 @@ entities:
 ## Troubleshooting
 
 ### Lights not visible on load?
-- Make sure `hass` is connected
-- Check browser console for errors
-- This should be fixed in final version
+- Confirm Home Assistant reports the entities as available.
+- Check the browser console for JavaScript errors (Developer Tools → Console).
+- Reload the dashboard after updating the card.
 
 ### Can't move lights?
-- Click ⚙ → Toggle "Lock Positions" off
-- Positions locked by default now
+- Click the **⚙** icon and toggle **Lock positions** off.
+- Positions are locked by default to prevent accidental drags.
 
 ### Multi-select not working on mobile?
-- Hold for 500ms (long press)
-- Should feel vibration
-- Then tap more lights
+- Hold for ~500 ms (long press) to add lights to the selection.
+- Haptic feedback (if available) indicates selection.
+- Then tap additional lights.
 
 ### Controls not showing?
-- Select a light, or
-- Set `always_show_controls: true`, or
-- Set `default_entity` to control something
+- Select at least one light.
+- Or enable `always_show_controls: true`.
+- Or configure `default_entity` to control something when nothing is selected.
 
 ---
 

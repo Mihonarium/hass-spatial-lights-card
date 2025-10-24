@@ -17,11 +17,33 @@ class SpatialLightColorCard extends HTMLElement {
     this._historyIndex = -1;
     this._longPressTimer = null;
     this._longPressTriggered = false;
-    
+
     // Settings
     this._gridSize = 25;
     this._snapOnModifier = true;
     this._lockPositions = true; // DEFAULT TO LOCKED
+
+    // Interaction helpers
+    this._activePointerId = null;
+    this._pointerDownLight = null;
+    this._activeColorWheelPointer = null;
+    this._colorWheelActive = false;
+    this._currentCanvas = null;
+    this._currentColorWheel = null;
+    this._selectionBaseline = new Set();
+    this._selectionAdditive = false;
+
+    // Bound handlers (stable references for add/removeEventListener)
+    this._documentClickHandler = (e) => this._handleDocumentClick(e);
+    this._pointerDownHandler = (e) => this._onPointerDown(e);
+    this._pointerMoveHandler = (e) => this._onPointerMove(e);
+    this._pointerUpHandler = (e) => this._onPointerUp(e);
+    this._colorWheelPointerDownHandler = (e) => this._handleColorWheelPointer(e, 'down');
+    this._colorWheelPointerMoveHandler = (e) => this._handleColorWheelPointer(e, 'move');
+    this._colorWheelPointerUpHandler = (e) => this._handleColorWheelPointer(e, 'up');
+    this._brightnessInputHandler = (e) => this._handleBrightnessChange(e);
+    this._temperatureInputHandler = (e) => this._handleTemperatureChange(e);
+    this._keyDownHandler = (e) => this._handleKeyDown(e);
   }
 
   setConfig(config) {
@@ -29,9 +51,21 @@ class SpatialLightColorCard extends HTMLElement {
       throw new Error('You must specify entities as an array');
     }
 
+    const normalizedPositions = {};
+    if (config.positions && typeof config.positions === 'object') {
+      Object.entries(config.positions).forEach(([entity, pos]) => {
+        if (!pos || typeof pos !== 'object') return;
+        const parsedX = typeof pos.x === 'number' ? pos.x : parseFloat(pos.x);
+        const parsedY = typeof pos.y === 'number' ? pos.y : parseFloat(pos.y);
+        if (Number.isFinite(parsedX) && Number.isFinite(parsedY)) {
+          normalizedPositions[entity] = { x: parsedX, y: parsedY };
+        }
+      });
+    }
+
     this._config = {
       entities: config.entities,
-      positions: config.positions || {},
+      positions: normalizedPositions,
       title: config.title || 'Lights',
       canvas_height: config.canvas_height || 450,
       grid_size: config.grid_size || 25,
@@ -198,10 +232,10 @@ class SpatialLightColorCard extends HTMLElement {
    * GET CURRENT VALUES FROM SELECTED LIGHTS
    */
   _getAverageState() {
-    const controlledEntities = this._selectedLights.size > 0 
+    const controlledEntities = this._selectedLights.size > 0
       ? Array.from(this._selectedLights)
       : (this._config.default_entity ? [this._config.default_entity] : []);
-    
+
     if (controlledEntities.length === 0) {
       return { brightness: 128, temperature: 3500, color: null };
     }
@@ -239,74 +273,169 @@ class SpatialLightColorCard extends HTMLElement {
     };
   }
 
+  _kelvinToRGB(kelvin) {
+    const temp = Math.max(1000, Math.min(40000, kelvin)) / 100;
+    let red;
+    let green;
+    let blue;
+
+    if (temp <= 66) {
+      red = 255;
+    } else {
+      red = 329.698727446 * Math.pow(temp - 60, -0.1332047592);
+      red = Math.min(255, Math.max(0, red));
+    }
+
+    if (temp <= 66) {
+      green = 99.4708025861 * Math.log(temp) - 161.1195681661;
+    } else {
+      green = 288.1221695283 * Math.pow(temp - 60, -0.0755148492);
+    }
+    green = Math.min(255, Math.max(0, green));
+
+    if (temp >= 66) {
+      blue = 255;
+    } else if (temp <= 19) {
+      blue = 0;
+    } else {
+      blue = 138.5177312231 * Math.log(temp - 10) - 305.0447927307;
+      blue = Math.min(255, Math.max(0, blue));
+    }
+
+    return [Math.round(red), Math.round(green), Math.round(blue)];
+  }
+
   /**
    * RENDERING
    */
   render() {
     if (!this.shadowRoot || !this._hass) return;
 
+    this._detachEventListeners();
+
     const avgState = this._getAverageState();
     const showControls = this._config.always_show_controls || this._selectedLights.size > 0 || this._config.default_entity;
     const controlsPosition = this._config.controls_below ? 'below' : 'floating';
+    const selectedCount = this._selectedLights.size;
+    const selectionLabel = selectedCount > 0
+      ? `${selectedCount} selected`
+      : (this._config.default_entity ? 'Default control active' : 'Tap a light to select');
+    const arrangeActive = !this._lockPositions;
 
     this.shadowRoot.innerHTML = `
       <style>
         * { box-sizing: border-box; }
-        
+
         :host {
-          --bg-primary: #0d0d0d;
-          --bg-secondary: #1a1a1a;
-          --text-primary: rgba(255, 255, 255, 0.95);
-          --text-secondary: rgba(255, 255, 255, 0.6);
-          --text-tertiary: rgba(255, 255, 255, 0.35);
+          --bg-primary: #080808;
+          --bg-secondary: #151515;
+          --bg-tertiary: rgba(255, 255, 255, 0.05);
+          --text-primary: rgba(255, 255, 255, 0.96);
+          --text-secondary: rgba(255, 255, 255, 0.62);
+          --text-tertiary: rgba(255, 255, 255, 0.38);
           --border-subtle: rgba(255, 255, 255, 0.08);
-          --selection-glow: rgba(100, 150, 255, 0.4);
-          --grid-dots: rgba(255, 255, 255, 0.04);
+          --selection-glow: rgba(110, 150, 255, 0.45);
+          --grid-dots: rgba(255, 255, 255, 0.05);
+          --warm-temp: #FFB457;
+          --neutral-temp: #FFEED0;
+          --cool-temp: #7EC7FF;
+          --brand-accent: #8C9CFF;
+          font-family: "Inter", "SF Pro Display", "Roboto", sans-serif;
         }
-        
+
         ha-card {
           background: var(--bg-primary);
           overflow: hidden;
+          border-radius: 20px;
+          border: 1px solid rgba(255, 255, 255, 0.04);
+          box-shadow: 0 18px 45px rgba(0, 0, 0, 0.45);
         }
 
-        /* HEADER - Minimal */
         .header {
-          padding: 16px 20px;
+          padding: 18px 22px;
           display: flex;
           justify-content: space-between;
           align-items: center;
           border-bottom: 1px solid var(--border-subtle);
         }
 
+        .title-block {
+          display: flex;
+          flex-direction: column;
+          gap: 4px;
+        }
+
         .title {
-          font-size: 16px;
-          font-weight: 500;
-          color: var(--text-secondary);
+          font-size: 17px;
+          font-weight: 600;
+          color: var(--text-primary);
           margin: 0;
-          letter-spacing: 0.3px;
+          letter-spacing: 0.2px;
+        }
+
+        .subtitle {
+          font-size: 12px;
+          text-transform: uppercase;
+          letter-spacing: 0.7px;
+          color: var(--text-tertiary);
+        }
+
+        .header-actions {
+          display: flex;
+          align-items: center;
+          gap: 10px;
+        }
+
+        .mode-btn {
+          border: 1px solid var(--border-subtle);
+          background: var(--bg-tertiary);
+          color: var(--text-secondary);
+          border-radius: 999px;
+          padding: 8px 14px;
+          font-size: 12px;
+          letter-spacing: 0.4px;
+          text-transform: uppercase;
+          cursor: pointer;
+          transition: all 0.2s ease;
+        }
+
+        .mode-btn:hover {
+          border-color: rgba(255, 255, 255, 0.18);
+          color: var(--text-primary);
+        }
+
+        .mode-btn.active {
+          background: rgba(140, 156, 255, 0.18);
+          border-color: rgba(140, 156, 255, 0.5);
+          color: var(--text-primary);
         }
 
         .settings-btn {
-          width: 32px;
-          height: 32px;
+          width: 34px;
+          height: 34px;
           border: none;
           background: transparent;
           color: var(--text-tertiary);
-          border-radius: 6px;
+          border-radius: 10px;
           cursor: pointer;
-          font-size: 18px;
           transition: all 0.2s ease;
           display: flex;
           align-items: center;
           justify-content: center;
+          border: 1px solid transparent;
         }
 
         .settings-btn:hover {
-          background: var(--bg-secondary);
-          color: var(--text-secondary);
+          background: rgba(255, 255, 255, 0.05);
+          color: var(--text-primary);
+          border-color: rgba(255, 255, 255, 0.12);
         }
 
-        /* CANVAS - The Hero */
+        .settings-btn ha-icon {
+          width: 18px;
+          height: 18px;
+        }
+
         .canvas-wrapper {
           position: relative;
         }
@@ -322,7 +451,6 @@ class SpatialLightColorCard extends HTMLElement {
           touch-action: none;
         }
 
-        /* Subtle grid - always visible but quiet */
         .grid {
           position: absolute;
           inset: 0;
@@ -332,57 +460,68 @@ class SpatialLightColorCard extends HTMLElement {
           opacity: 1;
         }
 
-        /* LIGHT ORBS - Clean, minimal */
         .light {
           position: absolute;
-          width: 52px;
-          height: 52px;
+          width: 56px;
+          height: 56px;
           border-radius: 50%;
           transform: translate(-50%, -50%);
           cursor: ${this._lockPositions ? 'pointer' : 'grab'};
           transition: transform 0.2s cubic-bezier(0.4, 0, 0.2, 1),
-                      box-shadow 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+                      box-shadow 0.2s cubic-bezier(0.4, 0, 0.2, 1),
+                      background 0.2s ease;
           user-select: none;
           display: flex;
           align-items: center;
           justify-content: center;
+          border: none;
+          padding: 0;
+          background: linear-gradient(135deg, #2d2d2d 0%, #171717 100%);
         }
 
-        /* Light appearance based on state */
         .light::before {
           content: '';
           position: absolute;
           inset: 0;
           border-radius: 50%;
           background: inherit;
-          box-shadow: 
-            0 4px 16px rgba(0, 0, 0, 0.3),
-            inset 0 2px 8px rgba(0, 0, 0, 0.2);
+          box-shadow:
+            0 6px 18px rgba(0, 0, 0, 0.35),
+            inset 0 3px 10px rgba(0, 0, 0, 0.25);
         }
 
-        /* Subtle glow when on */
         .light.on::after {
           content: '';
           position: absolute;
-          inset: -8px;
+          inset: -10px;
           border-radius: 50%;
           background: inherit;
-          filter: blur(12px);
-          opacity: 0.3;
+          filter: blur(18px);
+          opacity: 0.4;
           z-index: -1;
         }
 
-        /* Off state - subtle gray */
         .light.off {
-          background: linear-gradient(135deg, #2a2a2a 0%, #1a1a1a 100%) !important;
-          opacity: 0.5;
+          opacity: 0.52;
         }
 
         .light.off::after {
           display: none;
         }
 
-        /* Hover - show label */
+        .light-icon {
+          position: relative;
+          z-index: 1;
+          width: 28px;
+          height: 28px;
+          color: var(--light-icon-color, rgba(255, 255, 255, 0.75));
+          transition: color 0.2s ease, transform 0.2s ease;
+        }
+
+        .light.selected .light-icon {
+          transform: scale(1.08);
+        }
+
         .light-label {
           position: absolute;
           top: calc(100% + 8px);
@@ -406,50 +545,46 @@ class SpatialLightColorCard extends HTMLElement {
           opacity: 1;
         }
 
-        /* Selection - soft glow */
         .light.selected {
           z-index: 10;
         }
 
         .light.selected::before {
-          box-shadow: 
-            0 0 0 2px rgba(255, 255, 255, 0.5),
-            0 0 0 4px var(--selection-glow),
-            0 4px 16px rgba(0, 0, 0, 0.3),
-            inset 0 2px 8px rgba(0, 0, 0, 0.2);
+          box-shadow:
+            0 0 0 2px rgba(255, 255, 255, 0.55),
+            0 0 0 5px var(--selection-glow),
+            0 6px 18px rgba(0, 0, 0, 0.35),
+            inset 0 3px 10px rgba(0, 0, 0, 0.25);
         }
 
-        /* Dragging */
         .light.dragging {
           cursor: grabbing;
           z-index: 100;
           transform: translate(-50%, -50%) scale(1.05);
         }
 
-        /* Selection box */
         .selection-box {
           position: absolute;
           border: 1px solid var(--selection-glow);
-          background: rgba(100, 150, 255, 0.08);
+          background: rgba(120, 160, 255, 0.1);
           pointer-events: none;
           border-radius: 2px;
         }
 
-        /* FLOATING CONTROLS - Contextual */
         .controls-floating {
           position: absolute;
           bottom: 20px;
           left: 50%;
           transform: translateX(-50%);
-          background: rgba(26, 26, 26, 0.95);
+          background: rgba(22, 22, 22, 0.96);
           backdrop-filter: blur(20px);
           border: 1px solid var(--border-subtle);
-          border-radius: 12px;
+          border-radius: 16px;
           padding: 16px 20px;
           display: flex;
           gap: 20px;
           align-items: center;
-          box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+          box-shadow: 0 12px 36px rgba(0, 0, 0, 0.45);
           opacity: 0;
           pointer-events: none;
           transition: opacity 0.2s ease;
@@ -461,7 +596,6 @@ class SpatialLightColorCard extends HTMLElement {
           pointer-events: auto;
         }
 
-        /* CONTROLS BELOW CANVAS - Always visible variant */
         .controls-below {
           padding: 20px;
           border-top: 1px solid var(--border-subtle);
@@ -472,7 +606,6 @@ class SpatialLightColorCard extends HTMLElement {
           justify-content: center;
         }
 
-        /* Color picker */
         .color-wheel-mini {
           width: 120px;
           height: 120px;
@@ -486,7 +619,6 @@ class SpatialLightColorCard extends HTMLElement {
           transform: scale(0.98);
         }
 
-        /* Sliders */
         .slider-group {
           display: flex;
           flex-direction: column;
@@ -515,6 +647,15 @@ class SpatialLightColorCard extends HTMLElement {
           border-radius: 2px;
           background: rgba(255, 255, 255, 0.1);
           outline: none;
+          transition: background 0.3s ease;
+        }
+
+        .slider[data-type="brightness"] {
+          background: linear-gradient(90deg, rgba(0, 0, 0, 0.6) 0%, rgba(255, 255, 255, 0.85) 100%);
+        }
+
+        .slider[data-type="temperature"] {
+          background: linear-gradient(90deg, var(--warm-temp) 0%, var(--neutral-temp) 50%, var(--cool-temp) 100%);
         }
 
         .slider::-webkit-slider-thumb {
@@ -525,6 +666,7 @@ class SpatialLightColorCard extends HTMLElement {
           background: white;
           cursor: pointer;
           box-shadow: 0 2px 6px rgba(0, 0, 0, 0.3);
+          border: 1px solid rgba(0, 0, 0, 0.1);
         }
 
         .slider::-moz-range-thumb {
@@ -533,7 +675,7 @@ class SpatialLightColorCard extends HTMLElement {
           border-radius: 50%;
           background: white;
           cursor: pointer;
-          border: none;
+          border: 1px solid rgba(0, 0, 0, 0.1);
           box-shadow: 0 2px 6px rgba(0, 0, 0, 0.3);
         }
 
@@ -546,12 +688,11 @@ class SpatialLightColorCard extends HTMLElement {
           flex-shrink: 0;
         }
 
-        /* SETTINGS PANEL */
         .settings-panel {
           position: absolute;
-          top: 60px;
-          right: 20px;
-          background: rgba(26, 26, 26, 0.98);
+          top: 62px;
+          right: 22px;
+          background: rgba(20, 20, 20, 0.96);
           backdrop-filter: blur(20px);
           border: 1px solid var(--border-subtle);
           border-radius: 12px;
@@ -606,7 +747,7 @@ class SpatialLightColorCard extends HTMLElement {
         }
 
         .toggle.on {
-          background: rgba(100, 150, 255, 0.6);
+          background: rgba(140, 156, 255, 0.5);
         }
 
         .toggle::after {
@@ -645,7 +786,6 @@ class SpatialLightColorCard extends HTMLElement {
           border-color: rgba(255, 255, 255, 0.15);
         }
 
-        /* YAML MODAL */
         .modal-overlay {
           position: fixed;
           inset: 0;
@@ -727,34 +867,43 @@ class SpatialLightColorCard extends HTMLElement {
           text-align: center;
         }
 
-        /* Responsive */
         @media (max-width: 768px) {
           .controls-floating,
           .controls-below {
             flex-direction: column;
             gap: 16px;
           }
-          
+
           .controls-floating {
             left: 20px;
             right: 20px;
             transform: none;
           }
-          
+
           .slider-group {
             width: 100%;
           }
         }
       </style>
-      
+
       <ha-card>
         <div class="header">
-          <div class="title">${this._config.title}</div>
-          ${this._config.show_settings_button ? `
-            <button class="settings-btn" id="settingsBtn" aria-label="Settings">⚙</button>
-          ` : ''}
+          <div class="title-block">
+            <h2 class="title">${this._config.title}</h2>
+            <span class="subtitle">${selectionLabel}</span>
+          </div>
+          <div class="header-actions">
+            <button class="mode-btn ${arrangeActive ? 'active' : ''}" id="arrangeBtn" aria-label="${arrangeActive ? 'Exit arrange mode' : 'Enter arrange mode'}" aria-pressed="${arrangeActive}">
+              ${arrangeActive ? 'Done' : 'Arrange'}
+            </button>
+            ${this._config.show_settings_button ? `
+              <button class="settings-btn" id="settingsBtn" aria-label="Settings">
+                <ha-icon icon="mdi:cog-outline"></ha-icon>
+              </button>
+            ` : ''}
+          </div>
         </div>
-        
+
         <div class="canvas-wrapper">
           <div class="canvas" id="canvas">
             <div class="grid"></div>
@@ -762,10 +911,10 @@ class SpatialLightColorCard extends HTMLElement {
             ${controlsPosition === 'floating' ? this._renderControlsFloating(showControls, avgState) : ''}
             ${this._renderSettings()}
           </div>
-          
+
           ${controlsPosition === 'below' ? this._renderControlsBelow(avgState) : ''}
         </div>
-        
+
         ${this._renderYamlModal()}
       </ha-card>
     `;
@@ -774,6 +923,7 @@ class SpatialLightColorCard extends HTMLElement {
     if ((showControls || this._config.always_show_controls) && this.shadowRoot.getElementById('colorWheelMini')) {
       this.drawColorWheel();
       this._updateControlValues(avgState);
+      this._updateSliderVisuals(avgState);
     }
     this.updateLights();
   }
@@ -787,25 +937,36 @@ class SpatialLightColorCard extends HTMLElement {
       const isOn = state.state === 'on';
       const isSelected = this._selectedLights.has(entity_id);
       const label = this._generateLabel(entity_id);
-      
-      let color = '#2a2a2a';
+
+      const icon = state.attributes.icon
+        ? state.attributes.icon
+        : (isOn ? 'mdi:lightbulb-on' : 'mdi:lightbulb-outline');
+
+      let fillColor = 'linear-gradient(135deg, #2d2d2d 0%, #171717 100%)';
       if (isOn && state.attributes.rgb_color) {
         const [r, g, b] = state.attributes.rgb_color;
-        color = `rgb(${r}, ${g}, ${b})`;
+        fillColor = `radial-gradient(circle at 30% 20%, rgba(255, 255, 255, 0.55), transparent 65%), rgb(${r}, ${g}, ${b})`;
+      } else if (isOn && state.attributes.color_temp !== undefined) {
+        const kelvin = Math.round(1000000 / state.attributes.color_temp);
+        const [r, g, b] = this._kelvinToRGB(kelvin);
+        fillColor = `radial-gradient(circle at 30% 20%, rgba(255, 255, 255, 0.55), transparent 65%), rgb(${r}, ${g}, ${b})`;
       } else if (isOn) {
-        color = '#ffa500';
+        fillColor = 'radial-gradient(circle at 30% 20%, rgba(255, 255, 255, 0.55), transparent 65%), #ffd180';
       }
 
+      const iconColor = isOn ? '#0f0f0f' : 'rgba(255, 255, 255, 0.65)';
+
       return `
-        <div 
+        <div
           class="light ${isOn ? 'on' : 'off'} ${isSelected ? 'selected' : ''}"
-          style="left: ${pos.x}%; top: ${pos.y}%; background: ${color};"
+          style="left: ${pos.x}%; top: ${pos.y}%; background: ${fillColor}; --light-icon-color: ${iconColor};"
           data-entity="${entity_id}"
           tabindex="0"
           role="button"
           aria-label="${state.attributes.friendly_name}"
           aria-pressed="${isSelected}"
         >
+          <ha-icon class="light-icon" icon="${icon}"></ha-icon>
           <div class="light-label">${label}</div>
         </div>
       `;
@@ -825,12 +986,13 @@ class SpatialLightColorCard extends HTMLElement {
         <div class="slider-group">
           <div class="slider-row">
             <span class="slider-icon">💡</span>
-            <input 
-              type="range" 
-              class="slider" 
+            <input
+              type="range"
+              class="slider"
+              data-type="brightness"
               id="brightnessSlider"
-              min="0" 
-              max="255" 
+              min="0"
+              max="255"
               value="${avgState.brightness}"
             >
             <span class="slider-value" id="brightnessValue">${Math.round((avgState.brightness / 255) * 100)}%</span>
@@ -838,12 +1000,13 @@ class SpatialLightColorCard extends HTMLElement {
           
           <div class="slider-row">
             <span class="slider-icon">🌡️</span>
-            <input 
-              type="range" 
-              class="slider" 
+            <input
+              type="range"
+              class="slider"
+              data-type="temperature"
               id="temperatureSlider"
-              min="2000" 
-              max="6500" 
+              min="2000"
+              max="6500"
               value="${avgState.temperature}"
             >
             <span class="slider-value" id="temperatureValue">${avgState.temperature}K</span>
@@ -866,12 +1029,13 @@ class SpatialLightColorCard extends HTMLElement {
         <div class="slider-group">
           <div class="slider-row">
             <span class="slider-icon">💡</span>
-            <input 
-              type="range" 
-              class="slider" 
+            <input
+              type="range"
+              class="slider"
+              data-type="brightness"
               id="brightnessSlider"
-              min="0" 
-              max="255" 
+              min="0"
+              max="255"
               value="${avgState.brightness}"
             >
             <span class="slider-value" id="brightnessValue">${Math.round((avgState.brightness / 255) * 100)}%</span>
@@ -879,12 +1043,13 @@ class SpatialLightColorCard extends HTMLElement {
           
           <div class="slider-row">
             <span class="slider-icon">🌡️</span>
-            <input 
-              type="range" 
-              class="slider" 
+            <input
+              type="range"
+              class="slider"
+              data-type="temperature"
               id="temperatureSlider"
-              min="2000" 
-              max="6500" 
+              min="2000"
+              max="6500"
               value="${avgState.temperature}"
             >
             <span class="slider-value" id="temperatureValue">${avgState.temperature}K</span>
@@ -957,33 +1122,55 @@ class SpatialLightColorCard extends HTMLElement {
     }
   }
 
+  _updateSliderVisuals(avgState) {
+    const brightnessSlider = this.shadowRoot.getElementById('brightnessSlider');
+    const temperatureSlider = this.shadowRoot.getElementById('temperatureSlider');
+
+    if (brightnessSlider) {
+      const color = Array.isArray(avgState.color)
+        ? `rgb(${avgState.color[0]}, ${avgState.color[1]}, ${avgState.color[2]})`
+        : 'rgba(255, 255, 255, 0.9)';
+      brightnessSlider.style.background = `linear-gradient(90deg, rgba(0, 0, 0, 0.65) 0%, ${color} 100%)`;
+    }
+
+    if (temperatureSlider) {
+      temperatureSlider.style.background = 'linear-gradient(90deg, var(--warm-temp) 0%, var(--neutral-temp) 50%, var(--cool-temp) 100%)';
+    }
+  }
+
+  _detachEventListeners() {
+    if (this._currentCanvas) {
+      this._currentCanvas.removeEventListener('pointerdown', this._pointerDownHandler);
+      this._currentCanvas = null;
+    }
+
+    if (this._currentColorWheel) {
+      this._currentColorWheel.removeEventListener('pointerdown', this._colorWheelPointerDownHandler);
+      this._currentColorWheel.removeEventListener('pointermove', this._colorWheelPointerMoveHandler);
+      this._currentColorWheel.removeEventListener('pointerup', this._colorWheelPointerUpHandler);
+      this._currentColorWheel.removeEventListener('pointercancel', this._colorWheelPointerUpHandler);
+      this._currentColorWheel = null;
+    }
+
+    window.removeEventListener('pointermove', this._pointerMoveHandler);
+    window.removeEventListener('pointerup', this._pointerUpHandler);
+    window.removeEventListener('pointercancel', this._pointerUpHandler);
+    document.removeEventListener('click', this._documentClickHandler);
+  }
+
   /**
    * EVENT HANDLING
    */
   connectedCallback() {
-    this._boundGlobalMouseUp = (e) => this._handleGlobalMouseUp(e);
-    this._boundGlobalMouseMove = (e) => this._handleGlobalMouseMove(e);
-    this._boundKeyDown = (e) => this._handleKeyDown(e);
-    
-    document.addEventListener('keydown', this._boundKeyDown);
+    document.addEventListener('keydown', this._keyDownHandler);
   }
 
   disconnectedCallback() {
-    if (this._boundGlobalMouseUp) {
-      document.removeEventListener('mouseup', this._boundGlobalMouseUp);
-      document.removeEventListener('touchend', this._boundGlobalMouseUp);
-    }
-    if (this._boundGlobalMouseMove) {
-      document.removeEventListener('mousemove', this._boundGlobalMouseMove);
-      document.removeEventListener('touchmove', this._boundGlobalMouseMove);
-    }
-    if (this._boundKeyDown) {
-      document.removeEventListener('keydown', this._boundKeyDown);
-    }
+    document.removeEventListener('keydown', this._keyDownHandler);
+    this._detachEventListeners();
   }
 
   _attachEventListeners() {
-    // Settings button
     const settingsBtn = this.shadowRoot.getElementById('settingsBtn');
     if (settingsBtn) {
       settingsBtn.addEventListener('click', (e) => {
@@ -993,18 +1180,15 @@ class SpatialLightColorCard extends HTMLElement {
       });
     }
 
-    // Close settings when clicking outside
-    const closeSettings = (e) => {
-      if (this._settingsOpen && 
-          !e.target.closest('.settings-panel') && 
-          !e.target.closest('.settings-btn')) {
-        this._settingsOpen = false;
+    const arrangeBtn = this.shadowRoot.getElementById('arrangeBtn');
+    if (arrangeBtn) {
+      arrangeBtn.addEventListener('click', (e) => {
+        e.preventDefault();
+        this._lockPositions = !this._lockPositions;
         this.render();
-      }
-    };
-    document.addEventListener('click', closeSettings);
+      });
+    }
 
-    // Lock toggle
     const lockToggle = this.shadowRoot.getElementById('lockToggle');
     if (lockToggle) {
       lockToggle.addEventListener('click', () => {
@@ -1013,7 +1197,6 @@ class SpatialLightColorCard extends HTMLElement {
       });
     }
 
-    // Export button
     const exportBtn = this.shadowRoot.getElementById('exportBtn');
     if (exportBtn) {
       exportBtn.addEventListener('click', () => {
@@ -1022,7 +1205,6 @@ class SpatialLightColorCard extends HTMLElement {
       });
     }
 
-    // Close modal
     const closeModal = this.shadowRoot.getElementById('closeModal');
     if (closeModal) {
       closeModal.addEventListener('click', () => {
@@ -1031,7 +1213,6 @@ class SpatialLightColorCard extends HTMLElement {
       });
     }
 
-    // Close modal on overlay click
     const modalOverlay = this.shadowRoot.getElementById('yamlModal');
     if (modalOverlay) {
       modalOverlay.addEventListener('click', (e) => {
@@ -1042,52 +1223,290 @@ class SpatialLightColorCard extends HTMLElement {
       });
     }
 
-    // Light orbs
-    const lights = this.shadowRoot.querySelectorAll('.light');
-    lights.forEach(light => {
-      // Mouse events
-      light.addEventListener('mousedown', (e) => this._handleLightMouseDown(e, light));
-      light.addEventListener('click', (e) => this._handleLightClick(e, light));
-      
-      // Touch events for mobile multi-select
-      light.addEventListener('touchstart', (e) => {
-        this._handleLightTouchStart(e, light);
-      });
-      light.addEventListener('touchend', (e) => {
-        this._handleLightTouchEnd(e, light);
-      });
-    });
-
-    // Canvas for selection box
-    const canvas = this.shadowRoot.getElementById('canvas');
-    if (canvas) {
-      canvas.addEventListener('mousedown', (e) => this._handleCanvasMouseDown(e));
-      canvas.addEventListener('touchstart', (e) => this._handleCanvasTouchStart(e));
+    this._currentCanvas = this.shadowRoot.getElementById('canvas');
+    if (this._currentCanvas) {
+      this._currentCanvas.addEventListener('pointerdown', this._pointerDownHandler);
     }
 
-    // Color wheel
-    const colorWheel = this.shadowRoot.getElementById('colorWheelMini');
-    if (colorWheel) {
-      colorWheel.addEventListener('mousedown', (e) => this._handleColorWheelClick(e));
-      colorWheel.addEventListener('touchstart', (e) => this._handleColorWheelClick(e));
+    this._currentColorWheel = this.shadowRoot.getElementById('colorWheelMini');
+    if (this._currentColorWheel) {
+      this._currentColorWheel.addEventListener('pointerdown', this._colorWheelPointerDownHandler);
+      this._currentColorWheel.addEventListener('pointermove', this._colorWheelPointerMoveHandler);
+      this._currentColorWheel.addEventListener('pointerup', this._colorWheelPointerUpHandler);
+      this._currentColorWheel.addEventListener('pointercancel', this._colorWheelPointerUpHandler);
     }
 
-    // Sliders
     const brightnessSlider = this.shadowRoot.getElementById('brightnessSlider');
     const temperatureSlider = this.shadowRoot.getElementById('temperatureSlider');
-    
+
     if (brightnessSlider) {
-      brightnessSlider.addEventListener('input', (e) => this._handleBrightnessChange(e));
+      brightnessSlider.addEventListener('input', this._brightnessInputHandler);
     }
     if (temperatureSlider) {
-      temperatureSlider.addEventListener('input', (e) => this._handleTemperatureChange(e));
+      temperatureSlider.addEventListener('input', this._temperatureInputHandler);
     }
 
-    // Global listeners
-    document.addEventListener('mouseup', this._boundGlobalMouseUp);
-    document.addEventListener('touchend', this._boundGlobalMouseUp);
-    document.addEventListener('mousemove', this._boundGlobalMouseMove);
-    document.addEventListener('touchmove', this._boundGlobalMouseMove, { passive: false });
+    document.addEventListener('click', this._documentClickHandler);
+    window.addEventListener('pointermove', this._pointerMoveHandler, { passive: false });
+    window.addEventListener('pointerup', this._pointerUpHandler);
+    window.addEventListener('pointercancel', this._pointerUpHandler);
+  }
+
+  _handleDocumentClick(e) {
+    if (!this._settingsOpen || !this.shadowRoot) return;
+
+    const panel = this.shadowRoot.getElementById('settingsPanel');
+    const button = this.shadowRoot.getElementById('settingsBtn');
+    const path = e.composedPath ? e.composedPath() : [];
+    const clickedPanel = panel ? path.includes(panel) : false;
+    const clickedButton = button ? path.includes(button) : false;
+
+    if (!clickedPanel && !clickedButton) {
+      this._settingsOpen = false;
+      this.render();
+    }
+  }
+
+  _onPointerDown(e) {
+    if (e.button !== undefined && e.button !== 0) return;
+    if (!this._currentCanvas) return;
+
+    this._activePointerId = e.pointerId;
+    e.target.setPointerCapture?.(e.pointerId);
+
+    const targetLight = e.target.closest('.light');
+    if (targetLight) {
+      const entity = targetLight.dataset.entity;
+      if (!entity) return;
+
+      const rect = this._currentCanvas.getBoundingClientRect();
+      const initialLeft = parseFloat(targetLight.style.left) || (this._config.positions[entity]?.x ?? 50);
+      const initialTop = parseFloat(targetLight.style.top) || (this._config.positions[entity]?.y ?? 50);
+
+      this._pointerDownLight = {
+        entity,
+        pointerType: e.pointerType,
+        modifier: e.shiftKey || e.ctrlKey || e.metaKey,
+        startX: e.clientX,
+        startY: e.clientY
+      };
+
+      if (!this._lockPositions) {
+        this._dragState = {
+          entity,
+          startX: e.clientX,
+          startY: e.clientY,
+          initialLeft,
+          initialTop,
+          canvasRect: rect,
+          moved: false
+        };
+        targetLight.classList.add('dragging');
+
+        if (this._history.length === 0 ||
+            JSON.stringify(this._history[this._historyIndex]) !== JSON.stringify(this._config.positions)) {
+          this._saveHistory();
+        }
+      }
+
+      if (e.pointerType === 'touch') {
+        if (this._longPressTimer) clearTimeout(this._longPressTimer);
+        this._longPressTriggered = false;
+        this._longPressTimer = setTimeout(() => {
+          this._longPressTriggered = true;
+          const alreadySelected = this._selectedLights.has(entity);
+          if (alreadySelected) {
+            this._selectedLights.delete(entity);
+          } else {
+            this._selectedLights.add(entity);
+          }
+          if (navigator.vibrate) navigator.vibrate(40);
+          this.render();
+          if (this._selectedLights.size > 0) {
+            this.drawColorWheel();
+          }
+        }, 500);
+      }
+
+      return;
+    }
+
+    if (e.target.id === 'canvas' || e.target.classList.contains('grid')) {
+      const rect = this._currentCanvas.getBoundingClientRect();
+      this._selectionStart = { x: e.clientX - rect.left, y: e.clientY - rect.top };
+      this._selectionBox = document.createElement('div');
+      this._selectionBox.className = 'selection-box';
+      this._currentCanvas.appendChild(this._selectionBox);
+
+      this._selectionAdditive = e.shiftKey || e.ctrlKey || e.metaKey;
+      this._selectionBaseline = this._selectionAdditive ? new Set(this._selectedLights) : new Set();
+
+      if (!this._selectionAdditive) {
+        this._selectedLights.clear();
+        this.updateLights();
+      }
+    }
+  }
+
+  _onPointerMove(e) {
+    if (this._activePointerId !== null && e.pointerId !== this._activePointerId) return;
+
+    if (this._longPressTimer && this._pointerDownLight) {
+      if (Math.abs(e.clientX - this._pointerDownLight.startX) > 6 ||
+          Math.abs(e.clientY - this._pointerDownLight.startY) > 6) {
+        clearTimeout(this._longPressTimer);
+        this._longPressTimer = null;
+      }
+    }
+
+    if (this._dragState) {
+      e.preventDefault();
+
+      const { canvasRect, startX, startY, initialLeft, initialTop, entity } = this._dragState;
+      const deltaX = e.clientX - startX;
+      const deltaY = e.clientY - startY;
+
+      if (Math.abs(deltaX) > 3 || Math.abs(deltaY) > 3) {
+        this._dragState.moved = true;
+      }
+
+      let newLeft = initialLeft + (deltaX / canvasRect.width) * 100;
+      let newTop = initialTop + (deltaY / canvasRect.height) * 100;
+
+      const snapped = this._snapToGrid(newLeft, newTop, e);
+      newLeft = Math.max(0, Math.min(100, snapped.x));
+      newTop = Math.max(0, Math.min(100, snapped.y));
+
+      const light = this.shadowRoot.querySelector(`[data-entity="${this._dragState.entity}"]`);
+      if (light) {
+        light.style.left = `${newLeft}%`;
+        light.style.top = `${newTop}%`;
+      }
+      return;
+    }
+
+    if (this._selectionBox && this._selectionStart && this._currentCanvas) {
+      e.preventDefault();
+      const rect = this._currentCanvas.getBoundingClientRect();
+      const currentX = e.clientX - rect.left;
+      const currentY = e.clientY - rect.top;
+      const left = Math.min(this._selectionStart.x, currentX);
+      const top = Math.min(this._selectionStart.y, currentY);
+      const width = Math.abs(currentX - this._selectionStart.x);
+      const height = Math.abs(currentY - this._selectionStart.y);
+
+      this._selectionBox.style.left = `${left}px`;
+      this._selectionBox.style.top = `${top}px`;
+      this._selectionBox.style.width = `${width}px`;
+      this._selectionBox.style.height = `${height}px`;
+
+      this._selectLightsInBox(left, top, width, height);
+    }
+  }
+
+  _onPointerUp(e) {
+    if (this._activePointerId !== null && e.pointerId !== this._activePointerId) return;
+
+    const dragState = this._dragState;
+    if (dragState) {
+      const light = this.shadowRoot.querySelector(`[data-entity="${dragState.entity}"]`);
+      if (light) {
+        light.classList.remove('dragging');
+        const finalLeft = parseFloat(light.style.left);
+        const finalTop = parseFloat(light.style.top);
+        this._config.positions[dragState.entity] = { x: finalLeft, y: finalTop };
+      }
+      this._dragState = null;
+    }
+
+    if (this._longPressTimer) {
+      clearTimeout(this._longPressTimer);
+      this._longPressTimer = null;
+    }
+
+    const wasLongPress = this._longPressTriggered;
+    this._longPressTriggered = false;
+
+    if (this._pointerDownLight && (!dragState || !dragState.moved) && !wasLongPress) {
+      const { entity, modifier } = this._pointerDownLight;
+      if (modifier) {
+        if (this._selectedLights.has(entity)) {
+          this._selectedLights.delete(entity);
+        } else {
+          this._selectedLights.add(entity);
+        }
+      } else {
+        this._selectedLights.clear();
+        this._selectedLights.add(entity);
+      }
+      this.render();
+      if (this._selectedLights.size > 0) {
+        this.drawColorWheel();
+      }
+    }
+
+    this._pointerDownLight = null;
+    this._activePointerId = null;
+
+    if (this._selectionBox) {
+      this._selectionBox.remove();
+      this._selectionBox = null;
+      this._selectionStart = null;
+      this.render();
+      if (this._selectedLights.size > 0) {
+        this.drawColorWheel();
+      }
+    }
+
+    this._selectionBaseline = new Set();
+    this._selectionAdditive = false;
+  }
+
+  _selectLightsInBox(left, top, width, height) {
+    const canvas = this._currentCanvas || this.shadowRoot.getElementById('canvas');
+    if (!canvas) return;
+
+    const rect = canvas.getBoundingClientRect();
+    const lights = this.shadowRoot.querySelectorAll('.light');
+    const selection = new Set(this._selectionBaseline ? Array.from(this._selectionBaseline) : []);
+
+    lights.forEach(light => {
+      const lightRect = light.getBoundingClientRect();
+      const centerX = lightRect.left - rect.left + lightRect.width / 2;
+      const centerY = lightRect.top - rect.top + lightRect.height / 2;
+
+      if (centerX >= left && centerX <= left + width &&
+          centerY >= top && centerY <= top + height) {
+        selection.add(light.dataset.entity);
+      }
+    });
+
+    this._selectedLights = selection;
+
+    lights.forEach(light => {
+      light.classList.toggle('selected', this._selectedLights.has(light.dataset.entity));
+    });
+  }
+
+  _handleColorWheelPointer(e, phase) {
+    if (!this._currentColorWheel) return;
+
+    if (phase === 'down') {
+      if (e.button !== undefined && e.button !== 0) return;
+      this._currentColorWheel.setPointerCapture?.(e.pointerId);
+      this._activeColorWheelPointer = e.pointerId;
+      this._colorWheelActive = true;
+      this._handleColorWheelInteraction(e);
+    } else if (phase === 'move') {
+      if (!this._colorWheelActive || e.pointerId !== this._activeColorWheelPointer) return;
+      e.preventDefault();
+      this._handleColorWheelInteraction(e);
+    } else {
+      if (e.pointerId === this._activeColorWheelPointer) {
+        this._colorWheelActive = false;
+        this._activeColorWheelPointer = null;
+      }
+    }
   }
 
   _handleKeyDown(e) {
@@ -1108,281 +1527,22 @@ class SpatialLightColorCard extends HTMLElement {
   }
 
   /**
-   * MOBILE TOUCH SUPPORT FOR MULTI-SELECT
-   */
-  _handleLightTouchStart(e, light) {
-    const entity_id = light.dataset.entity;
-    
-    // Start long press timer for multi-select
-    this._longPressTimer = setTimeout(() => {
-      this._longPressTriggered = true;
-      // Vibrate if supported
-      if (navigator.vibrate) {
-        navigator.vibrate(50);
-      }
-      // Toggle selection
-      if (this._selectedLights.has(entity_id)) {
-        this._selectedLights.delete(entity_id);
-      } else {
-        this._selectedLights.add(entity_id);
-      }
-      this.render();
-      if (this._selectedLights.size > 0) {
-        this.drawColorWheel();
-      }
-    }, 500); // 500ms long press
-
-    // Also handle dragging
-    if (!this._lockPositions) {
-      this._handleLightMouseDown(e, light);
-    }
-  }
-
-  _handleLightTouchEnd(e, light) {
-    // Clear long press timer
-    if (this._longPressTimer) {
-      clearTimeout(this._longPressTimer);
-      this._longPressTimer = null;
-    }
-
-    // If long press was triggered, don't do normal click
-    if (this._longPressTriggered) {
-      this._longPressTriggered = false;
-      e.preventDefault();
-      return;
-    }
-
-    // Normal tap = single select (if not dragging)
-    if (!this._dragState) {
-      this._handleLightClick(e, light);
-    }
-  }
-
-  _handleLightMouseDown(e, light) {
-    if (this._lockPositions) return;
-    
-    e.preventDefault();
-    e.stopPropagation();
-    
-    const entity_id = light.dataset.entity;
-    const canvas = this.shadowRoot.getElementById('canvas');
-    const rect = canvas.getBoundingClientRect();
-    
-    const clientX = e.touches ? e.touches[0].clientX : e.clientX;
-    const clientY = e.touches ? e.touches[0].clientY : e.clientY;
-    
-    const currentLeft = parseFloat(light.style.left);
-    const currentTop = parseFloat(light.style.top);
-    
-    this._dragState = {
-      entity: entity_id,
-      startX: clientX,
-      startY: clientY,
-      initialLeft: currentLeft,
-      initialTop: currentTop,
-      canvasRect: rect,
-      moved: false // Track if actually moved
-    };
-    
-    light.classList.add('dragging');
-    
-    // Save history
-    if (this._history.length === 0 || 
-        JSON.stringify(this._history[this._historyIndex]) !== JSON.stringify(this._config.positions)) {
-      this._saveHistory();
-    }
-  }
-
-  _handleLightClick(e, light) {
-    // If we were dragging, don't select
-    if (this._dragState?.moved) {
-      return;
-    }
-    
-    e.stopPropagation();
-    const entity_id = light.dataset.entity;
-    
-    if (e.shiftKey) {
-      // Multi-select
-      if (this._selectedLights.has(entity_id)) {
-        this._selectedLights.delete(entity_id);
-      } else {
-        this._selectedLights.add(entity_id);
-      }
-    } else {
-      // Single select
-      this._selectedLights.clear();
-      this._selectedLights.add(entity_id);
-    }
-    
-    this.render();
-    if (this._selectedLights.size > 0) {
-      this.drawColorWheel();
-    }
-  }
-
-  _handleCanvasMouseDown(e) {
-    if (e.target.id !== 'canvas' && !e.target.classList.contains('grid')) return;
-    
-    const canvas = this.shadowRoot.getElementById('canvas');
-    const rect = canvas.getBoundingClientRect();
-    
-    const clientX = e.touches ? e.touches[0].clientX : e.clientX;
-    const clientY = e.touches ? e.touches[0].clientY : e.clientY;
-    
-    const x = clientX - rect.left;
-    const y = clientY - rect.top;
-    
-    this._selectionStart = { x, y };
-    this._selectionBox = document.createElement('div');
-    this._selectionBox.className = 'selection-box';
-    canvas.appendChild(this._selectionBox);
-    
-    if (!e.shiftKey) {
-      this._selectedLights.clear();
-      this.render();
-    }
-  }
-
-  _handleCanvasTouchStart(e) {
-    if (e.target.id !== 'canvas' && !e.target.classList.contains('grid')) return;
-    this._handleCanvasMouseDown(e);
-  }
-
-  _handleGlobalMouseMove(e) {
-    // Handle light dragging
-    if (this._dragState) {
-      e.preventDefault();
-      
-      const clientX = e.touches ? e.touches[0].clientX : e.clientX;
-      const clientY = e.touches ? e.touches[0].clientY : e.clientY;
-      
-      const deltaX = clientX - this._dragState.startX;
-      const deltaY = clientY - this._dragState.startY;
-      
-      // Mark as moved if dragged more than 5px
-      if (Math.abs(deltaX) > 5 || Math.abs(deltaY) > 5) {
-        this._dragState.moved = true;
-      }
-      
-      const rect = this._dragState.canvasRect;
-      const deltaXPercent = (deltaX / rect.width) * 100;
-      const deltaYPercent = (deltaY / rect.height) * 100;
-      
-      let newLeft = this._dragState.initialLeft + deltaXPercent;
-      let newTop = this._dragState.initialTop + deltaYPercent;
-      
-      // Apply snapping
-      const snapped = this._snapToGrid(newLeft, newTop, e);
-      newLeft = snapped.x;
-      newTop = snapped.y;
-      
-      // Clamp to bounds
-      newLeft = Math.max(0, Math.min(100, newLeft));
-      newTop = Math.max(0, Math.min(100, newTop));
-      
-      const light = this.shadowRoot.querySelector(`[data-entity="${this._dragState.entity}"]`);
-      if (light) {
-        light.style.left = `${newLeft}%`;
-        light.style.top = `${newTop}%`;
-      }
-      
-      return;
-    }
-    
-    // Handle selection box
-    if (this._selectionBox && this._selectionStart) {
-      e.preventDefault();
-      
-      const canvas = this.shadowRoot.getElementById('canvas');
-      const rect = canvas.getBoundingClientRect();
-      
-      const clientX = e.touches ? e.touches[0].clientX : e.clientX;
-      const clientY = e.touches ? e.touches[0].clientY : e.clientY;
-      
-      const currentX = clientX - rect.left;
-      const currentY = clientY - rect.top;
-      
-      const left = Math.min(this._selectionStart.x, currentX);
-      const top = Math.min(this._selectionStart.y, currentY);
-      const width = Math.abs(currentX - this._selectionStart.x);
-      const height = Math.abs(currentY - this._selectionStart.y);
-      
-      this._selectionBox.style.left = `${left}px`;
-      this._selectionBox.style.top = `${top}px`;
-      this._selectionBox.style.width = `${width}px`;
-      this._selectionBox.style.height = `${height}px`;
-      
-      this._selectLightsInBox(left, top, width, height);
-    }
-  }
-
-  _handleGlobalMouseUp(e) {
-    // Handle drag end - FIX: Properly clear drag state
-    if (this._dragState) {
-      const light = this.shadowRoot.querySelector(`[data-entity="${this._dragState.entity}"]`);
-      if (light) {
-        light.classList.remove('dragging');
-        
-        const finalLeft = parseFloat(light.style.left);
-        const finalTop = parseFloat(light.style.top);
-        
-        this._config.positions[this._dragState.entity] = { 
-          x: finalLeft, 
-          y: finalTop 
-        };
-      }
-      
-      this._dragState = null; // CRITICAL: Clear drag state
-      return;
-    }
-
-    // Handle selection box end
-    if (this._selectionBox) {
-      this._selectionBox.remove();
-      this._selectionBox = null;
-      this._selectionStart = null;
-      this.render();
-      if (this._selectedLights.size > 0) {
-        this.drawColorWheel();
-      }
-    }
-  }
-
-  _selectLightsInBox(left, top, width, height) {
-    const lights = this.shadowRoot.querySelectorAll('.light');
-    const canvas = this.shadowRoot.getElementById('canvas');
-    const rect = canvas.getBoundingClientRect();
-
-    lights.forEach(light => {
-      const lightRect = light.getBoundingClientRect();
-      const lightX = lightRect.left - rect.left + lightRect.width / 2;
-      const lightY = lightRect.top - rect.top + lightRect.height / 2;
-
-      if (lightX >= left && lightX <= left + width && 
-          lightY >= top && lightY <= top + height) {
-        this._selectedLights.add(light.dataset.entity);
-        light.classList.add('selected');
-      }
-    });
-  }
-
-  /**
    * COLOR CONTROL
    */
-  _handleColorWheelClick(e) {
-    const controlledEntities = this._selectedLights.size > 0 
+  _handleColorWheelInteraction(e) {
+    const controlledEntities = this._selectedLights.size > 0
       ? Array.from(this._selectedLights)
       : (this._config.default_entity ? [this._config.default_entity] : []);
-    
+
     if (controlledEntities.length === 0) return;
 
-    const canvas = this.shadowRoot.getElementById('colorWheelMini');
+    const canvas = this._currentColorWheel || this.shadowRoot.getElementById('colorWheelMini');
+    if (!canvas) return;
+
     const rect = canvas.getBoundingClientRect();
-    
-    const clientX = e.touches ? e.touches[0].clientX : e.clientX;
-    const clientY = e.touches ? e.touches[0].clientY : e.clientY;
-    
+    const clientX = e.clientX ?? (e.touches ? e.touches[0].clientX : 0);
+    const clientY = e.clientY ?? (e.touches ? e.touches[0].clientY : 0);
+
     const x = clientX - rect.left;
     const y = clientY - rect.top;
 
@@ -1499,24 +1659,41 @@ class SpatialLightColorCard extends HTMLElement {
       if (!state) return;
 
       const isOn = state.state === 'on';
-      
-      let color = '#2a2a2a';
+
+      let background = 'linear-gradient(135deg, #2d2d2d 0%, #171717 100%)';
       if (isOn && state.attributes.rgb_color) {
         const [r, g, b] = state.attributes.rgb_color;
-        color = `rgb(${r}, ${g}, ${b})`;
+        background = `radial-gradient(circle at 30% 20%, rgba(255, 255, 255, 0.55), transparent 65%), rgb(${r}, ${g}, ${b})`;
+      } else if (isOn && state.attributes.color_temp !== undefined) {
+        const kelvin = Math.round(1000000 / state.attributes.color_temp);
+        const [r, g, b] = this._kelvinToRGB(kelvin);
+        background = `radial-gradient(circle at 30% 20%, rgba(255, 255, 255, 0.55), transparent 65%), rgb(${r}, ${g}, ${b})`;
       } else if (isOn) {
-        color = '#ffa500';
+        background = 'radial-gradient(circle at 30% 20%, rgba(255, 255, 255, 0.55), transparent 65%), #ffd180';
       }
 
-      light.style.background = isOn ? color : 'linear-gradient(135deg, #2a2a2a 0%, #1a1a1a 100%)';
+      const icon = state.attributes.icon
+        ? state.attributes.icon
+        : (isOn ? 'mdi:lightbulb-on' : 'mdi:lightbulb-outline');
+      const iconColor = isOn ? '#0f0f0f' : 'rgba(255, 255, 255, 0.65)';
+
+      light.style.background = background;
+      light.style.setProperty('--light-icon-color', iconColor);
       light.classList.toggle('off', !isOn);
       light.classList.toggle('on', isOn);
+
+      const iconEl = light.querySelector('.light-icon');
+      if (iconEl) {
+        iconEl.setAttribute('icon', icon);
+        iconEl.style.color = iconColor;
+      }
     });
 
     // Update control values if controls are visible
     if (this._config.always_show_controls || this._selectedLights.size > 0 || this._config.default_entity) {
       const avgState = this._getAverageState();
       this._updateControlValues(avgState);
+      this._updateSliderVisuals(avgState);
     }
   }
 

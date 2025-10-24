@@ -248,11 +248,11 @@ entities:
 
 ```bash
 # Copy file
-cp spatial-light-card-final.js /config/www/
+cp spatial-light-card.js /config/www/
 
 # Add to resources
 resources:
-  - url: /local/spatial-light-card-final.js
+  - url: /local/spatial-light-card.js
     type: module
 ```
 

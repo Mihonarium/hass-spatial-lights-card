@@ -37,6 +37,7 @@ class SpatialLightColorCard extends HTMLElement {
     /** Animation frame / batching */
     this._raf = null;
     this._colorWheelActive = false;
+    this._colorWheelObserver = null;
 
     /** Cached DOM refs (stable after first render) */
     this._els = {
@@ -61,11 +62,13 @@ class SpatialLightColorCard extends HTMLElement {
     /** Global bindings */
     this._boundKeyDown = null;
     this._boundCloseSettings = null;
+    this._boundIconsetAdded = null;
 
     /** Touch affordances */
     this._longPressTimer = null;
     this._longPressTriggered = false;
     this._pendingTap = null;
+    this._lastTap = null;
   }
 
   /** Home Assistant integration */
@@ -226,17 +229,51 @@ class SpatialLightColorCard extends HTMLElement {
         if (iconEl.getAttribute('icon') !== iconName) {
           iconEl.setAttribute('icon', iconName);
         }
+        if (this._hass && iconEl.hass !== this._hass) {
+          iconEl.hass = this._hass;
+        }
       });
     };
 
-    if (customElements.get('ha-icon')) {
+    const ensureDefined = () => {
       applyIcons();
-      if (attempt < 3) {
+      const unresolved = Array.from(icons).some(iconEl => {
+        if (!iconEl.shadowRoot) return true;
+        return !iconEl.shadowRoot.querySelector('ha-svg-icon, svg');
+      });
+      if (unresolved && attempt < 8) {
         this._scheduleIconRefresh(attempt + 1, 250 * (attempt + 1));
       }
-    } else if (attempt < 5) {
-      this._scheduleIconRefresh(attempt + 1, 300 * (attempt + 1));
+    };
+
+    if (typeof customElements === 'undefined') {
+      ensureDefined();
+      return;
     }
+
+    if (customElements.get('ha-icon')) {
+      ensureDefined();
+    } else if (attempt < 8) {
+      customElements.whenDefined('ha-icon').then(() => this._refreshEntityIcons(attempt + 1));
+    }
+  }
+
+  _toggleEntity(entity) {
+    if (!this._hass) return;
+    const stateObj = this._hass.states?.[entity];
+    if (!stateObj) return;
+    const [domain] = entity.split('.');
+    if (domain !== 'light') return;
+    const service = stateObj.state === 'on' ? 'turn_off' : 'turn_on';
+    this._hass.callService('light', service, { entity_id: entity });
+  }
+
+  _openMoreInfo(entity) {
+    this.dispatchEvent(new CustomEvent('hass-more-info', {
+      detail: { entityId: entity },
+      bubbles: true,
+      composed: true,
+    }));
   }
 
   /** ---------- Auto-layout / rearrange ---------- */
@@ -513,9 +550,25 @@ class SpatialLightColorCard extends HTMLElement {
     this._els.yamlModal = this.shadowRoot.getElementById('yamlModal');
     this._els.yamlOutput = this.shadowRoot.getElementById('yamlOutput');
 
+    if (this._colorWheelObserver) {
+      this._colorWheelObserver.disconnect();
+      this._colorWheelObserver = null;
+    }
+    if (this._els.colorWheel && typeof window !== 'undefined' && 'ResizeObserver' in window) {
+      this._colorWheelObserver = new ResizeObserver(() => {
+        this.drawColorWheel();
+      });
+      this._colorWheelObserver.observe(this._els.colorWheel);
+    }
+
     this._attachEventListeners();
     if ((showControls || this._config.always_show_controls) && this._els.colorWheel) {
-      this.drawColorWheel();
+      const raf = typeof requestAnimationFrame === 'function'
+        ? requestAnimationFrame
+        : (cb) => setTimeout(cb, 16);
+      raf(() => {
+        this.drawColorWheel();
+      });
       this._updateControlValues(controlContext);
     }
     this.updateLights();
@@ -903,15 +956,28 @@ class SpatialLightColorCard extends HTMLElement {
 
   /** ---------- Events ---------- */
   connectedCallback() {
-    this._boundKeyDown = (e) => this._handleKeyDown(e);
-    document.addEventListener('keydown', this._boundKeyDown);
+    if (!this._boundKeyDown) {
+      this._boundKeyDown = (e) => this._handleKeyDown(e);
+      document.addEventListener('keydown', this._boundKeyDown);
+    }
+    if (typeof window !== 'undefined') {
+      this._boundIconsetAdded = () => this._refreshEntityIcons();
+      window.addEventListener('iron-iconset-added', this._boundIconsetAdded);
+    }
   }
   disconnectedCallback() {
-    document.removeEventListener('keydown', this._boundKeyDown);
+    if (this._boundKeyDown) {
+      document.removeEventListener('keydown', this._boundKeyDown);
+      this._boundKeyDown = null;
+    }
     if (this._raf) cancelAnimationFrame(this._raf);
     if (this._boundCloseSettings) {
       document.removeEventListener('click', this._boundCloseSettings);
       this._boundCloseSettings = null;
+    }
+    if (this._boundIconsetAdded && typeof window !== 'undefined') {
+      window.removeEventListener('iron-iconset-added', this._boundIconsetAdded);
+      this._boundIconsetAdded = null;
     }
     if (this._longPressTimer) {
       clearTimeout(this._longPressTimer);
@@ -920,6 +986,10 @@ class SpatialLightColorCard extends HTMLElement {
     if (this._iconRefreshHandle) {
       clearTimeout(this._iconRefreshHandle);
       this._iconRefreshHandle = null;
+    }
+    if (this._colorWheelObserver) {
+      this._colorWheelObserver.disconnect();
+      this._colorWheelObserver = null;
     }
     this._pendingTap = null;
     this._longPressTriggered = false;
@@ -932,6 +1002,8 @@ class SpatialLightColorCard extends HTMLElement {
       this._els.canvas.addEventListener('pointermove', (e) => this._onPointerMove(e));
       this._els.canvas.addEventListener('pointerup', (e) => this._onPointerUp(e));
       this._els.canvas.addEventListener('pointercancel', (e) => this._onPointerCancel(e));
+      this._els.canvas.addEventListener('dblclick', (e) => this._handleCanvasDoubleClick(e));
+      this._els.canvas.addEventListener('contextmenu', (e) => this._handleCanvasContextMenu(e));
     }
 
     // Settings button (no full re-render)
@@ -1126,6 +1198,7 @@ class SpatialLightColorCard extends HTMLElement {
     const targetLight = e.target.closest('.light');
     if (targetLight) {
       const entity = targetLight.dataset.entity;
+      const pointerType = e.pointerType || 'mouse';
       if (this._lockPositions) {
         const additive = e.shiftKey || e.ctrlKey || e.metaKey;
         if (this._longPressTimer) {
@@ -1133,23 +1206,26 @@ class SpatialLightColorCard extends HTMLElement {
           this._longPressTimer = null;
         }
         this._longPressTriggered = false;
-        if (e.pointerType === 'touch') {
+        const longPressDelay = pointerType === 'mouse' ? 650 : 500;
+        this._longPressTimer = setTimeout(() => {
+          this._longPressTimer = null;
+          this._longPressTriggered = true;
+          this._pendingTap = null;
+          this._lastTap = null;
+          if (pointerType !== 'mouse' && typeof navigator !== 'undefined' && navigator.vibrate) {
+            navigator.vibrate(30);
+          }
+          this._openMoreInfo(entity);
+        }, longPressDelay);
+        if (pointerType === 'touch' || pointerType === 'pen') {
           this._pendingTap = {
             entity,
             pointerId: e.pointerId,
             startX: e.clientX,
             startY: e.clientY,
             additive,
+            pointerType,
           };
-          this._longPressTimer = setTimeout(() => {
-            this._longPressTimer = null;
-            this._longPressTriggered = true;
-            if (navigator.vibrate) navigator.vibrate(30);
-            const newSelection = new Set(this._selectedLights);
-            if (newSelection.has(entity)) newSelection.delete(entity);
-            else newSelection.add(entity);
-            this._commitSelection(newSelection);
-          }, 450);
         } else {
           const newSelection = new Set(this._selectedLights);
           if (additive) {
@@ -1222,6 +1298,7 @@ class SpatialLightColorCard extends HTMLElement {
           this._longPressTimer = null;
         }
         this._pendingTap = null;
+        this._lastTap = null;
       }
     }
 
@@ -1298,11 +1375,27 @@ class SpatialLightColorCard extends HTMLElement {
 
     if (this._pendingTap && e.pointerId === this._pendingTap.pointerId) {
       if (!this._longPressTriggered) {
-        const newSelection = this._pendingTap.additive
-          ? new Set(this._selectedLights)
-          : new Set();
-        newSelection.add(this._pendingTap.entity);
-        this._commitSelection(newSelection);
+        const now = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+        const isTouch = this._pendingTap.pointerType === 'touch' || this._pendingTap.pointerType === 'pen';
+        if (isTouch && this._lastTap && this._lastTap.entity === this._pendingTap.entity && (now - this._lastTap.time) < 350) {
+          this._toggleEntity(this._pendingTap.entity);
+          this._lastTap = null;
+        } else {
+          if (isTouch) {
+            this._lastTap = { entity: this._pendingTap.entity, time: now };
+          } else {
+            this._lastTap = null;
+          }
+          const newSelection = this._pendingTap.additive
+            ? new Set(this._selectedLights)
+            : new Set();
+          if (this._pendingTap.additive && newSelection.has(this._pendingTap.entity)) {
+            newSelection.delete(this._pendingTap.entity);
+          } else {
+            newSelection.add(this._pendingTap.entity);
+          }
+          this._commitSelection(newSelection);
+        }
       }
       this._pendingTap = null;
     }
@@ -1312,6 +1405,26 @@ class SpatialLightColorCard extends HTMLElement {
 
   _onPointerCancel() {
     this._cancelActiveInteractions();
+  }
+
+  _handleCanvasDoubleClick(e) {
+    const targetLight = e.target.closest('.light');
+    if (!targetLight) return;
+    const entity = targetLight.dataset.entity;
+    if (!entity) return;
+    e.preventDefault();
+    this._toggleEntity(entity);
+    this._lastTap = null;
+  }
+
+  _handleCanvasContextMenu(e) {
+    const targetLight = e.target.closest('.light');
+    if (!targetLight) return;
+    const entity = targetLight.dataset.entity;
+    if (!entity) return;
+    e.preventDefault();
+    this._openMoreInfo(entity);
+    this._lastTap = null;
   }
 
   _cancelActiveInteractions() {
@@ -1425,10 +1538,11 @@ class SpatialLightColorCard extends HTMLElement {
     if (!ctx) return;
 
     const rect = canvas.getBoundingClientRect();
-    if (rect.width === 0 || rect.height === 0) return;
-
-    const dpr = window.devicePixelRatio || 1;
-    const cssSize = Math.min(rect.width, rect.height);
+    const dpr = (typeof window !== 'undefined' && window.devicePixelRatio) ? window.devicePixelRatio : 1;
+    const fallbackSize = Number(canvas.getAttribute('width')) || 256;
+    const cssSize = Math.max(rect.width, rect.height) > 0
+      ? Math.min(rect.width || fallbackSize, rect.height || fallbackSize)
+      : fallbackSize;
     const pixelSize = Math.max(1, Math.round(cssSize * dpr));
 
     if (canvas.width !== pixelSize || canvas.height !== pixelSize) {
@@ -1530,6 +1644,9 @@ class SpatialLightColorCard extends HTMLElement {
         const visible = this._config.always_show_controls || this._selectedLights.size > 0 || this._config.default_entity;
         this._els.controlsFloating.classList.toggle('visible', visible);
       }
+    }
+    if ((this._config.always_show_controls || this._selectedLights.size > 0 || this._config.default_entity) && this._els.colorWheel) {
+      this.drawColorWheel();
     }
     this._refreshEntityIcons();
   }

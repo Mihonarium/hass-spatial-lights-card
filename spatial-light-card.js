@@ -11,13 +11,15 @@ class SpatialLightColorCard extends HTMLElement {
     this._dragState = null;
     this._selectionBox = null;
     this._selectionStart = null;
+    this._selectionBase = null;
     this._settingsOpen = false;
     this._yamlModalOpen = false;
     this._history = [];
     this._historyIndex = -1;
     this._longPressTimer = null;
     this._longPressTriggered = false;
-    
+    this._boundCloseSettings = null;
+
     // Settings
     this._gridSize = 25;
     this._snapOnModifier = true;
@@ -198,10 +200,8 @@ class SpatialLightColorCard extends HTMLElement {
    * GET CURRENT VALUES FROM SELECTED LIGHTS
    */
   _getAverageState() {
-    const controlledEntities = this._selectedLights.size > 0 
-      ? Array.from(this._selectedLights)
-      : (this._config.default_entity ? [this._config.default_entity] : []);
-    
+    const controlledEntities = this._getControlledEntities();
+
     if (controlledEntities.length === 0) {
       return { brightness: 128, temperature: 3500, color: null };
     }
@@ -239,6 +239,125 @@ class SpatialLightColorCard extends HTMLElement {
     };
   }
 
+  _getControlledEntities() {
+    if (this._selectedLights.size > 0) {
+      return Array.from(this._selectedLights);
+    }
+    if (this._config.default_entity) {
+      return [this._config.default_entity];
+    }
+    return [];
+  }
+
+  _shouldShowControls() {
+    return this._config.always_show_controls || this._selectedLights.size > 0 || !!this._config.default_entity;
+  }
+
+  _getSelectionSummaryText() {
+    const count = this._selectedLights.size;
+    if (count === 0) {
+      if (this._config.default_entity) {
+        const state = this._hass?.states[this._config.default_entity];
+        return state?.attributes?.friendly_name ? `Default: ${state.attributes.friendly_name}` : 'Default control ready';
+      }
+      return 'Select lights to begin';
+    }
+
+    if (count === 1) {
+      const entity = Array.from(this._selectedLights)[0];
+      const state = this._hass?.states[entity];
+      return state?.attributes?.friendly_name || entity;
+    }
+
+    return `${count} lights selected`;
+  }
+
+  _updateSelectionSummary() {
+    const summaryEl = this.shadowRoot?.getElementById('selectionSummary');
+    if (summaryEl) {
+      summaryEl.textContent = this._getSelectionSummaryText();
+    }
+  }
+
+  _applySelectionState({ updateSummary = false, redrawColorWheel = false, providedAverage = null } = {}) {
+    if (!this.shadowRoot) return;
+
+    const lights = this.shadowRoot.querySelectorAll('.light');
+    lights.forEach(light => {
+      const entity = light.dataset.entity;
+      const selected = this._selectedLights.has(entity);
+      light.classList.toggle('selected', selected);
+      light.classList.toggle('show-label', selected);
+    });
+
+    const showControls = this._shouldShowControls();
+    const floating = this.shadowRoot.getElementById('controlsFloating');
+    if (floating) {
+      floating.classList.toggle('visible', showControls);
+    }
+
+    const below = this.shadowRoot.getElementById('controlsBelow');
+    if (below) {
+      below.classList.toggle('hidden', !showControls);
+    }
+
+    if (showControls) {
+      const avgState = providedAverage || this._getAverageState();
+      this._updateControlValues(avgState);
+      if (redrawColorWheel && this.shadowRoot.getElementById('colorWheelMini')) {
+        this.drawColorWheel();
+      }
+    }
+
+    if (updateSummary) {
+      this._updateSelectionSummary();
+    }
+  }
+
+  _getEntityIcon(entity_id) {
+    const state = this._hass?.states[entity_id];
+    return state?.attributes?.icon || 'mdi:lightbulb';
+  }
+
+  _getIconContrastColor(color) {
+    const rgb = this._parseColor(color);
+    if (!rgb) {
+      return 'var(--text-secondary)';
+    }
+
+    const { r, g, b } = rgb;
+    const luminance = (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
+    return luminance > 0.65 ? 'rgba(20, 20, 20, 0.92)' : 'rgba(255, 255, 255, 0.95)';
+  }
+
+  _parseColor(color) {
+    if (!color || typeof color !== 'string') return null;
+
+    if (color.startsWith('#')) {
+      let hex = color.slice(1);
+      if (hex.length === 3) {
+        hex = hex.split('').map(c => c + c).join('');
+      }
+      if (hex.length !== 6) return null;
+      const bigint = parseInt(hex, 16);
+      return {
+        r: (bigint >> 16) & 255,
+        g: (bigint >> 8) & 255,
+        b: bigint & 255
+      };
+    }
+
+    const rgbMatch = color.match(/rgb[a]?\(([^)]+)\)/i);
+    if (rgbMatch) {
+      const parts = rgbMatch[1].split(',').map(v => parseFloat(v.trim())).filter((_, index) => index < 3);
+      if (parts.length === 3 && parts.every(num => !isNaN(num))) {
+        return { r: parts[0], g: parts[1], b: parts[2] };
+      }
+    }
+
+    return null;
+  }
+
   /**
    * RENDERING
    */
@@ -246,13 +365,14 @@ class SpatialLightColorCard extends HTMLElement {
     if (!this.shadowRoot || !this._hass) return;
 
     const avgState = this._getAverageState();
-    const showControls = this._config.always_show_controls || this._selectedLights.size > 0 || this._config.default_entity;
+    const showControls = this._shouldShowControls();
     const controlsPosition = this._config.controls_below ? 'below' : 'floating';
+    const arranging = !this._lockPositions;
 
     this.shadowRoot.innerHTML = `
       <style>
         * { box-sizing: border-box; }
-        
+
         :host {
           --bg-primary: #0d0d0d;
           --bg-secondary: #1a1a1a;
@@ -262,20 +382,30 @@ class SpatialLightColorCard extends HTMLElement {
           --border-subtle: rgba(255, 255, 255, 0.08);
           --selection-glow: rgba(100, 150, 255, 0.4);
           --grid-dots: rgba(255, 255, 255, 0.04);
+          --accent: rgba(100, 150, 255, 0.6);
         }
-        
+
         ha-card {
           background: var(--bg-primary);
           overflow: hidden;
+          border-radius: 18px;
         }
 
-        /* HEADER - Minimal */
+        /* HEADER */
         .header {
           padding: 16px 20px;
           display: flex;
           justify-content: space-between;
           align-items: center;
           border-bottom: 1px solid var(--border-subtle);
+          gap: 16px;
+        }
+
+        .header-titles {
+          display: flex;
+          flex-direction: column;
+          gap: 4px;
+          min-width: 0;
         }
 
         .title {
@@ -284,6 +414,50 @@ class SpatialLightColorCard extends HTMLElement {
           color: var(--text-secondary);
           margin: 0;
           letter-spacing: 0.3px;
+          text-overflow: ellipsis;
+          overflow: hidden;
+          white-space: nowrap;
+        }
+
+        .subtitle {
+          font-size: 12px;
+          letter-spacing: 0.4px;
+          text-transform: uppercase;
+          color: var(--text-tertiary);
+        }
+
+        .header-actions {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+        }
+
+        .mode-toggle {
+          height: 32px;
+          padding: 0 14px;
+          border-radius: 16px;
+          border: 1px solid var(--border-subtle);
+          background: rgba(255, 255, 255, 0.04);
+          color: var(--text-secondary);
+          cursor: pointer;
+          font-size: 11px;
+          font-weight: 600;
+          text-transform: uppercase;
+          letter-spacing: 0.6px;
+          transition: all 0.2s ease;
+        }
+
+        .mode-toggle:hover {
+          background: rgba(255, 255, 255, 0.08);
+          color: var(--text-primary);
+        }
+
+        :host([data-arranging="true"]) .mode-toggle,
+        .mode-toggle.active {
+          background: rgba(100, 150, 255, 0.18);
+          border-color: rgba(100, 150, 255, 0.4);
+          color: var(--text-primary);
+          box-shadow: 0 4px 18px rgba(100, 150, 255, 0.22);
         }
 
         .settings-btn {
@@ -306,7 +480,7 @@ class SpatialLightColorCard extends HTMLElement {
           color: var(--text-secondary);
         }
 
-        /* CANVAS - The Hero */
+        /* CANVAS */
         .canvas-wrapper {
           position: relative;
         }
@@ -322,7 +496,6 @@ class SpatialLightColorCard extends HTMLElement {
           touch-action: none;
         }
 
-        /* Subtle grid - always visible but quiet */
         .grid {
           position: absolute;
           inset: 0;
@@ -332,7 +505,6 @@ class SpatialLightColorCard extends HTMLElement {
           opacity: 1;
         }
 
-        /* LIGHT ORBS - Clean, minimal */
         .light {
           position: absolute;
           width: 52px;
@@ -346,21 +518,22 @@ class SpatialLightColorCard extends HTMLElement {
           display: flex;
           align-items: center;
           justify-content: center;
+          background: linear-gradient(135deg, rgba(255, 255, 255, 0.18), rgba(255, 255, 255, 0));
+          box-shadow: inset 0 2px 10px rgba(0, 0, 0, 0.25);
+          --icon-color: var(--text-primary);
         }
 
-        /* Light appearance based on state */
         .light::before {
           content: '';
           position: absolute;
           inset: 0;
           border-radius: 50%;
           background: inherit;
-          box-shadow: 
+          box-shadow:
             0 4px 16px rgba(0, 0, 0, 0.3),
             inset 0 2px 8px rgba(0, 0, 0, 0.2);
         }
 
-        /* Subtle glow when on */
         .light.on::after {
           content: '';
           position: absolute;
@@ -372,17 +545,40 @@ class SpatialLightColorCard extends HTMLElement {
           z-index: -1;
         }
 
-        /* Off state - subtle gray */
         .light.off {
           background: linear-gradient(135deg, #2a2a2a 0%, #1a1a1a 100%) !important;
           opacity: 0.5;
+          --icon-color: var(--text-secondary);
         }
 
         .light.off::after {
           display: none;
         }
 
-        /* Hover - show label */
+        .light-surface {
+          position: relative;
+          width: 36px;
+          height: 36px;
+          border-radius: 50%;
+          background: rgba(0, 0, 0, 0.2);
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          z-index: 1;
+          box-shadow: inset 0 6px 12px rgba(0, 0, 0, 0.3);
+          backdrop-filter: blur(4px);
+        }
+
+        .light.on .light-surface {
+          background: rgba(0, 0, 0, 0.1);
+        }
+
+        ha-icon.light-icon {
+          width: 24px;
+          height: 24px;
+          color: var(--icon-color, var(--text-primary));
+        }
+
         .light-label {
           position: absolute;
           top: calc(100% + 8px);
@@ -402,31 +598,29 @@ class SpatialLightColorCard extends HTMLElement {
           box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
         }
 
-        .light:hover .light-label {
+        .light:hover .light-label,
+        .light.show-label .light-label {
           opacity: 1;
         }
 
-        /* Selection - soft glow */
         .light.selected {
           z-index: 10;
         }
 
         .light.selected::before {
-          box-shadow: 
+          box-shadow:
             0 0 0 2px rgba(255, 255, 255, 0.5),
             0 0 0 4px var(--selection-glow),
             0 4px 16px rgba(0, 0, 0, 0.3),
             inset 0 2px 8px rgba(0, 0, 0, 0.2);
         }
 
-        /* Dragging */
         .light.dragging {
           cursor: grabbing;
           z-index: 100;
           transform: translate(-50%, -50%) scale(1.05);
         }
 
-        /* Selection box */
         .selection-box {
           position: absolute;
           border: 1px solid var(--selection-glow);
@@ -435,7 +629,6 @@ class SpatialLightColorCard extends HTMLElement {
           border-radius: 2px;
         }
 
-        /* FLOATING CONTROLS - Contextual */
         .controls-floating {
           position: absolute;
           bottom: 20px;
@@ -461,18 +654,21 @@ class SpatialLightColorCard extends HTMLElement {
           pointer-events: auto;
         }
 
-        /* CONTROLS BELOW CANVAS - Always visible variant */
         .controls-below {
           padding: 20px;
           border-top: 1px solid var(--border-subtle);
           background: var(--bg-primary);
-          display: ${showControls ? 'flex' : 'none'};
+          display: flex;
           gap: 24px;
           align-items: center;
           justify-content: center;
+          transition: opacity 0.2s ease;
         }
 
-        /* Color picker */
+        .controls-below.hidden {
+          display: none;
+        }
+
         .color-wheel-mini {
           width: 120px;
           height: 120px;
@@ -486,7 +682,6 @@ class SpatialLightColorCard extends HTMLElement {
           transform: scale(0.98);
         }
 
-        /* Sliders */
         .slider-group {
           display: flex;
           flex-direction: column;
@@ -515,6 +710,14 @@ class SpatialLightColorCard extends HTMLElement {
           border-radius: 2px;
           background: rgba(255, 255, 255, 0.1);
           outline: none;
+        }
+
+        .slider.brightness {
+          background: linear-gradient(90deg, rgba(10, 10, 10, 0.8) 0%, rgba(255, 255, 255, 0.95) 100%);
+        }
+
+        .slider.temperature {
+          background: linear-gradient(90deg, rgb(255, 178, 54) 0%, rgb(64, 160, 255) 100%);
         }
 
         .slider::-webkit-slider-thumb {
@@ -546,7 +749,6 @@ class SpatialLightColorCard extends HTMLElement {
           flex-shrink: 0;
         }
 
-        /* SETTINGS PANEL */
         .settings-panel {
           position: absolute;
           top: 60px;
@@ -606,7 +808,7 @@ class SpatialLightColorCard extends HTMLElement {
         }
 
         .toggle.on {
-          background: rgba(100, 150, 255, 0.6);
+          background: var(--accent);
         }
 
         .toggle::after {
@@ -645,7 +847,6 @@ class SpatialLightColorCard extends HTMLElement {
           border-color: rgba(255, 255, 255, 0.15);
         }
 
-        /* YAML MODAL */
         .modal-overlay {
           position: fixed;
           inset: 0;
@@ -727,34 +928,43 @@ class SpatialLightColorCard extends HTMLElement {
           text-align: center;
         }
 
-        /* Responsive */
         @media (max-width: 768px) {
           .controls-floating,
           .controls-below {
             flex-direction: column;
             gap: 16px;
           }
-          
+
           .controls-floating {
             left: 20px;
             right: 20px;
             transform: none;
           }
-          
+
           .slider-group {
             width: 100%;
           }
         }
       </style>
-      
+
       <ha-card>
         <div class="header">
-          <div class="title">${this._config.title}</div>
-          ${this._config.show_settings_button ? `
-            <button class="settings-btn" id="settingsBtn" aria-label="Settings">⚙</button>
-          ` : ''}
+          <div class="header-titles">
+            <div class="title">${this._config.title}</div>
+            <div class="subtitle" id="selectionSummary">${this._getSelectionSummaryText()}</div>
+          </div>
+          <div class="header-actions">
+            <button
+              class="mode-toggle ${arranging ? 'active' : ''}"
+              id="arrangeBtn"
+              aria-pressed="${arranging}"
+            >${arranging ? 'Done' : 'Arrange'}</button>
+            ${this._config.show_settings_button ? `
+              <button class="settings-btn" id="settingsBtn" aria-label="Settings">⚙</button>
+            ` : ''}
+          </div>
         </div>
-        
+
         <div class="canvas-wrapper">
           <div class="canvas" id="canvas">
             <div class="grid"></div>
@@ -762,20 +972,23 @@ class SpatialLightColorCard extends HTMLElement {
             ${controlsPosition === 'floating' ? this._renderControlsFloating(showControls, avgState) : ''}
             ${this._renderSettings()}
           </div>
-          
-          ${controlsPosition === 'below' ? this._renderControlsBelow(avgState) : ''}
+
+          ${controlsPosition === 'below' ? this._renderControlsBelow(showControls, avgState) : ''}
         </div>
-        
+
         ${this._renderYamlModal()}
       </ha-card>
     `;
 
+    this.toggleAttribute('data-arranging', arranging);
+
     this._attachEventListeners();
-    if ((showControls || this._config.always_show_controls) && this.shadowRoot.getElementById('colorWheelMini')) {
-      this.drawColorWheel();
-      this._updateControlValues(avgState);
-    }
     this.updateLights();
+    this._applySelectionState({
+      updateSummary: true,
+      redrawColorWheel: true,
+      providedAverage: avgState
+    });
   }
 
   _renderLights() {
@@ -787,7 +1000,8 @@ class SpatialLightColorCard extends HTMLElement {
       const isOn = state.state === 'on';
       const isSelected = this._selectedLights.has(entity_id);
       const label = this._generateLabel(entity_id);
-      
+      const icon = this._getEntityIcon(entity_id);
+
       let color = '#2a2a2a';
       if (isOn && state.attributes.rgb_color) {
         const [r, g, b] = state.attributes.rgb_color;
@@ -796,16 +1010,21 @@ class SpatialLightColorCard extends HTMLElement {
         color = '#ffa500';
       }
 
+      const iconColor = this._getIconContrastColor(color);
+
       return `
-        <div 
-          class="light ${isOn ? 'on' : 'off'} ${isSelected ? 'selected' : ''}"
-          style="left: ${pos.x}%; top: ${pos.y}%; background: ${color};"
+        <div
+          class="light ${isOn ? 'on' : 'off'} ${isSelected ? 'selected show-label' : ''}"
+          style="left: ${pos.x}%; top: ${pos.y}%; background: ${color}; --icon-color: ${iconColor};"
           data-entity="${entity_id}"
           tabindex="0"
           role="button"
           aria-label="${state.attributes.friendly_name}"
           aria-pressed="${isSelected}"
         >
+          <div class="light-surface">
+            <ha-icon class="light-icon" icon="${icon}"></ha-icon>
+          </div>
           <div class="light-label">${label}</div>
         </div>
       `;
@@ -825,12 +1044,12 @@ class SpatialLightColorCard extends HTMLElement {
         <div class="slider-group">
           <div class="slider-row">
             <span class="slider-icon">💡</span>
-            <input 
-              type="range" 
-              class="slider" 
+            <input
+              type="range"
+              class="slider brightness"
               id="brightnessSlider"
-              min="0" 
-              max="255" 
+              min="0"
+              max="255"
               value="${avgState.brightness}"
             >
             <span class="slider-value" id="brightnessValue">${Math.round((avgState.brightness / 255) * 100)}%</span>
@@ -838,12 +1057,12 @@ class SpatialLightColorCard extends HTMLElement {
           
           <div class="slider-row">
             <span class="slider-icon">🌡️</span>
-            <input 
-              type="range" 
-              class="slider" 
+            <input
+              type="range"
+              class="slider temperature"
               id="temperatureSlider"
-              min="2000" 
-              max="6500" 
+              min="2000"
+              max="6500"
               value="${avgState.temperature}"
             >
             <span class="slider-value" id="temperatureValue">${avgState.temperature}K</span>
@@ -853,25 +1072,25 @@ class SpatialLightColorCard extends HTMLElement {
     `;
   }
 
-  _renderControlsBelow(avgState) {
+  _renderControlsBelow(visible, avgState) {
     return `
-      <div class="controls-below" id="controlsBelow">
-        <canvas 
-          id="colorWheelMini" 
-          class="color-wheel-mini" 
-          width="240" 
+      <div class="controls-below ${visible ? '' : 'hidden'}" id="controlsBelow">
+        <canvas
+          id="colorWheelMini"
+          class="color-wheel-mini"
+          width="240"
           height="240"
         ></canvas>
         
         <div class="slider-group">
           <div class="slider-row">
             <span class="slider-icon">💡</span>
-            <input 
-              type="range" 
-              class="slider" 
+            <input
+              type="range"
+              class="slider brightness"
               id="brightnessSlider"
-              min="0" 
-              max="255" 
+              min="0"
+              max="255"
               value="${avgState.brightness}"
             >
             <span class="slider-value" id="brightnessValue">${Math.round((avgState.brightness / 255) * 100)}%</span>
@@ -879,12 +1098,12 @@ class SpatialLightColorCard extends HTMLElement {
           
           <div class="slider-row">
             <span class="slider-icon">🌡️</span>
-            <input 
-              type="range" 
-              class="slider" 
+            <input
+              type="range"
+              class="slider temperature"
               id="temperatureSlider"
-              min="2000" 
-              max="6500" 
+              min="2000"
+              max="6500"
               value="${avgState.temperature}"
             >
             <span class="slider-value" id="temperatureValue">${avgState.temperature}K</span>
@@ -980,6 +1199,10 @@ class SpatialLightColorCard extends HTMLElement {
     if (this._boundKeyDown) {
       document.removeEventListener('keydown', this._boundKeyDown);
     }
+    if (this._boundCloseSettings) {
+      document.removeEventListener('click', this._boundCloseSettings);
+      this._boundCloseSettings = null;
+    }
   }
 
   _attachEventListeners() {
@@ -993,16 +1216,28 @@ class SpatialLightColorCard extends HTMLElement {
       });
     }
 
+    const arrangeBtn = this.shadowRoot.getElementById('arrangeBtn');
+    if (arrangeBtn) {
+      arrangeBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        this._lockPositions = !this._lockPositions;
+        this.render();
+      });
+    }
+
     // Close settings when clicking outside
-    const closeSettings = (e) => {
-      if (this._settingsOpen && 
-          !e.target.closest('.settings-panel') && 
+    if (this._boundCloseSettings) {
+      document.removeEventListener('click', this._boundCloseSettings);
+    }
+    this._boundCloseSettings = (e) => {
+      if (this._settingsOpen &&
+          !e.target.closest('.settings-panel') &&
           !e.target.closest('.settings-btn')) {
         this._settingsOpen = false;
         this.render();
       }
     };
-    document.addEventListener('click', closeSettings);
+    document.addEventListener('click', this._boundCloseSettings);
 
     // Lock toggle
     const lockToggle = this.shadowRoot.getElementById('lockToggle');
@@ -1103,7 +1338,7 @@ class SpatialLightColorCard extends HTMLElement {
     
     if (e.key === 'Escape') {
       this._selectedLights.clear();
-      this.render();
+      this._applySelectionState({ updateSummary: true });
     }
   }
 
@@ -1126,10 +1361,7 @@ class SpatialLightColorCard extends HTMLElement {
       } else {
         this._selectedLights.add(entity_id);
       }
-      this.render();
-      if (this._selectedLights.size > 0) {
-        this.drawColorWheel();
-      }
+      this._applySelectionState({ updateSummary: true, redrawColorWheel: true });
     }, 500); // 500ms long press
 
     // Also handle dragging
@@ -1198,11 +1430,13 @@ class SpatialLightColorCard extends HTMLElement {
     if (this._dragState?.moved) {
       return;
     }
-    
+
     e.stopPropagation();
     const entity_id = light.dataset.entity;
-    
-    if (e.shiftKey) {
+
+    const multiSelect = e.shiftKey || e.ctrlKey || e.metaKey;
+
+    if (multiSelect) {
       // Multi-select
       if (this._selectedLights.has(entity_id)) {
         this._selectedLights.delete(entity_id);
@@ -1214,19 +1448,17 @@ class SpatialLightColorCard extends HTMLElement {
       this._selectedLights.clear();
       this._selectedLights.add(entity_id);
     }
-    
-    this.render();
-    if (this._selectedLights.size > 0) {
-      this.drawColorWheel();
-    }
+
+    this._applySelectionState({ updateSummary: true, redrawColorWheel: true });
   }
 
   _handleCanvasMouseDown(e) {
+    if (!e.touches && e.button !== undefined && e.button !== 0) return;
     if (e.target.id !== 'canvas' && !e.target.classList.contains('grid')) return;
-    
+
     const canvas = this.shadowRoot.getElementById('canvas');
     const rect = canvas.getBoundingClientRect();
-    
+
     const clientX = e.touches ? e.touches[0].clientX : e.clientX;
     const clientY = e.touches ? e.touches[0].clientY : e.clientY;
     
@@ -1237,15 +1469,18 @@ class SpatialLightColorCard extends HTMLElement {
     this._selectionBox = document.createElement('div');
     this._selectionBox.className = 'selection-box';
     canvas.appendChild(this._selectionBox);
-    
-    if (!e.shiftKey) {
+
+    if (!e.shiftKey && this._selectedLights.size > 0) {
       this._selectedLights.clear();
-      this.render();
+      this._applySelectionState({ updateSummary: true });
     }
+
+    this._selectionBase = e.shiftKey ? new Set(this._selectedLights) : new Set();
   }
 
   _handleCanvasTouchStart(e) {
     if (e.target.id !== 'canvas' && !e.target.classList.contains('grid')) return;
+    e.preventDefault();
     this._handleCanvasMouseDown(e);
   }
 
@@ -1313,7 +1548,7 @@ class SpatialLightColorCard extends HTMLElement {
       this._selectionBox.style.width = `${width}px`;
       this._selectionBox.style.height = `${height}px`;
       
-      this._selectLightsInBox(left, top, width, height);
+      this._selectLightsInBox(left, top, width, height, this._selectionBase);
     }
   }
 
@@ -1342,28 +1577,37 @@ class SpatialLightColorCard extends HTMLElement {
       this._selectionBox.remove();
       this._selectionBox = null;
       this._selectionStart = null;
-      this.render();
-      if (this._selectedLights.size > 0) {
-        this.drawColorWheel();
-      }
+      this._selectionBase = null;
+      this._applySelectionState({ updateSummary: true, redrawColorWheel: true });
     }
   }
 
-  _selectLightsInBox(left, top, width, height) {
+  _selectLightsInBox(left, top, width, height, baseSelection = new Set()) {
     const lights = this.shadowRoot.querySelectorAll('.light');
     const canvas = this.shadowRoot.getElementById('canvas');
     const rect = canvas.getBoundingClientRect();
+
+    const nextSelection = new Set(baseSelection);
 
     lights.forEach(light => {
       const lightRect = light.getBoundingClientRect();
       const lightX = lightRect.left - rect.left + lightRect.width / 2;
       const lightY = lightRect.top - rect.top + lightRect.height / 2;
 
-      if (lightX >= left && lightX <= left + width && 
+      if (lightX >= left && lightX <= left + width &&
           lightY >= top && lightY <= top + height) {
-        this._selectedLights.add(light.dataset.entity);
-        light.classList.add('selected');
+        nextSelection.add(light.dataset.entity);
+      } else if (!baseSelection.has(light.dataset.entity)) {
+        light.classList.remove('selected', 'show-label');
       }
+    });
+
+    this._selectedLights = nextSelection;
+
+    lights.forEach(light => {
+      const selected = nextSelection.has(light.dataset.entity);
+      light.classList.toggle('selected', selected);
+      light.classList.toggle('show-label', selected);
     });
   }
 
@@ -1371,11 +1615,11 @@ class SpatialLightColorCard extends HTMLElement {
    * COLOR CONTROL
    */
   _handleColorWheelClick(e) {
-    const controlledEntities = this._selectedLights.size > 0 
-      ? Array.from(this._selectedLights)
-      : (this._config.default_entity ? [this._config.default_entity] : []);
-    
+    const controlledEntities = this._getControlledEntities();
+
     if (controlledEntities.length === 0) return;
+
+    e.preventDefault();
 
     const canvas = this.shadowRoot.getElementById('colorWheelMini');
     const rect = canvas.getBoundingClientRect();
@@ -1409,10 +1653,8 @@ class SpatialLightColorCard extends HTMLElement {
   }
 
   _handleBrightnessChange(e) {
-    const controlledEntities = this._selectedLights.size > 0 
-      ? Array.from(this._selectedLights)
-      : (this._config.default_entity ? [this._config.default_entity] : []);
-    
+    const controlledEntities = this._getControlledEntities();
+
     if (controlledEntities.length === 0) return;
 
     const brightness = parseInt(e.target.value);
@@ -1430,10 +1672,8 @@ class SpatialLightColorCard extends HTMLElement {
   }
 
   _handleTemperatureChange(e) {
-    const controlledEntities = this._selectedLights.size > 0 
-      ? Array.from(this._selectedLights)
-      : (this._config.default_entity ? [this._config.default_entity] : []);
-    
+    const controlledEntities = this._getControlledEntities();
+
     if (controlledEntities.length === 0) return;
 
     const temperature = parseInt(e.target.value);
@@ -1511,10 +1751,16 @@ class SpatialLightColorCard extends HTMLElement {
       light.style.background = isOn ? color : 'linear-gradient(135deg, #2a2a2a 0%, #1a1a1a 100%)';
       light.classList.toggle('off', !isOn);
       light.classList.toggle('on', isOn);
+
+      if (isOn) {
+        light.style.setProperty('--icon-color', this._getIconContrastColor(color));
+      } else {
+        light.style.setProperty('--icon-color', 'var(--text-secondary)');
+      }
     });
 
     // Update control values if controls are visible
-    if (this._config.always_show_controls || this._selectedLights.size > 0 || this._config.default_entity) {
+    if (this._shouldShowControls()) {
       const avgState = this._getAverageState();
       this._updateControlValues(avgState);
     }

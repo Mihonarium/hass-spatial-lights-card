@@ -33,6 +33,7 @@ class SpatialLightColorCard extends HTMLElement {
     this._snapOnModifier = true;  // if true, requires Alt key to snap
     this._lockPositions = true;
     this._iconRefreshHandle = null;
+    this._iconNudgeHandle = null;
 
     /** Animation frame / batching */
     this._raf = null;
@@ -214,6 +215,39 @@ class SpatialLightColorCard extends HTMLElement {
     }, delay);
   }
 
+  _scheduleIconNudge(delay = 400) {
+    if (this._iconNudgeHandle) {
+      clearTimeout(this._iconNudgeHandle);
+    }
+    this._iconNudgeHandle = setTimeout(() => {
+      this._iconNudgeHandle = null;
+      this._nudgeIconsIntoPlace();
+    }, delay);
+  }
+
+  _nudgeIconsIntoPlace() {
+    if (!this.shadowRoot) return;
+    const icons = this.shadowRoot.querySelectorAll('ha-icon[data-icon]');
+    if (!icons.length) return;
+
+    icons.forEach(iconEl => {
+      const iconName = iconEl.getAttribute('data-icon');
+      if (!iconName) return;
+
+      iconEl.icon = '';
+      iconEl.removeAttribute('icon');
+      iconEl.style.visibility = 'hidden';
+
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          iconEl.style.visibility = '';
+          iconEl.icon = iconName;
+          iconEl.setAttribute('icon', iconName);
+        });
+      });
+    });
+  }
+
   _refreshEntityIcons(attempt = 0) {
     if (!this.shadowRoot) return;
     const icons = this.shadowRoot.querySelectorAll('ha-icon[data-icon]');
@@ -241,6 +275,7 @@ class SpatialLightColorCard extends HTMLElement {
         if (!iconEl.shadowRoot) return true;
         return !iconEl.shadowRoot.querySelector('ha-svg-icon, svg');
       });
+      this._scheduleIconNudge();
       if (unresolved && attempt < 8) {
         this._scheduleIconRefresh(attempt + 1, 250 * (attempt + 1));
       }
@@ -609,7 +644,7 @@ class SpatialLightColorCard extends HTMLElement {
         :host { --transition-fast: 0ms; --transition-base: 0ms; }
         * { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
       }
-      ha-card { background: var(--surface-primary); overflow: hidden; font-family: var(--font-sans); }
+      ha-card { background: var(--surface-primary); overflow: hidden; font-family: var(--font-sans); position: relative; }
 
       .header {
         padding: 16px 20px; display: flex; justify-content: space-between; align-items: center;
@@ -625,10 +660,10 @@ class SpatialLightColorCard extends HTMLElement {
       .settings-btn:active { transform: rotate(24deg) scale(0.96); }
       .settings-btn:focus-visible { outline: 2px solid var(--accent-primary); outline-offset: 2px; }
 
-      .canvas-wrapper { position: relative; }
+      .canvas-wrapper { position: relative; z-index: 0; }
       .canvas {
         position: relative; width: 100%; height: ${this._config.canvas_height}px; background: var(--surface-primary);
-        overflow: hidden; user-select: none; touch-action: none;
+        overflow: hidden; user-select: none; touch-action: none; z-index: 0;
       }
       .grid {
         position: absolute; inset: 0;
@@ -640,7 +675,7 @@ class SpatialLightColorCard extends HTMLElement {
         position: absolute; width: 56px; height: 56px; border-radius: var(--radius-full);
         transform: translate(-50%,-50%); cursor: ${this._lockPositions ? 'pointer' : 'grab'};
         display:flex; align-items:center; justify-content:center; flex-direction:column;
-        will-change: transform, left, top, background;
+        will-change: transform, left, top, background; z-index: 1;
       }
       .light::before { content:''; position:absolute; inset:0; border-radius:inherit; background:inherit; box-shadow: var(--shadow-sm); }
       .light.on::after {
@@ -661,11 +696,11 @@ class SpatialLightColorCard extends HTMLElement {
       }
       .light:hover .light-label { opacity: 1; }
 
-      .light.selected { z-index: 10; }
+      .light.selected { z-index: 2; }
       .light.selected::before {
         box-shadow: 0 0 0 2px var(--surface-primary), 0 0 0 4px rgba(99,102,241,0.5), var(--shadow-md);
       }
-      .light.dragging { cursor: grabbing; z-index: 100; transform: translate(-50%,-50%) scale(1.04); }
+      .light.dragging { cursor: grabbing; z-index: 5; transform: translate(-50%,-50%) scale(1.04); }
 
       .selection-box {
         position: absolute; border: 1.5px solid rgba(99,102,241,0.5); background: rgba(99,102,241,0.08);
@@ -987,6 +1022,10 @@ class SpatialLightColorCard extends HTMLElement {
       clearTimeout(this._iconRefreshHandle);
       this._iconRefreshHandle = null;
     }
+    if (this._iconNudgeHandle) {
+      clearTimeout(this._iconNudgeHandle);
+      this._iconNudgeHandle = null;
+    }
     if (this._colorWheelObserver) {
       this._colorWheelObserver.disconnect();
       this._colorWheelObserver = null;
@@ -1130,6 +1169,7 @@ class SpatialLightColorCard extends HTMLElement {
       }
     });
     this._refreshEntityIcons();
+    this._scheduleIconNudge(250);
   }
 
   _commitSelection(newSelection) {

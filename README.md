@@ -2,7 +2,8 @@
 
 The Spatial Lights Card lets you place and control multiple Home Assistant lights on a 2D canvas, making it easy to build room layouts and manage zones at a glance.
 
-> 💡 **Tip:** Add a screenshot or GIF of your layout here so new users can see the card in action.
+<img width="746" height="888" alt="image" src="https://github.com/user-attachments/assets/06716ce8-df9f-4802-9e31-1789dfba053c" />
+
 
 ---
 

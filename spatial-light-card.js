@@ -17,6 +17,8 @@ class SpatialLightColorCard extends HTMLElement {
     this._historyIndex = -1;
     this._longPressTimer = null;
     this._longPressTriggered = false;
+    this._boundCloseSettings = null;
+    this._documentListenersAttached = false;
     
     // Settings
     this._gridSize = 25;
@@ -113,11 +115,143 @@ class SpatialLightColorCard extends HTMLElement {
     const stopWords = ['the', 'a', 'an', 'light', 'lamp', 'bulb'];
     const words = text.split(/\s+/)
       .filter(w => w.length > 0 && !stopWords.includes(w.toLowerCase()));
-    
+
     if (words.length === 0) return text.substring(0, 2).toUpperCase();
     if (words.length === 1) return words[0].substring(0, 2).toUpperCase();
-    
+
     return words.slice(0, 3).map(w => w[0]).join('').toUpperCase();
+  }
+
+  _resolveIcon(state) {
+    if (!state) return 'mdi:help-circle-outline';
+    if (state.attributes?.icon) return state.attributes.icon;
+
+    const entityId = state.entity_id || '';
+    const domain = entityId.split('.')[0];
+
+    if (domain === 'light') {
+      return state.state === 'on' ? 'mdi:lightbulb-on' : 'mdi:lightbulb';
+    }
+
+    if (domain === 'switch') {
+      return state.state === 'on' ? 'mdi:toggle-switch' : 'mdi:toggle-switch-off-outline';
+    }
+
+    return 'mdi:help-circle-outline';
+  }
+
+  _computeBrightness(state) {
+    if (!state || state.state !== 'on') return 0;
+    if (typeof state.attributes?.brightness === 'number') {
+      return Math.min(1, Math.max(0, state.attributes.brightness / 255));
+    }
+    return 1;
+  }
+
+  _computeLightColors(state) {
+    const offColor = {
+      base: 'rgba(46, 49, 56, 0.95)',
+      glow: 'rgba(16, 18, 22, 0.6)'
+    };
+
+    if (!state || state.state !== 'on') {
+      return offColor;
+    }
+
+    if (Array.isArray(state.attributes?.rgb_color)) {
+      const [r, g, b] = state.attributes.rgb_color;
+      return {
+        base: `rgb(${r}, ${g}, ${b})`,
+        glow: `rgba(${r}, ${g}, ${b}, 0.55)`
+      };
+    }
+
+    if (typeof state.attributes?.color_temp === 'number') {
+      const kelvin = Math.round(1000000 / state.attributes.color_temp);
+      const rgb = this._kelvinToRGB(kelvin);
+      return {
+        base: `rgb(${rgb.r}, ${rgb.g}, ${rgb.b})`,
+        glow: `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 0.5)`
+      };
+    }
+
+    if (Array.isArray(state.attributes?.hs_color)) {
+      const [h, s] = state.attributes.hs_color;
+      const rgb = this._hsToRgb(h, s);
+      return {
+        base: `rgb(${rgb.r}, ${rgb.g}, ${rgb.b})`,
+        glow: `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 0.5)`
+      };
+    }
+
+    return {
+      base: '#ffb74d',
+      glow: 'rgba(255, 183, 77, 0.55)'
+    };
+  }
+
+  _hsToRgb(h, s) {
+    const hue = (h % 360) / 360;
+    const sat = Math.min(1, Math.max(0, s / 100));
+    const i = Math.floor(hue * 6);
+    const f = hue * 6 - i;
+    const p = 1 * (1 - sat);
+    const q = 1 * (1 - f * sat);
+    const t = 1 * (1 - (1 - f) * sat);
+    const mod = i % 6;
+    const rgb = [
+      [1, t, p],
+      [q, 1, p],
+      [p, 1, t],
+      [p, q, 1],
+      [t, p, 1],
+      [1, p, q]
+    ][mod];
+
+    return {
+      r: Math.round(rgb[0] * 255),
+      g: Math.round(rgb[1] * 255),
+      b: Math.round(rgb[2] * 255)
+    };
+  }
+
+  _colorTemperatureToCss(temperature) {
+    if (!temperature) return '#fbc16d';
+    const kelvin = Math.min(9000, Math.max(1000, temperature));
+    const rgb = this._kelvinToRGB(kelvin);
+    return `rgb(${rgb.r}, ${rgb.g}, ${rgb.b})`;
+  }
+
+  _kelvinToRGB(kelvin) {
+    const temp = kelvin / 100;
+    let red;
+    let green;
+    let blue;
+
+    if (temp <= 66) {
+      red = 255;
+      green = temp;
+      green = 99.4708025861 * Math.log(green) - 161.1195681661;
+      blue = temp <= 19 ? 0 : temp - 10;
+      blue = 138.5177312231 * Math.log(blue) - 305.0447927307;
+    } else {
+      red = temp - 60;
+      red = 329.698727446 * Math.pow(red, -0.1332047592);
+      green = temp - 60;
+      green = 288.1221695283 * Math.pow(green, -0.0755148492);
+      blue = 255;
+    }
+
+    const clamp = (value) => {
+      if (Number.isNaN(value)) return 0;
+      return Math.min(255, Math.max(0, value));
+    };
+
+    return {
+      r: Math.round(clamp(red)),
+      g: Math.round(clamp(green)),
+      b: Math.round(clamp(blue))
+    };
   }
 
   /**
@@ -248,212 +382,333 @@ class SpatialLightColorCard extends HTMLElement {
     const avgState = this._getAverageState();
     const showControls = this._config.always_show_controls || this._selectedLights.size > 0 || this._config.default_entity;
     const controlsPosition = this._config.controls_below ? 'below' : 'floating';
+    const selectedCount = this._selectedLights.size;
+    const selectionSubtitle = selectedCount > 0
+      ? `${selectedCount} ${selectedCount === 1 ? 'light' : 'lights'} selected`
+      : (this._lockPositions
+        ? 'Tap a light to adjust or drag to multi-select.'
+        : 'Arrange mode active — drag lights to reposition.');
+    const arrangeHint = this._snapOnModifier ? 'Hold Alt to snap to the grid' : 'Grid snapping is active';
 
     this.shadowRoot.innerHTML = `
+
       <style>
         * { box-sizing: border-box; }
-        
+
         :host {
-          --bg-primary: #0d0d0d;
-          --bg-secondary: #1a1a1a;
-          --text-primary: rgba(255, 255, 255, 0.95);
-          --text-secondary: rgba(255, 255, 255, 0.6);
-          --text-tertiary: rgba(255, 255, 255, 0.35);
+          --bg-primary: #0b0d10;
+          --bg-secondary: rgba(16, 18, 24, 0.9);
+          --text-primary: rgba(255, 255, 255, 0.96);
+          --text-secondary: rgba(255, 255, 255, 0.68);
+          --text-tertiary: rgba(255, 255, 255, 0.4);
           --border-subtle: rgba(255, 255, 255, 0.08);
-          --selection-glow: rgba(100, 150, 255, 0.4);
+          --selection-glow: rgba(120, 162, 255, 0.45);
           --grid-dots: rgba(255, 255, 255, 0.04);
-        }
-        
-        ha-card {
-          background: var(--bg-primary);
-          overflow: hidden;
+          font-family: 'Inter', 'SF Pro Display', 'Helvetica Neue', Arial, sans-serif;
         }
 
-        /* HEADER - Minimal */
+        ha-card {
+          background:
+            radial-gradient(circle at top right, rgba(120, 162, 255, 0.08), transparent 55%),
+            var(--bg-primary);
+          overflow: hidden;
+          border-radius: 18px;
+          border: 1px solid rgba(255, 255, 255, 0.04);
+        }
+
         .header {
-          padding: 16px 20px;
+          padding: 18px 20px 16px;
           display: flex;
           justify-content: space-between;
+          gap: 12px;
+          border-bottom: 1px solid rgba(255, 255, 255, 0.04);
           align-items: center;
-          border-bottom: 1px solid var(--border-subtle);
+        }
+
+        .title-block {
+          display: flex;
+          flex-direction: column;
+          gap: 4px;
+          min-width: 0;
         }
 
         .title {
-          font-size: 16px;
-          font-weight: 500;
-          color: var(--text-secondary);
+          font-size: 18px;
+          font-weight: 600;
+          color: var(--text-primary);
           margin: 0;
+          letter-spacing: 0.2px;
+        }
+
+        .subtitle {
+          font-size: 12px;
+          color: var(--text-tertiary);
+          letter-spacing: 0.4px;
+          text-transform: uppercase;
+          white-space: nowrap;
+          text-overflow: ellipsis;
+          overflow: hidden;
+        }
+
+        .header-actions {
+          display: flex;
+          align-items: center;
+          gap: 10px;
+        }
+
+        .action-btn,
+        .settings-btn {
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          border: none;
+          background: rgba(255, 255, 255, 0.04);
+          color: var(--text-tertiary);
+          border-radius: 999px;
+          height: 34px;
+          padding: 0 16px;
+          font-size: 13px;
+          font-weight: 600;
+          cursor: pointer;
+          transition: all 0.2s ease;
           letter-spacing: 0.3px;
         }
 
-        .settings-btn {
-          width: 32px;
-          height: 32px;
-          border: none;
-          background: transparent;
-          color: var(--text-tertiary);
-          border-radius: 6px;
-          cursor: pointer;
-          font-size: 18px;
-          transition: all 0.2s ease;
-          display: flex;
-          align-items: center;
-          justify-content: center;
-        }
-
+        .action-btn:hover,
         .settings-btn:hover {
-          background: var(--bg-secondary);
+          background: rgba(255, 255, 255, 0.08);
           color: var(--text-secondary);
         }
 
-        /* CANVAS - The Hero */
+        .action-btn.active {
+          background: rgba(120, 162, 255, 0.16);
+          color: var(--text-primary);
+          box-shadow: 0 0 0 1px rgba(120, 162, 255, 0.32) inset;
+        }
+
+        .settings-btn {
+          width: 34px;
+          padding: 0;
+          border-radius: 10px;
+          font-size: 18px;
+        }
+
         .canvas-wrapper {
           position: relative;
+          padding-bottom: ${this._config.controls_below ? '20px' : '0'};
         }
 
         .canvas {
           position: relative;
           width: 100%;
           height: ${this._config.canvas_height}px;
-          background: var(--bg-primary);
+          background: radial-gradient(circle at center, rgba(255, 255, 255, 0.02), transparent 70%);
           overflow: hidden;
           cursor: default;
           user-select: none;
           touch-action: none;
         }
 
-        /* Subtle grid - always visible but quiet */
         .grid {
           position: absolute;
           inset: 0;
           background-image: radial-gradient(circle, var(--grid-dots) 1px, transparent 1px);
           background-size: ${this._gridSize}px ${this._gridSize}px;
           pointer-events: none;
-          opacity: 1;
+          opacity: ${this._lockPositions ? '0.35' : '0.55'};
+          transition: opacity 0.2s ease;
         }
 
-        /* LIGHT ORBS - Clean, minimal */
+        .arrange-banner {
+          position: absolute;
+          top: 20px;
+          left: 50%;
+          transform: translateX(-50%);
+          padding: 10px 16px;
+          border-radius: 999px;
+          background: rgba(16, 22, 33, 0.86);
+          border: 1px solid rgba(255, 255, 255, 0.08);
+          color: var(--text-secondary);
+          font-size: 12px;
+          letter-spacing: 0.3px;
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          z-index: 30;
+          backdrop-filter: blur(20px);
+          pointer-events: none;
+        }
+
+        .arrange-banner::before {
+          content: '';
+          width: 8px;
+          height: 8px;
+          border-radius: 50%;
+          background: rgba(120, 162, 255, 0.8);
+          box-shadow: 0 0 0 4px rgba(120, 162, 255, 0.18);
+        }
+
         .light {
           position: absolute;
-          width: 52px;
-          height: 52px;
-          border-radius: 50%;
+          width: 68px;
+          height: 68px;
           transform: translate(-50%, -50%);
-          cursor: ${this._lockPositions ? 'pointer' : 'grab'};
-          transition: transform 0.2s cubic-bezier(0.4, 0, 0.2, 1),
-                      box-shadow 0.2s cubic-bezier(0.4, 0, 0.2, 1);
-          user-select: none;
           display: flex;
           align-items: center;
           justify-content: center;
-        }
-
-        /* Light appearance based on state */
-        .light::before {
-          content: '';
-          position: absolute;
-          inset: 0;
           border-radius: 50%;
-          background: inherit;
-          box-shadow: 
-            0 4px 16px rgba(0, 0, 0, 0.3),
-            inset 0 2px 8px rgba(0, 0, 0, 0.2);
+          cursor: pointer;
+          transition: transform 0.25s cubic-bezier(0.4, 0, 0.2, 1), filter 0.25s ease;
+          user-select: none;
+          outline: none;
+          --light-color: rgba(46, 49, 56, 0.95);
+          --light-glow: rgba(0, 0, 0, 0.4);
+          --light-progress: 0deg;
+          --light-ring-opacity: 0;
         }
 
-        /* Subtle glow when on */
-        .light.on::after {
-          content: '';
+        .light.movable {
+          cursor: grab;
+        }
+
+        .light.movable.dragging {
+          cursor: grabbing;
+        }
+
+        .light-ring {
           position: absolute;
-          inset: -8px;
+          inset: -6px;
           border-radius: 50%;
-          background: inherit;
-          filter: blur(12px);
-          opacity: 0.3;
-          z-index: -1;
+          background: conic-gradient(var(--light-color) var(--light-progress), rgba(255, 255, 255, 0.08) var(--light-progress));
+          opacity: var(--light-ring-opacity);
+          filter: drop-shadow(0 6px 18px rgba(0, 0, 0, 0.35));
+          transition: opacity 0.2s ease, filter 0.2s ease;
+          pointer-events: none;
         }
 
-        /* Off state - subtle gray */
-        .light.off {
-          background: linear-gradient(135deg, #2a2a2a 0%, #1a1a1a 100%) !important;
-          opacity: 0.5;
+        .light.on .light-ring {
+          filter: drop-shadow(0 0 18px var(--light-glow));
         }
 
-        .light.off::after {
-          display: none;
+        .light.selected .light-ring {
+          opacity: 1;
+          filter: drop-shadow(0 0 22px var(--selection-glow));
         }
 
-        /* Hover - show label */
+        .light-core {
+          position: relative;
+          width: 52px;
+          height: 52px;
+          border-radius: 50%;
+          background: linear-gradient(135deg, rgba(255, 255, 255, 0.12), rgba(0, 0, 0, 0.4));
+          box-shadow: inset 0 2px 8px rgba(0, 0, 0, 0.32);
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          pointer-events: none;
+          transition: transform 0.2s ease, background 0.3s ease;
+        }
+
+        .light.on .light-core {
+          background:
+            radial-gradient(circle at 30% 20%, rgba(255, 255, 255, 0.6), transparent 60%),
+            radial-gradient(circle at 65% 80%, rgba(255, 255, 255, 0.18), transparent 70%),
+            var(--light-color);
+        }
+
+        .light.selected .light-core {
+          transform: scale(1.04);
+        }
+
+        .light-icon {
+          width: 32px;
+          height: 32px;
+          border-radius: 50%;
+          background: rgba(0, 0, 0, 0.25);
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          color: rgba(255, 255, 255, 0.75);
+          transition: transform 0.2s ease, background 0.2s ease, color 0.2s ease;
+        }
+
+        .light.on .light-icon {
+          background: rgba(0, 0, 0, 0.18);
+          color: #ffffff;
+        }
+
+        .light.selected .light-icon {
+          transform: scale(1.08);
+        }
+
+        .light ha-icon {
+          --mdc-icon-size: 20px;
+          pointer-events: none;
+        }
+
         .light-label {
           position: absolute;
-          top: calc(100% + 8px);
+          top: calc(100% + 10px);
           left: 50%;
-          transform: translateX(-50%);
-          padding: 4px 8px;
-          background: var(--bg-secondary);
+          transform: translate(-50%, -6px);
+          padding: 4px 10px;
+          background: rgba(16, 22, 33, 0.9);
           color: var(--text-primary);
           font-size: 11px;
           font-weight: 600;
-          border-radius: 4px;
+          border-radius: 6px;
           white-space: nowrap;
           pointer-events: none;
           opacity: 0;
-          transition: opacity 0.15s ease;
-          z-index: 100;
-          box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+          transition: opacity 0.2s ease, transform 0.2s ease;
+          z-index: 40;
+          border: 1px solid rgba(255, 255, 255, 0.08);
+          backdrop-filter: blur(12px);
         }
 
-        .light:hover .light-label {
+        .light:hover .light-label,
+        .light.selected .light-label,
+        .light:focus-visible .light-label {
           opacity: 1;
+          transform: translate(-50%, 0);
         }
 
-        /* Selection - soft glow */
-        .light.selected {
-          z-index: 10;
+        .light:focus-visible .light-ring {
+          opacity: 1;
+          filter: drop-shadow(0 0 22px var(--selection-glow));
         }
 
-        .light.selected::before {
-          box-shadow: 
-            0 0 0 2px rgba(255, 255, 255, 0.5),
-            0 0 0 4px var(--selection-glow),
-            0 4px 16px rgba(0, 0, 0, 0.3),
-            inset 0 2px 8px rgba(0, 0, 0, 0.2);
-        }
-
-        /* Dragging */
         .light.dragging {
-          cursor: grabbing;
-          z-index: 100;
-          transform: translate(-50%, -50%) scale(1.05);
+          transform: translate(-50%, -50%) scale(1.08);
+          z-index: 120;
         }
 
-        /* Selection box */
         .selection-box {
           position: absolute;
           border: 1px solid var(--selection-glow);
-          background: rgba(100, 150, 255, 0.08);
+          background: rgba(120, 162, 255, 0.12);
           pointer-events: none;
-          border-radius: 2px;
+          border-radius: 8px;
+          box-shadow: 0 8px 24px rgba(0, 0, 0, 0.15);
         }
 
-        /* FLOATING CONTROLS - Contextual */
         .controls-floating {
           position: absolute;
-          bottom: 20px;
+          bottom: 24px;
           left: 50%;
           transform: translateX(-50%);
-          background: rgba(26, 26, 26, 0.95);
-          backdrop-filter: blur(20px);
-          border: 1px solid var(--border-subtle);
-          border-radius: 12px;
-          padding: 16px 20px;
           display: flex;
-          gap: 20px;
+          gap: 24px;
           align-items: center;
-          box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+          padding: 16px 22px;
+          border-radius: 20px;
+          background: rgba(14, 18, 24, 0.9);
+          border: 1px solid rgba(255, 255, 255, 0.06);
           opacity: 0;
           pointer-events: none;
-          transition: opacity 0.2s ease;
-          z-index: 50;
+          transition: opacity 0.25s ease, transform 0.25s ease;
+          box-shadow: 0 18px 40px rgba(0, 0, 0, 0.45);
+          backdrop-filter: blur(22px);
         }
 
         .controls-floating.visible {
@@ -461,112 +716,136 @@ class SpatialLightColorCard extends HTMLElement {
           pointer-events: auto;
         }
 
-        /* CONTROLS BELOW CANVAS - Always visible variant */
+        .controls-floating:not(.visible) {
+          transform: translate(-50%, 20px);
+        }
+
         .controls-below {
-          padding: 20px;
-          border-top: 1px solid var(--border-subtle);
-          background: var(--bg-primary);
-          display: ${showControls ? 'flex' : 'none'};
+          margin: 24px 20px 8px;
+          padding: 18px 20px;
+          border-radius: 18px;
+          background: rgba(14, 18, 24, 0.9);
+          border: 1px solid rgba(255, 255, 255, 0.06);
+          display: flex;
           gap: 24px;
-          align-items: center;
-          justify-content: center;
+          flex-wrap: wrap;
+          box-shadow: 0 18px 40px rgba(0, 0, 0, 0.45);
+          backdrop-filter: blur(22px);
         }
 
-        /* Color picker */
         .color-wheel-mini {
-          width: 120px;
-          height: 120px;
+          width: 240px;
+          height: 240px;
           border-radius: 50%;
-          cursor: pointer;
-          box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
-          flex-shrink: 0;
+          border: 1px solid rgba(255, 255, 255, 0.08);
+          background: radial-gradient(circle at center, rgba(255, 255, 255, 0.05), transparent 70%);
+          box-shadow: inset 0 6px 16px rgba(0, 0, 0, 0.35);
         }
 
-        .color-wheel-mini:active {
-          transform: scale(0.98);
-        }
-
-        /* Sliders */
         .slider-group {
           display: flex;
           flex-direction: column;
-          gap: 12px;
-          min-width: 180px;
+          gap: 18px;
+          min-width: 220px;
           flex: 1;
-          max-width: 400px;
         }
 
         .slider-row {
           display: flex;
           align-items: center;
-          gap: 12px;
+          gap: 14px;
         }
 
         .slider-icon {
-          font-size: 16px;
-          opacity: 0.6;
+          width: 28px;
+          height: 28px;
+          border-radius: 50%;
+          background: rgba(255, 255, 255, 0.04);
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          color: var(--text-secondary);
           flex-shrink: 0;
+        }
+
+        .slider-icon ha-icon {
+          --mdc-icon-size: 16px;
+          pointer-events: none;
         }
 
         .slider {
           flex: 1;
           -webkit-appearance: none;
-          height: 4px;
-          border-radius: 2px;
-          background: rgba(255, 255, 255, 0.1);
+          height: 6px;
+          border-radius: 999px;
+          background: linear-gradient(90deg, rgba(255, 255, 255, 0.16) 0%, rgba(255, 255, 255, 0.16) 100%);
           outline: none;
+          transition: background 0.2s ease;
+          position: relative;
+        }
+
+        .slider.slider--brightness {
+          background: linear-gradient(90deg, var(--slider-progress-color, rgba(248, 211, 106, 0.85)) 0%, var(--slider-progress-color, rgba(248, 211, 106, 0.85)) var(--slider-progress, 0%), rgba(255, 255, 255, 0.1) var(--slider-progress, 0%), rgba(255, 255, 255, 0.1) 100%);
+        }
+
+        .slider.slider--temperature {
+          background:
+            linear-gradient(90deg, rgba(255, 255, 255, 0.12) 0%, rgba(255, 255, 255, 0.12) var(--slider-progress, 0%), rgba(255, 255, 255, 0.06) var(--slider-progress, 0%), rgba(255, 255, 255, 0.06) 100%),
+            linear-gradient(90deg, #ffb74d 0%, #ffe0b2 40%, #e0f7fa 70%, #64b5f6 100%);
         }
 
         .slider::-webkit-slider-thumb {
           -webkit-appearance: none;
-          width: 16px;
-          height: 16px;
+          width: 18px;
+          height: 18px;
           border-radius: 50%;
-          background: white;
+          background: var(--slider-thumb-color, #ffffff);
+          border: 1px solid rgba(255, 255, 255, 0.2);
+          box-shadow: 0 6px 16px rgba(0, 0, 0, 0.35);
           cursor: pointer;
-          box-shadow: 0 2px 6px rgba(0, 0, 0, 0.3);
         }
 
         .slider::-moz-range-thumb {
-          width: 16px;
-          height: 16px;
+          width: 18px;
+          height: 18px;
           border-radius: 50%;
-          background: white;
+          background: var(--slider-thumb-color, #ffffff);
+          border: 1px solid rgba(255, 255, 255, 0.2);
+          box-shadow: 0 6px 16px rgba(0, 0, 0, 0.35);
           cursor: pointer;
-          border: none;
-          box-shadow: 0 2px 6px rgba(0, 0, 0, 0.3);
         }
 
         .slider-value {
           font-size: 13px;
           color: var(--text-secondary);
-          min-width: 45px;
+          min-width: 52px;
           text-align: right;
           font-weight: 500;
-          flex-shrink: 0;
+          letter-spacing: 0.2px;
         }
 
-        /* SETTINGS PANEL */
         .settings-panel {
           position: absolute;
-          top: 60px;
+          top: 70px;
           right: 20px;
-          background: rgba(26, 26, 26, 0.98);
-          backdrop-filter: blur(20px);
-          border: 1px solid var(--border-subtle);
-          border-radius: 12px;
-          padding: 16px;
+          background: rgba(14, 18, 24, 0.92);
+          backdrop-filter: blur(24px);
+          border: 1px solid rgba(255, 255, 255, 0.08);
+          border-radius: 16px;
+          padding: 18px;
           min-width: 240px;
-          box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+          box-shadow: 0 20px 50px rgba(0, 0, 0, 0.55);
           opacity: 0;
           pointer-events: none;
-          transition: opacity 0.2s ease;
+          transition: opacity 0.2s ease, transform 0.2s ease;
+          transform: translateY(-6px);
           z-index: 100;
         }
 
         .settings-panel.visible {
           opacity: 1;
           pointer-events: auto;
+          transform: translateY(0);
         }
 
         .settings-section {
@@ -596,60 +875,59 @@ class SpatialLightColorCard extends HTMLElement {
         }
 
         .toggle {
-          width: 40px;
-          height: 22px;
-          background: rgba(255, 255, 255, 0.1);
-          border-radius: 11px;
+          width: 44px;
+          height: 24px;
+          background: rgba(255, 255, 255, 0.08);
+          border-radius: 12px;
           position: relative;
           cursor: pointer;
           transition: background 0.2s ease;
         }
 
         .toggle.on {
-          background: rgba(100, 150, 255, 0.6);
+          background: rgba(120, 162, 255, 0.4);
         }
 
         .toggle::after {
           content: '';
           position: absolute;
-          width: 18px;
-          height: 18px;
+          width: 20px;
+          height: 20px;
           background: white;
           border-radius: 50%;
           top: 2px;
           left: 2px;
           transition: left 0.2s ease;
-          box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+          box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25);
         }
 
         .toggle.on::after {
-          left: 20px;
+          left: 22px;
         }
 
         .settings-button {
           width: 100%;
           padding: 10px;
           background: rgba(255, 255, 255, 0.05);
-          border: 1px solid var(--border-subtle);
+          border: 1px solid rgba(255, 255, 255, 0.08);
           color: var(--text-secondary);
-          border-radius: 6px;
+          border-radius: 10px;
           cursor: pointer;
           font-size: 13px;
-          font-weight: 500;
+          font-weight: 600;
           transition: all 0.2s ease;
           margin-top: 8px;
         }
 
         .settings-button:hover {
           background: rgba(255, 255, 255, 0.08);
-          border-color: rgba(255, 255, 255, 0.15);
+          border-color: rgba(255, 255, 255, 0.18);
         }
 
-        /* YAML MODAL */
         .modal-overlay {
           position: fixed;
           inset: 0;
-          background: rgba(0, 0, 0, 0.7);
+          background: rgba(0, 0, 0, 0.75);
           backdrop-filter: blur(4px);
           display: none;
           align-items: center;
@@ -662,15 +940,15 @@ class SpatialLightColorCard extends HTMLElement {
         }
 
         .modal {
-          background: var(--bg-secondary);
-          border: 1px solid var(--border-subtle);
-          border-radius: 12px;
+          background: rgba(14, 18, 24, 0.94);
+          border: 1px solid rgba(255, 255, 255, 0.08);
+          border-radius: 16px;
           padding: 24px;
-          max-width: 600px;
+          max-width: 640px;
           width: 90%;
           max-height: 80vh;
           overflow: auto;
-          box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+          box-shadow: 0 25px 65px rgba(0, 0, 0, 0.6);
         }
 
         .modal-header {
@@ -687,12 +965,12 @@ class SpatialLightColorCard extends HTMLElement {
         }
 
         .modal-close {
-          width: 32px;
-          height: 32px;
+          width: 34px;
+          height: 34px;
           border: none;
-          background: transparent;
+          background: rgba(255, 255, 255, 0.05);
           color: var(--text-tertiary);
-          border-radius: 6px;
+          border-radius: 10px;
           cursor: pointer;
           font-size: 20px;
           display: flex;
@@ -702,14 +980,14 @@ class SpatialLightColorCard extends HTMLElement {
         }
 
         .modal-close:hover {
-          background: rgba(255, 255, 255, 0.08);
+          background: rgba(255, 255, 255, 0.1);
           color: var(--text-secondary);
         }
 
         .yaml-output {
-          background: var(--bg-primary);
-          border: 1px solid var(--border-subtle);
-          border-radius: 6px;
+          background: rgba(11, 14, 18, 0.95);
+          border: 1px solid rgba(255, 255, 255, 0.08);
+          border-radius: 8px;
           padding: 16px;
           font-family: 'SF Mono', 'Monaco', 'Consolas', monospace;
           font-size: 12px;
@@ -727,37 +1005,61 @@ class SpatialLightColorCard extends HTMLElement {
           text-align: center;
         }
 
-        /* Responsive */
         @media (max-width: 768px) {
           .controls-floating,
           .controls-below {
             flex-direction: column;
-            gap: 16px;
+            gap: 18px;
           }
-          
+
           .controls-floating {
             left: 20px;
             right: 20px;
             transform: none;
           }
-          
+
+          .controls-floating.visible {
+            transform: none;
+          }
+
           .slider-group {
             width: 100%;
+            min-width: 0;
+          }
+
+          .header {
+            flex-direction: column;
+            align-items: flex-start;
+          }
+
+          .header-actions {
+            width: 100%;
+            justify-content: space-between;
           }
         }
       </style>
+
       
       <ha-card>
         <div class="header">
-          <div class="title">${this._config.title}</div>
-          ${this._config.show_settings_button ? `
-            <button class="settings-btn" id="settingsBtn" aria-label="Settings">⚙</button>
-          ` : ''}
+          <div class="title-block">
+            <div class="title">${this._config.title}</div>
+            <div class="subtitle">${selectionSubtitle}</div>
+          </div>
+          <div class="header-actions">
+            <button class="action-btn ${this._lockPositions ? '' : 'active'}" id="arrangeToggle" aria-pressed="${!this._lockPositions}">
+              ${this._lockPositions ? 'Arrange' : 'Done'}
+            </button>
+            ${this._config.show_settings_button ? `
+              <button class="settings-btn" id="settingsBtn" aria-label="Settings">⚙</button>
+            ` : ''}
+          </div>
         </div>
-        
+
         <div class="canvas-wrapper">
           <div class="canvas" id="canvas">
             <div class="grid"></div>
+            ${!this._lockPositions ? `<div class="arrange-banner">Arrange mode · ${arrangeHint}</div>` : ''}
             ${this._renderLights()}
             ${controlsPosition === 'floating' ? this._renderControlsFloating(showControls, avgState) : ''}
             ${this._renderSettings()}
@@ -787,25 +1089,33 @@ class SpatialLightColorCard extends HTMLElement {
       const isOn = state.state === 'on';
       const isSelected = this._selectedLights.has(entity_id);
       const label = this._generateLabel(entity_id);
-      
-      let color = '#2a2a2a';
-      if (isOn && state.attributes.rgb_color) {
-        const [r, g, b] = state.attributes.rgb_color;
-        color = `rgb(${r}, ${g}, ${b})`;
-      } else if (isOn) {
-        color = '#ffa500';
-      }
+      const icon = this._resolveIcon(state);
+      const colors = this._computeLightColors(state);
+      const brightness = this._computeBrightness(state);
+      const progressDeg = Math.max(0, Math.round(brightness * 360));
+      const ringOpacity = isOn ? Math.min(1, 0.18 + brightness * 0.55).toFixed(2) : '0';
+      const classes = ['light', isOn ? 'on' : 'off', isSelected ? 'selected' : '', !this._lockPositions ? 'movable' : '']
+        .filter(Boolean)
+        .join(' ');
+
+      const friendlyName = state.attributes.friendly_name || entity_id;
 
       return `
-        <div 
-          class="light ${isOn ? 'on' : 'off'} ${isSelected ? 'selected' : ''}"
-          style="left: ${pos.x}%; top: ${pos.y}%; background: ${color};"
+        <div
+          class="${classes}"
+          style="left: ${pos.x}%; top: ${pos.y}%; --light-color: ${colors.base}; --light-glow: ${colors.glow}; --light-progress: ${progressDeg}deg; --light-ring-opacity: ${ringOpacity};"
           data-entity="${entity_id}"
           tabindex="0"
           role="button"
-          aria-label="${state.attributes.friendly_name}"
+          aria-label="${friendlyName}"
           aria-pressed="${isSelected}"
         >
+          <div class="light-ring"></div>
+          <div class="light-core">
+            <div class="light-icon">
+              <ha-icon icon="${icon}"></ha-icon>
+            </div>
+          </div>
           <div class="light-label">${label}</div>
         </div>
       `;
@@ -815,35 +1125,35 @@ class SpatialLightColorCard extends HTMLElement {
   _renderControlsFloating(visible, avgState) {
     return `
       <div class="controls-floating ${visible ? 'visible' : ''}" id="controlsFloating">
-        <canvas 
-          id="colorWheelMini" 
-          class="color-wheel-mini" 
-          width="240" 
+        <canvas
+          id="colorWheelMini"
+          class="color-wheel-mini"
+          width="240"
           height="240"
         ></canvas>
-        
+
         <div class="slider-group">
           <div class="slider-row">
-            <span class="slider-icon">💡</span>
-            <input 
-              type="range" 
-              class="slider" 
+            <span class="slider-icon"><ha-icon icon="mdi:brightness-6"></ha-icon></span>
+            <input
+              type="range"
+              class="slider slider--brightness"
               id="brightnessSlider"
-              min="0" 
-              max="255" 
+              min="0"
+              max="255"
               value="${avgState.brightness}"
             >
             <span class="slider-value" id="brightnessValue">${Math.round((avgState.brightness / 255) * 100)}%</span>
           </div>
-          
+
           <div class="slider-row">
-            <span class="slider-icon">🌡️</span>
-            <input 
-              type="range" 
-              class="slider" 
+            <span class="slider-icon"><ha-icon icon="mdi:thermometer"></ha-icon></span>
+            <input
+              type="range"
+              class="slider slider--temperature"
               id="temperatureSlider"
-              min="2000" 
-              max="6500" 
+              min="2000"
+              max="6500"
               value="${avgState.temperature}"
             >
             <span class="slider-value" id="temperatureValue">${avgState.temperature}K</span>
@@ -856,35 +1166,35 @@ class SpatialLightColorCard extends HTMLElement {
   _renderControlsBelow(avgState) {
     return `
       <div class="controls-below" id="controlsBelow">
-        <canvas 
-          id="colorWheelMini" 
+        <canvas
+          id="colorWheelMini"
           class="color-wheel-mini" 
           width="240" 
           height="240"
         ></canvas>
-        
+
         <div class="slider-group">
           <div class="slider-row">
-            <span class="slider-icon">💡</span>
-            <input 
-              type="range" 
-              class="slider" 
+            <span class="slider-icon"><ha-icon icon="mdi:brightness-6"></ha-icon></span>
+            <input
+              type="range"
+              class="slider slider--brightness"
               id="brightnessSlider"
-              min="0" 
-              max="255" 
+              min="0"
+              max="255"
               value="${avgState.brightness}"
             >
             <span class="slider-value" id="brightnessValue">${Math.round((avgState.brightness / 255) * 100)}%</span>
           </div>
-          
+
           <div class="slider-row">
-            <span class="slider-icon">🌡️</span>
-            <input 
-              type="range" 
-              class="slider" 
+            <span class="slider-icon"><ha-icon icon="mdi:thermometer"></ha-icon></span>
+            <input
+              type="range"
+              class="slider slider--temperature"
               id="temperatureSlider"
-              min="2000" 
-              max="6500" 
+              min="2000"
+              max="6500"
               value="${avgState.temperature}"
             >
             <span class="slider-value" id="temperatureValue">${avgState.temperature}K</span>
@@ -942,15 +1252,23 @@ class SpatialLightColorCard extends HTMLElement {
     const brightnessValue = this.shadowRoot.getElementById('brightnessValue');
     const temperatureSlider = this.shadowRoot.getElementById('temperatureSlider');
     const temperatureValue = this.shadowRoot.getElementById('temperatureValue');
+    const accentColor = Array.isArray(avgState.color) ? `rgb(${avgState.color.join(',')})` : this._colorTemperatureToCss(avgState.temperature);
 
     if (brightnessSlider) {
       brightnessSlider.value = avgState.brightness;
+      const brightnessPercent = Math.round((avgState.brightness / 255) * 100);
+      brightnessSlider.style.setProperty('--slider-progress', `${Math.min(100, Math.max(0, brightnessPercent))}%`);
+      brightnessSlider.style.setProperty('--slider-progress-color', accentColor);
+      brightnessSlider.style.setProperty('--slider-thumb-color', accentColor);
     }
     if (brightnessValue) {
       brightnessValue.textContent = `${Math.round((avgState.brightness / 255) * 100)}%`;
     }
     if (temperatureSlider) {
       temperatureSlider.value = avgState.temperature;
+      const tempPercent = Math.round(((avgState.temperature - 2000) / (6500 - 2000)) * 100);
+      temperatureSlider.style.setProperty('--slider-progress', `${Math.min(100, Math.max(0, tempPercent))}%`);
+      temperatureSlider.style.setProperty('--slider-thumb-color', this._colorTemperatureToCss(avgState.temperature));
     }
     if (temperatureValue) {
       temperatureValue.textContent = `${avgState.temperature}K`;
@@ -969,20 +1287,15 @@ class SpatialLightColorCard extends HTMLElement {
   }
 
   disconnectedCallback() {
-    if (this._boundGlobalMouseUp) {
-      document.removeEventListener('mouseup', this._boundGlobalMouseUp);
-      document.removeEventListener('touchend', this._boundGlobalMouseUp);
-    }
-    if (this._boundGlobalMouseMove) {
-      document.removeEventListener('mousemove', this._boundGlobalMouseMove);
-      document.removeEventListener('touchmove', this._boundGlobalMouseMove);
-    }
+    this._detachEventListeners();
     if (this._boundKeyDown) {
       document.removeEventListener('keydown', this._boundKeyDown);
     }
   }
 
   _attachEventListeners() {
+    this._detachEventListeners();
+
     // Settings button
     const settingsBtn = this.shadowRoot.getElementById('settingsBtn');
     if (settingsBtn) {
@@ -993,16 +1306,27 @@ class SpatialLightColorCard extends HTMLElement {
       });
     }
 
+    const arrangeToggle = this.shadowRoot.getElementById('arrangeToggle');
+    if (arrangeToggle) {
+      arrangeToggle.addEventListener('click', (e) => {
+        e.preventDefault();
+        this._lockPositions = !this._lockPositions;
+        this.render();
+      });
+    }
+
     // Close settings when clicking outside
-    const closeSettings = (e) => {
-      if (this._settingsOpen && 
-          !e.target.closest('.settings-panel') && 
-          !e.target.closest('.settings-btn')) {
+    this._boundCloseSettings = (e) => {
+      if (!this._settingsOpen) return;
+      const path = e.composedPath ? e.composedPath() : [];
+      const clickedInsidePanel = path.some(node => node?.classList?.contains && node.classList.contains('settings-panel'));
+      const clickedSettingsBtn = path.some(node => node?.id === 'settingsBtn');
+      if (!clickedInsidePanel && !clickedSettingsBtn) {
         this._settingsOpen = false;
         this.render();
       }
     };
-    document.addEventListener('click', closeSettings);
+    document.addEventListener('click', this._boundCloseSettings);
 
     // Lock toggle
     const lockToggle = this.shadowRoot.getElementById('lockToggle');
@@ -1048,11 +1372,11 @@ class SpatialLightColorCard extends HTMLElement {
       // Mouse events
       light.addEventListener('mousedown', (e) => this._handleLightMouseDown(e, light));
       light.addEventListener('click', (e) => this._handleLightClick(e, light));
-      
+
       // Touch events for mobile multi-select
       light.addEventListener('touchstart', (e) => {
         this._handleLightTouchStart(e, light);
-      });
+      }, { passive: false });
       light.addEventListener('touchend', (e) => {
         this._handleLightTouchEnd(e, light);
       });
@@ -1062,7 +1386,7 @@ class SpatialLightColorCard extends HTMLElement {
     const canvas = this.shadowRoot.getElementById('canvas');
     if (canvas) {
       canvas.addEventListener('mousedown', (e) => this._handleCanvasMouseDown(e));
-      canvas.addEventListener('touchstart', (e) => this._handleCanvasTouchStart(e));
+      canvas.addEventListener('touchstart', (e) => this._handleCanvasTouchStart(e), { passive: false });
     }
 
     // Color wheel
@@ -1088,6 +1412,22 @@ class SpatialLightColorCard extends HTMLElement {
     document.addEventListener('touchend', this._boundGlobalMouseUp);
     document.addEventListener('mousemove', this._boundGlobalMouseMove);
     document.addEventListener('touchmove', this._boundGlobalMouseMove, { passive: false });
+    this._documentListenersAttached = true;
+  }
+
+  _detachEventListeners() {
+    if (this._boundCloseSettings) {
+      document.removeEventListener('click', this._boundCloseSettings);
+      this._boundCloseSettings = null;
+    }
+
+    if (this._documentListenersAttached) {
+      document.removeEventListener('mouseup', this._boundGlobalMouseUp);
+      document.removeEventListener('touchend', this._boundGlobalMouseUp);
+      document.removeEventListener('mousemove', this._boundGlobalMouseMove);
+      document.removeEventListener('touchmove', this._boundGlobalMouseMove);
+      this._documentListenersAttached = false;
+    }
   }
 
   _handleKeyDown(e) {
@@ -1112,7 +1452,11 @@ class SpatialLightColorCard extends HTMLElement {
    */
   _handleLightTouchStart(e, light) {
     const entity_id = light.dataset.entity;
-    
+
+    if (e.cancelable) {
+      e.preventDefault();
+    }
+
     // Start long press timer for multi-select
     this._longPressTimer = setTimeout(() => {
       this._longPressTriggered = true;
@@ -1223,10 +1567,14 @@ class SpatialLightColorCard extends HTMLElement {
 
   _handleCanvasMouseDown(e) {
     if (e.target.id !== 'canvas' && !e.target.classList.contains('grid')) return;
-    
+
+    if (e.cancelable) {
+      e.preventDefault();
+    }
+
     const canvas = this.shadowRoot.getElementById('canvas');
     const rect = canvas.getBoundingClientRect();
-    
+
     const clientX = e.touches ? e.touches[0].clientX : e.clientX;
     const clientY = e.touches ? e.touches[0].clientY : e.clientY;
     
@@ -1246,6 +1594,9 @@ class SpatialLightColorCard extends HTMLElement {
 
   _handleCanvasTouchStart(e) {
     if (e.target.id !== 'canvas' && !e.target.classList.contains('grid')) return;
+    if (e.cancelable) {
+      e.preventDefault();
+    }
     this._handleCanvasMouseDown(e);
   }
 
@@ -1491,7 +1842,7 @@ class SpatialLightColorCard extends HTMLElement {
 
   updateLights() {
     if (!this._hass) return;
-    
+
     const lights = this.shadowRoot.querySelectorAll('.light');
     lights.forEach(light => {
       const entity_id = light.dataset.entity;
@@ -1499,18 +1850,31 @@ class SpatialLightColorCard extends HTMLElement {
       if (!state) return;
 
       const isOn = state.state === 'on';
-      
-      let color = '#2a2a2a';
-      if (isOn && state.attributes.rgb_color) {
-        const [r, g, b] = state.attributes.rgb_color;
-        color = `rgb(${r}, ${g}, ${b})`;
-      } else if (isOn) {
-        color = '#ffa500';
-      }
+      const colors = this._computeLightColors(state);
+      const brightness = this._computeBrightness(state);
+      const progressDeg = Math.max(0, Math.round(brightness * 360));
+      const ringOpacity = isOn ? Math.min(1, 0.18 + brightness * 0.55).toFixed(2) : '0';
 
-      light.style.background = isOn ? color : 'linear-gradient(135deg, #2a2a2a 0%, #1a1a1a 100%)';
+      light.style.setProperty('--light-color', colors.base);
+      light.style.setProperty('--light-glow', colors.glow);
+      light.style.setProperty('--light-progress', `${progressDeg}deg`);
+      light.style.setProperty('--light-ring-opacity', ringOpacity);
       light.classList.toggle('off', !isOn);
       light.classList.toggle('on', isOn);
+      light.classList.toggle('movable', !this._lockPositions);
+      light.classList.toggle('selected', this._selectedLights.has(entity_id));
+
+      const iconEl = light.querySelector('ha-icon');
+      if (iconEl) {
+        iconEl.setAttribute('icon', this._resolveIcon(state));
+      }
+
+      const labelEl = light.querySelector('.light-label');
+      if (labelEl) {
+        labelEl.textContent = this._generateLabel(entity_id);
+      }
+
+      light.setAttribute('aria-pressed', this._selectedLights.has(entity_id));
     });
 
     // Update control values if controls are visible

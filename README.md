@@ -1,3 +1,5 @@
+[![Open your Home Assistant instance and open this repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=Mihonarium&repository=hass-spatial-lights-card)
+
 # HASS-Spatial-Lights-Card
 
 The Spatial Lights Card lets you place and control multiple Home Assistant lights on a 2D canvas, making it easy to build room layouts and manage zones at a glance.

@@ -1,8 +1,12 @@
 [![Open your Home Assistant instance and open this repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=Mihonarium&repository=hass-spatial-lights-card)
 
-# HASS-Spatial-Lights-Card
+# Spatial Lights Card for Home Assistant
 
-The Spatial Lights Card lets you place and control multiple Home Assistant lights on a 2D canvas, making it easy to build room layouts and manage zones at a glance.
+The Spatial Lights Card lets you place many Home Assistant lights on a 2D canvas, making it easy to control arbitrary groups of lights with few taps and little attention.
+
+Very useful when you have a lot of lights, and searching the one you need by name and icon is tiresome; you can position all the lights in a layout that corresponds to the physical room layout, making it easy to select the light you need.
+
+You can also drag to draw a rectangle around lights, which you'll immediately be able to control as a group.
 
 <img width="758" height="891" alt="image" src="https://github.com/user-attachments/assets/2801dc44-5611-446b-94d6-74e682b93678" />
 
@@ -37,10 +41,8 @@ The Spatial Lights Card lets you place and control multiple Home Assistant light
 ## Installation
 
 ### Via HACS (Recommended)
-1. In Home Assistant, go to **HACS → Frontend**.
-2. Choose **Custom repositories** and add this repo (`https://github.com/Mihonarium/hass-spatial-lights-card`) as a **Lovelace** type repository while it is pending publication, or search for **Spatial Lights Card** once it is listed.
-3. Install the card and reload your browser when prompted.
-4. Add the resource automatically through HACS, or confirm it exists under **Settings → Dashboards → Resources**.
+1. [![Open your Home Assistant instance and open this repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=Mihonarium&repository=hass-spatial-lights-card)
+2. Install the card and reload your browser when prompted.
 
 ### Manual Installation
 ```bash
@@ -52,10 +54,6 @@ resources:
   - url: /local/hass-spatial-lights-card.js
     type: module
 ```
-
-### Requirements
-- Home Assistant 2023.8 or newer (Lovelace dashboards).
-- Lights that expose standard color/brightness attributes.
 
 ---
 

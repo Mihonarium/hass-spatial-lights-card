@@ -42,6 +42,7 @@ class SpatialLightColorCard extends HTMLElement {
     this._colorWheelFrame = null;
     this._colorWheelLastSize = null;
     this._colorWheelCancel = null;
+    this._colorWheelPointer = null;     // { pointerId, pointerType, startX, startY, startScrollX, startScrollY, active, cancelled }
 
     /** Cached DOM refs (stable after first render) */
     this._els = {
@@ -1215,24 +1216,74 @@ class SpatialLightColorCard extends HTMLElement {
     // Controls events
     if (this._els.colorWheel) {
       this._els.colorWheel.addEventListener('pointerdown', (e) => {
+        const isTouch = e.pointerType === 'touch';
+        const startScrollX = typeof window !== 'undefined' ? window.scrollX : 0;
+        const startScrollY = typeof window !== 'undefined' ? window.scrollY : 0;
+        this._colorWheelPointer = {
+          pointerId: e.pointerId,
+          pointerType: e.pointerType,
+          startX: e.clientX,
+          startY: e.clientY,
+          startScrollX,
+          startScrollY,
+          active: !isTouch,
+          cancelled: false,
+        };
         this._colorWheelActive = true;
-        e.preventDefault();
-        e.target.setPointerCapture?.(e.pointerId);
-        this._handleColorWheelPointer(e);
+        if (!isTouch) {
+          e.preventDefault();
+          e.target.setPointerCapture?.(e.pointerId);
+          this._handleColorWheelPointer(e);
+        }
       });
       this._els.colorWheel.addEventListener('pointermove', (e) => {
-        if (this._colorWheelActive) {
+        if (!this._colorWheelActive || !this._colorWheelPointer || this._colorWheelPointer.pointerId !== e.pointerId) return;
+        const tracking = this._colorWheelPointer;
+        if (tracking.cancelled) return;
+        if (tracking.pointerType === 'touch' && !tracking.active) {
+          const scrollX = typeof window !== 'undefined' ? window.scrollX : tracking.startScrollX;
+          const scrollY = typeof window !== 'undefined' ? window.scrollY : tracking.startScrollY;
+          const scrolled = Math.abs(scrollX - tracking.startScrollX) > 3 || Math.abs(scrollY - tracking.startScrollY) > 3;
+          if (scrolled) {
+            tracking.cancelled = true;
+            this._colorWheelActive = false;
+            return;
+          }
+          const moved = Math.hypot(e.clientX - tracking.startX, e.clientY - tracking.startY);
+          if (moved < 6) return;
+          tracking.active = true;
+          e.preventDefault();
+          e.target.setPointerCapture?.(e.pointerId);
+        }
+        if (tracking.active) {
           e.preventDefault();
           this._handleColorWheelPointer(e);
         }
       });
       this._els.colorWheel.addEventListener('pointerup', (e) => {
+        const tracking = this._colorWheelPointer;
+        if (tracking && tracking.pointerId === e.pointerId && !tracking.cancelled) {
+          const scrollX = typeof window !== 'undefined' ? window.scrollX : tracking.startScrollX;
+          const scrollY = typeof window !== 'undefined' ? window.scrollY : tracking.startScrollY;
+          const scrolled = Math.abs(scrollX - tracking.startScrollX) > 3 || Math.abs(scrollY - tracking.startScrollY) > 3;
+          if (!(tracking.pointerType === 'touch' && scrolled)) {
+            if (tracking.pointerType === 'touch' && !tracking.active) {
+              e.preventDefault();
+            }
+            this._handleColorWheelPointer(e);
+          }
+        }
         this._colorWheelActive = false;
         e.target.releasePointerCapture?.(e.pointerId);
+        this._colorWheelPointer = null;
       });
       this._els.colorWheel.addEventListener('pointercancel', (e) => {
         this._colorWheelActive = false;
         e.target.releasePointerCapture?.(e.pointerId);
+        if (this._colorWheelPointer && this._colorWheelPointer.pointerId === e.pointerId) {
+          this._colorWheelPointer.cancelled = true;
+        }
+        this._colorWheelPointer = null;
       });
     }
     if (this._els.brightnessSlider) {

@@ -39,6 +39,9 @@ class SpatialLightColorCard extends HTMLElement {
     this._raf = null;
     this._colorWheelActive = false;
     this._colorWheelObserver = null;
+    this._colorWheelFrame = null;
+    this._colorWheelLastSize = null;
+    this._colorWheelCancel = null;
 
     /** Cached DOM refs (stable after first render) */
     this._els = {
@@ -598,7 +601,7 @@ class SpatialLightColorCard extends HTMLElement {
     }
     if (this._els.colorWheel && typeof window !== 'undefined' && 'ResizeObserver' in window) {
       this._colorWheelObserver = new ResizeObserver(() => {
-        this.drawColorWheel();
+        this._requestColorWheelDraw(true);
       });
       this._colorWheelObserver.observe(this._els.colorWheel);
     }
@@ -609,7 +612,7 @@ class SpatialLightColorCard extends HTMLElement {
         ? requestAnimationFrame
         : (cb) => setTimeout(cb, 16);
       raf(() => {
-        this.drawColorWheel();
+        this._requestColorWheelDraw(true);
       });
       this._updateControlValues(controlContext);
     }
@@ -1056,6 +1059,11 @@ class SpatialLightColorCard extends HTMLElement {
       this._colorWheelObserver.disconnect();
       this._colorWheelObserver = null;
     }
+    if (this._colorWheelFrame) {
+      const cancel = this._colorWheelCancel || (typeof cancelAnimationFrame === 'function' ? cancelAnimationFrame : clearTimeout);
+      cancel(this._colorWheelFrame);
+      this._colorWheelFrame = null;
+    }
     this._pendingTap = null;
     this._longPressTriggered = false;
     this._moreInfoOpen = false;
@@ -1213,7 +1221,7 @@ class SpatialLightColorCard extends HTMLElement {
       (this._config.always_show_controls || this._selectedLights.size > 0 || this._config.default_entity) &&
       Boolean(this._els.colorWheel);
     if (shouldDrawWheel) {
-      this.drawColorWheel();
+      this._requestColorWheelDraw();
     }
   }
 
@@ -1246,7 +1254,7 @@ class SpatialLightColorCard extends HTMLElement {
       this._selectedLights.clear();
       this._config.entities.forEach(ent => this._selectedLights.add(ent));
       this.updateLights();
-      if (this._els.colorWheel) this.drawColorWheel();
+      if (this._els.colorWheel) this._requestColorWheelDraw();
     }
     // Optional: movement with arrows if unlocked
     if (!this._lockPositions && this._selectedLights.size > 0) {
@@ -1617,7 +1625,20 @@ class SpatialLightColorCard extends HTMLElement {
     this._pendingTemperature = null;
   }
 
-  drawColorWheel() {
+  _requestColorWheelDraw(force = false) {
+    if (this._colorWheelFrame) return;
+    const schedule = typeof requestAnimationFrame === 'function'
+      ? requestAnimationFrame
+      : (cb) => setTimeout(cb, 16);
+    const cancel = typeof cancelAnimationFrame === 'function' ? cancelAnimationFrame : clearTimeout;
+    this._colorWheelCancel = cancel;
+    this._colorWheelFrame = schedule(() => {
+      this._colorWheelFrame = null;
+      this.drawColorWheel(force);
+    });
+  }
+
+  drawColorWheel(force = false) {
     const canvas = this._els.colorWheel;
     if (!canvas) return;
     const ctx = canvas.getContext('2d');
@@ -1634,7 +1655,11 @@ class SpatialLightColorCard extends HTMLElement {
     if (canvas.width !== pixelSize || canvas.height !== pixelSize) {
       canvas.width = pixelSize;
       canvas.height = pixelSize;
+    } else if (!force && this._colorWheelLastSize && this._colorWheelLastSize.pixelSize === pixelSize && this._colorWheelLastSize.dpr === dpr) {
+      return;
     }
+
+    this._colorWheelLastSize = { pixelSize, dpr };
 
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
@@ -1732,7 +1757,7 @@ class SpatialLightColorCard extends HTMLElement {
       }
     }
     if ((this._config.always_show_controls || this._selectedLights.size > 0 || this._config.default_entity) && this._els.colorWheel) {
-      this.drawColorWheel();
+      this._requestColorWheelDraw();
     }
     this._refreshEntityIcons();
   }

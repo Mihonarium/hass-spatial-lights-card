@@ -42,6 +42,7 @@ class SpatialLightColorCard extends HTMLElement {
     this._colorWheelFrame = null;
     this._colorWheelLastSize = null;
     this._colorWheelCancel = null;
+    this._colorWheelPointer = null;      // { id, startX, startY, committed }
 
     /** Cached DOM refs (stable after first render) */
     this._els = {
@@ -1214,25 +1215,59 @@ class SpatialLightColorCard extends HTMLElement {
 
     // Controls events
     if (this._els.colorWheel) {
+      const resetColorWheelInteraction = (e) => {
+        this._colorWheelActive = false;
+        this._colorWheelPointer = null;
+        e?.target?.releasePointerCapture?.(e.pointerId);
+      };
+
       this._els.colorWheel.addEventListener('pointerdown', (e) => {
         this._colorWheelActive = true;
-        e.preventDefault();
-        e.target.setPointerCapture?.(e.pointerId);
-        this._handleColorWheelPointer(e);
+        if (e.pointerType === 'touch') {
+          this._colorWheelPointer = {
+            id: e.pointerId,
+            startX: e.clientX,
+            startY: e.clientY,
+            committed: false,
+          };
+        } else {
+          e.preventDefault();
+          e.target.setPointerCapture?.(e.pointerId);
+          this._handleColorWheelPointer(e);
+        }
       });
       this._els.colorWheel.addEventListener('pointermove', (e) => {
-        if (this._colorWheelActive) {
+        if (!this._colorWheelActive) return;
+
+        const touchState = this._colorWheelPointer;
+        if (e.pointerType === 'touch' && touchState && touchState.id === e.pointerId) {
+          const dx = e.clientX - touchState.startX;
+          const dy = e.clientY - touchState.startY;
+          const moved = Math.hypot(dx, dy);
+          if (!touchState.committed && moved > 6) {
+            touchState.committed = true;
+            e.preventDefault();
+            e.target.setPointerCapture?.(e.pointerId);
+          }
+          if (touchState.committed) {
+            this._handleColorWheelPointer(e);
+          }
+        } else if (this._colorWheelActive) {
           e.preventDefault();
           this._handleColorWheelPointer(e);
         }
       });
       this._els.colorWheel.addEventListener('pointerup', (e) => {
-        this._colorWheelActive = false;
-        e.target.releasePointerCapture?.(e.pointerId);
+        const touchState = this._colorWheelPointer;
+        if (e.pointerType === 'touch' && touchState && touchState.id === e.pointerId) {
+          if (!touchState.committed) {
+            this._handleColorWheelPointer(e);
+          }
+        }
+        resetColorWheelInteraction(e);
       });
       this._els.colorWheel.addEventListener('pointercancel', (e) => {
-        this._colorWheelActive = false;
-        e.target.releasePointerCapture?.(e.pointerId);
+        resetColorWheelInteraction(e);
       });
     }
     if (this._els.brightnessSlider) {

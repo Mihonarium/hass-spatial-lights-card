@@ -42,6 +42,7 @@ class SpatialLightColorCard extends HTMLElement {
     this._colorWheelFrame = null;
     this._colorWheelLastSize = null;
     this._colorWheelCancel = null;
+    this._colorWheelGesture = null;    // { pointerId, pointerType, startScrollX, startScrollY, scrolled }
 
     /** Cached DOM refs (stable after first render) */
     this._els = {
@@ -1222,22 +1223,45 @@ class SpatialLightColorCard extends HTMLElement {
     if (this._els.colorWheel) {
       this._els.colorWheel.addEventListener('pointerdown', (e) => {
         this._colorWheelActive = true;
+        this._colorWheelGesture = {
+          pointerId: e.pointerId,
+          pointerType: e.pointerType,
+          startScrollX: typeof window !== 'undefined' ? window.scrollX : 0,
+          startScrollY: typeof window !== 'undefined' ? window.scrollY : 0,
+          scrolled: false,
+        };
         e.preventDefault();
         e.target.setPointerCapture?.(e.pointerId);
-        this._handleColorWheelPointer(e);
+        const commitImmediately = e.pointerType !== 'touch';
+        this._handleColorWheelPointer(e, commitImmediately);
       });
       this._els.colorWheel.addEventListener('pointermove', (e) => {
         if (this._colorWheelActive) {
           e.preventDefault();
-          this._handleColorWheelPointer(e);
+          if (this._colorWheelGesture && this._colorWheelGesture.pointerId === e.pointerId && typeof window !== 'undefined') {
+            const { startScrollX, startScrollY } = this._colorWheelGesture;
+            if (window.scrollX !== startScrollX || window.scrollY !== startScrollY) {
+              this._colorWheelGesture.scrolled = true;
+            }
+          }
+          const commitImmediately = !(this._colorWheelGesture && this._colorWheelGesture.pointerType === 'touch');
+          this._handleColorWheelPointer(e, commitImmediately);
         }
       });
       this._els.colorWheel.addEventListener('pointerup', (e) => {
         this._colorWheelActive = false;
+        const gesture = this._colorWheelGesture;
+        if (gesture && gesture.pointerType === 'touch' && !gesture.scrolled) {
+          this._handleColorWheelPointer(e, true);
+        }
+        this._pendingColor = null;
+        this._colorWheelGesture = null;
         e.target.releasePointerCapture?.(e.pointerId);
       });
       this._els.colorWheel.addEventListener('pointercancel', (e) => {
         this._colorWheelActive = false;
+        this._pendingColor = null;
+        this._colorWheelGesture = null;
         e.target.releasePointerCapture?.(e.pointerId);
       });
     }
@@ -1613,7 +1637,7 @@ class SpatialLightColorCard extends HTMLElement {
   }
 
   /** ---------- Color control ---------- */
-  _handleColorWheelPointer(e) {
+  _handleColorWheelPointer(e, commitImmediately = true) {
     const controlled = this._selectedLights.size > 0
       ? [...this._selectedLights]
       : (this._config.default_entity ? [this._config.default_entity] : []);
@@ -1630,11 +1654,14 @@ class SpatialLightColorCard extends HTMLElement {
     if (a === 0) return; // click outside painted area (shouldn't happen with full wheel)
 
     this._pendingColor = [r, g, b];
+    if (!commitImmediately) return;
+
+    const color = this._pendingColor;
     // Apply immediately (color picks feel best immediate)
     controlled.forEach(entity_id => {
       this._hass.callService('light', 'turn_on', {
         entity_id,
-        rgb_color: this._pendingColor,
+        rgb_color: color,
       });
     });
     this._pendingColor = null;

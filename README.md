@@ -124,6 +124,7 @@ positions:
 | `entities` | list | **required** | Light entities to display |
 | `positions` | map | `{}` | Per-entity x/y positions from 0–100 (percentage) |
 | `canvas_height` | number | `450` | Canvas height in pixels |
+| `background_image` | string | `null` | Optional image URL for the canvas background |
 | `grid_size` | number | `25` | Grid spacing in pixels when snapping |
 | `label_mode` | string | `"smart"` | Label generation mode (`smart`, `friendly_name`, `entity_id`) |
 | `label_overrides` | map | `{}` | Map entity_id → custom label |
@@ -198,6 +199,13 @@ always_show_controls: true
 ```
 - Controls remain visible below the layout for quick access.
 - Ideal when you never want controls to cover the floor plan.
+
+### Custom Background Image
+```yaml
+background_image: https://example.com/floorplan.jpg
+```
+- Adds a photo or floorplan behind the light layout.
+- Scales to cover the canvas while keeping the grid overlay visible.
 
 ---
 

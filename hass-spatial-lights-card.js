@@ -42,6 +42,7 @@ class SpatialLightColorCard extends HTMLElement {
     this._colorWheelFrame = null;
     this._colorWheelLastSize = null;
     this._colorWheelCancel = null;
+    this._colorWheelGesture = null;      // { pointerId, startX, startY, engaged }
 
     /** Cached DOM refs (stable after first render) */
     this._els = {
@@ -1216,22 +1217,46 @@ class SpatialLightColorCard extends HTMLElement {
     if (this._els.colorWheel) {
       this._els.colorWheel.addEventListener('pointerdown', (e) => {
         this._colorWheelActive = true;
-        e.preventDefault();
-        e.target.setPointerCapture?.(e.pointerId);
-        this._handleColorWheelPointer(e);
-      });
-      this._els.colorWheel.addEventListener('pointermove', (e) => {
-        if (this._colorWheelActive) {
+        this._colorWheelGesture = {
+          pointerId: e.pointerId,
+          startX: e.clientX,
+          startY: e.clientY,
+          engaged: e.pointerType !== 'touch',
+        };
+        if (this._colorWheelGesture.engaged) {
           e.preventDefault();
+          e.target.setPointerCapture?.(e.pointerId);
           this._handleColorWheelPointer(e);
         }
       });
+      this._els.colorWheel.addEventListener('pointermove', (e) => {
+        if (!this._colorWheelActive || !this._colorWheelGesture || e.pointerId !== this._colorWheelGesture.pointerId) return;
+        if (!this._colorWheelGesture.engaged) {
+          const dx = e.clientX - this._colorWheelGesture.startX;
+          const dy = e.clientY - this._colorWheelGesture.startY;
+          const movedEnough = (dx * dx + dy * dy) > 36; // 6px threshold
+          if (!movedEnough) return;
+          this._colorWheelGesture.engaged = true;
+          e.target.setPointerCapture?.(e.pointerId);
+        }
+        e.preventDefault();
+        this._handleColorWheelPointer(e);
+      });
       this._els.colorWheel.addEventListener('pointerup', (e) => {
+        if (this._colorWheelGesture && e.pointerId === this._colorWheelGesture.pointerId && !this._colorWheelGesture.engaged) {
+          const dx = e.clientX - this._colorWheelGesture.startX;
+          const dy = e.clientY - this._colorWheelGesture.startY;
+          if ((dx * dx + dy * dy) <= 36) {
+            this._handleColorWheelPointer(e);
+          }
+        }
         this._colorWheelActive = false;
+        this._colorWheelGesture = null;
         e.target.releasePointerCapture?.(e.pointerId);
       });
       this._els.colorWheel.addEventListener('pointercancel', (e) => {
         this._colorWheelActive = false;
+        this._colorWheelGesture = null;
         e.target.releasePointerCapture?.(e.pointerId);
       });
     }

@@ -115,6 +115,8 @@ class SpatialLightColorCard extends HTMLElement {
       tempMax = parseFloat(config.temperature_max);
     }
 
+    const backgroundImage = this._normalizeBackgroundImage(config.background_image);
+
     this._config = {
       entities: config.entities,
       positions: normalizedPositions,
@@ -131,10 +133,50 @@ class SpatialLightColorCard extends HTMLElement {
       icon_style: config.icon_style || 'mdi', // 'mdi' or 'emoji' (emoji kept as fallback only)
       temperature_min: Number.isFinite(tempMin) ? tempMin : null,
       temperature_max: Number.isFinite(tempMax) ? tempMax : null,
+      background_image: backgroundImage,
     };
 
     this._gridSize = this._config.grid_size;
     this._initializePositions();
+  }
+
+  _normalizeBackgroundImage(value) {
+    if (!value) return null;
+    if (typeof value === 'string') {
+      const url = value.trim();
+      return url ? { url } : null;
+    }
+    if (typeof value === 'object') {
+      const url = typeof value.url === 'string' ? value.url.trim() : '';
+      const size = typeof value.size === 'string' ? value.size.trim() : '';
+      const position = typeof value.position === 'string' ? value.position.trim() : '';
+      const repeat = typeof value.repeat === 'string' ? value.repeat.trim() : '';
+      const blend = typeof value.blend_mode === 'string' ? value.blend_mode.trim() : '';
+      if (!url && !size && !position && !repeat && !blend) return null;
+      const normalized = {};
+      if (url) normalized.url = url;
+      if (size) normalized.size = size;
+      if (position) normalized.position = position;
+      if (repeat) normalized.repeat = repeat;
+      if (blend) normalized.blend_mode = blend;
+      return normalized;
+    }
+    return null;
+  }
+
+  _canvasBackgroundStyle() {
+    const bg = this._config.background_image;
+    if (!bg) return '';
+    const vars = [];
+    if (bg.url) {
+      const escaped = String(bg.url).replace(/"/g, '%22').replace(/'/g, "\\'");
+      vars.push(`--canvas-background-image:url('${escaped}')`);
+    }
+    if (bg.size) vars.push(`--canvas-background-size:${bg.size}`);
+    if (bg.position) vars.push(`--canvas-background-position:${bg.position}`);
+    if (bg.repeat) vars.push(`--canvas-background-repeat:${bg.repeat}`);
+    if (bg.blend_mode) vars.push(`--canvas-background-blend-mode:${bg.blend_mode}`);
+    return vars.join('; ');
   }
 
   set hass(hass) {
@@ -565,7 +607,7 @@ class SpatialLightColorCard extends HTMLElement {
       <ha-card>
         ${showHeader ? this._renderHeader() : ''}
         <div class="canvas-wrapper">
-          <div class="canvas" id="canvas" role="application" aria-label="Spatial light control area">
+          <div class="canvas" id="canvas" role="application" aria-label="Spatial light control area" style="${this._canvasBackgroundStyle()}">
             <div class="grid"></div>
             ${this._renderLightsHTML()}
             ${controlsPosition === 'floating' ? this._renderControlsFloating(showControls, controlContext) : ''}
@@ -674,6 +716,11 @@ class SpatialLightColorCard extends HTMLElement {
       .canvas-wrapper { position: relative; }
       .canvas {
         position: relative; width: 100%; height: ${this._config.canvas_height}px; background: var(--surface-primary);
+        background-image: var(--canvas-background-image, none);
+        background-size: var(--canvas-background-size, cover);
+        background-position: var(--canvas-background-position, center);
+        background-repeat: var(--canvas-background-repeat, no-repeat);
+        background-blend-mode: var(--canvas-background-blend-mode, normal);
         overflow: hidden; user-select: none; touch-action: none;
       }
       .grid {

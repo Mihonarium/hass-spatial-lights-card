@@ -42,6 +42,7 @@ class SpatialLightColorCard extends HTMLElement {
     this._colorWheelFrame = null;
     this._colorWheelLastSize = null;
     this._colorWheelCancel = null;
+    this._colorWheelTouch = null;      // touch-specific state for scroll detection
 
     /** Cached DOM refs (stable after first render) */
     this._els = {
@@ -1222,22 +1223,76 @@ class SpatialLightColorCard extends HTMLElement {
     if (this._els.colorWheel) {
       this._els.colorWheel.addEventListener('pointerdown', (e) => {
         this._colorWheelActive = true;
-        e.preventDefault();
-        e.target.setPointerCapture?.(e.pointerId);
-        this._handleColorWheelPointer(e);
+        if (e.pointerType === 'touch') {
+          this._colorWheelTouch = {
+            pointerId: e.pointerId,
+            startX: e.clientX,
+            startY: e.clientY,
+            scrollX: window.scrollX,
+            scrollY: window.scrollY,
+            confirmed: false,
+            cancelled: false,
+          };
+          // Do not preventDefault yet: allow scrolling if this was accidental
+        } else {
+          e.preventDefault();
+          e.target.setPointerCapture?.(e.pointerId);
+          this._handleColorWheelPointer(e);
+        }
       });
       this._els.colorWheel.addEventListener('pointermove', (e) => {
         if (this._colorWheelActive) {
-          e.preventDefault();
-          this._handleColorWheelPointer(e);
+          const touchState = this._colorWheelTouch && this._colorWheelTouch.pointerId === e.pointerId
+            ? this._colorWheelTouch
+            : null;
+          if (touchState) {
+            if (touchState.cancelled) return;
+            const scrolled = Math.abs(window.scrollX - touchState.scrollX) > 0 || Math.abs(window.scrollY - touchState.scrollY) > 0;
+            if (scrolled) {
+              touchState.cancelled = true;
+              return;
+            }
+
+            if (!touchState.confirmed) {
+              const dx = e.clientX - touchState.startX;
+              const dy = e.clientY - touchState.startY;
+              if (Math.hypot(dx, dy) > 8) {
+                touchState.confirmed = true;
+                e.target.setPointerCapture?.(e.pointerId);
+              }
+            }
+
+            if (touchState.confirmed) {
+              e.preventDefault();
+              this._handleColorWheelPointer(e);
+            }
+          } else {
+            e.preventDefault();
+            this._handleColorWheelPointer(e);
+          }
         }
       });
       this._els.colorWheel.addEventListener('pointerup', (e) => {
         this._colorWheelActive = false;
+        const touchState = this._colorWheelTouch && this._colorWheelTouch.pointerId === e.pointerId
+          ? this._colorWheelTouch
+          : null;
+        if (touchState) {
+          const scrolled = Math.abs(window.scrollX - touchState.scrollX) > 0 || Math.abs(window.scrollY - touchState.scrollY) > 0;
+          if (!touchState.cancelled && !scrolled) {
+            // Apply once at end if never confirmed, otherwise finalize the last position
+            if (!touchState.confirmed) {
+              e.preventDefault();
+            }
+            this._handleColorWheelPointer(e);
+          }
+          this._colorWheelTouch = null;
+        }
         e.target.releasePointerCapture?.(e.pointerId);
       });
       this._els.colorWheel.addEventListener('pointercancel', (e) => {
         this._colorWheelActive = false;
+        this._colorWheelTouch = null;
         e.target.releasePointerCapture?.(e.pointerId);
       });
     }

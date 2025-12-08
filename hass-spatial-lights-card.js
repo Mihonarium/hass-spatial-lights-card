@@ -42,6 +42,7 @@ class SpatialLightColorCard extends HTMLElement {
     this._colorWheelFrame = null;
     this._colorWheelLastSize = null;
     this._colorWheelCancel = null;
+    this._colorWheelInteraction = null;  // { startX, startY, applied }
 
     /** Cached DOM refs (stable after first render) */
     this._els = {
@@ -1216,22 +1217,39 @@ class SpatialLightColorCard extends HTMLElement {
     if (this._els.colorWheel) {
       this._els.colorWheel.addEventListener('pointerdown', (e) => {
         this._colorWheelActive = true;
-        e.preventDefault();
+        this._colorWheelInteraction = { startX: e.clientX, startY: e.clientY, applied: false };
         e.target.setPointerCapture?.(e.pointerId);
-        this._handleColorWheelPointer(e);
       });
       this._els.colorWheel.addEventListener('pointermove', (e) => {
         if (this._colorWheelActive) {
-          e.preventDefault();
-          this._handleColorWheelPointer(e);
+          const interaction = this._colorWheelInteraction;
+          const moved = interaction
+            ? Math.hypot(e.clientX - interaction.startX, e.clientY - interaction.startY)
+            : 0;
+          if (interaction && !interaction.applied) {
+            if (moved >= 4) {
+              interaction.applied = true;
+              e.preventDefault();
+              this._handleColorWheelPointer(e);
+            }
+          } else if (interaction?.applied) {
+            e.preventDefault();
+            this._handleColorWheelPointer(e);
+          }
         }
       });
       this._els.colorWheel.addEventListener('pointerup', (e) => {
         this._colorWheelActive = false;
+        if (this._colorWheelInteraction && !this._colorWheelInteraction.applied) {
+          e.preventDefault();
+          this._handleColorWheelPointer(e);
+        }
+        this._colorWheelInteraction = null;
         e.target.releasePointerCapture?.(e.pointerId);
       });
       this._els.colorWheel.addEventListener('pointercancel', (e) => {
         this._colorWheelActive = false;
+        this._colorWheelInteraction = null;
         e.target.releasePointerCapture?.(e.pointerId);
       });
     }

@@ -131,6 +131,7 @@ positions:
 | `always_show_controls` | boolean | `false` | Always show color controls even when nothing selected |
 | `controls_below` | boolean | `true` | Render controls below (`true`) or floating over (`false`) |
 | `default_entity` | string | `null` | Entity to control when nothing is selected |
+| `background_image` | string/map | `null` | Optional canvas background image. Pass a URL string or map (`url`, optional `size`, `position`, `repeat`, `blend_mode`). |
 
 > ℹ️ **Label modes:** `smart` uses friendly names when available, falling back to entity IDs. Override individual entities with `label_overrides`.
 
@@ -198,6 +199,18 @@ always_show_controls: true
 ```
 - Controls remain visible below the layout for quick access.
 - Ideal when you never want controls to cover the floor plan.
+
+### Floorplan Background Image
+```yaml
+background_image:
+  url: https://example.com/floorplan.png
+  size: cover         # optional (e.g., contain, 80%)
+  position: center    # optional
+  repeat: no-repeat   # optional
+  blend_mode: normal  # optional, e.g., multiply
+```
+- Adds a custom image beneath the lights while keeping the grid overlay on top.
+- Use `blend_mode` to fine-tune how the image and base colors mix.
 
 ---
 

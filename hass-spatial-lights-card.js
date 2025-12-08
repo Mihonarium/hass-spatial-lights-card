@@ -42,6 +42,7 @@ class SpatialLightColorCard extends HTMLElement {
     this._colorWheelFrame = null;
     this._colorWheelLastSize = null;
     this._colorWheelCancel = null;
+    this._colorWheelGesture = null;    // { pointerId, isTouch, startScroll: {x,y}, scrolled, pendingColor }
 
     /** Cached DOM refs (stable after first render) */
     this._els = {
@@ -1221,24 +1222,65 @@ class SpatialLightColorCard extends HTMLElement {
     // Controls events
     if (this._els.colorWheel) {
       this._els.colorWheel.addEventListener('pointerdown', (e) => {
+        const isTouchLike = e.pointerType === 'touch' || e.pointerType === 'pen' || !e.pointerType;
         this._colorWheelActive = true;
+        this._colorWheelGesture = {
+          pointerId: e.pointerId,
+          isTouch: isTouchLike,
+          startScroll: this._getScrollPosition(),
+          scrolled: false,
+          pendingColor: null,
+        };
         e.preventDefault();
         e.target.setPointerCapture?.(e.pointerId);
-        this._handleColorWheelPointer(e);
+
+        const color = this._getColorWheelColorAtEvent(e);
+        if (!color) return;
+        if (isTouchLike) {
+          this._colorWheelGesture.pendingColor = color;
+        } else {
+          this._applyColorWheelSelection(color);
+        }
       });
       this._els.colorWheel.addEventListener('pointermove', (e) => {
         if (this._colorWheelActive) {
-          e.preventDefault();
-          this._handleColorWheelPointer(e);
+          const gesture = this._colorWheelGesture;
+          if (!gesture || (gesture.pointerId !== undefined && gesture.pointerId !== e.pointerId)) return;
+
+          const scrollPos = this._getScrollPosition();
+          if (scrollPos.x !== gesture.startScroll.x || scrollPos.y !== gesture.startScroll.y) {
+            gesture.scrolled = true;
+            return;
+          }
+
+          const color = this._getColorWheelColorAtEvent(e);
+          if (!color) return;
+
+          if (gesture.isTouch) {
+            gesture.pendingColor = color;
+          } else {
+            e.preventDefault();
+            this._applyColorWheelSelection(color);
+          }
         }
       });
       this._els.colorWheel.addEventListener('pointerup', (e) => {
         this._colorWheelActive = false;
         e.target.releasePointerCapture?.(e.pointerId);
+
+        const gesture = this._colorWheelGesture;
+        this._colorWheelGesture = null;
+        if (!gesture || gesture.pointerId !== e.pointerId) return;
+
+        if (gesture.isTouch && !gesture.scrolled) {
+          const color = this._getColorWheelColorAtEvent(e) || gesture.pendingColor;
+          if (color) this._applyColorWheelSelection(color);
+        }
       });
       this._els.colorWheel.addEventListener('pointercancel', (e) => {
         this._colorWheelActive = false;
         e.target.releasePointerCapture?.(e.pointerId);
+        this._colorWheelGesture = null;
       });
     }
     if (this._els.brightnessSlider) {
@@ -1613,24 +1655,36 @@ class SpatialLightColorCard extends HTMLElement {
   }
 
   /** ---------- Color control ---------- */
-  _handleColorWheelPointer(e) {
-    const controlled = this._selectedLights.size > 0
-      ? [...this._selectedLights]
-      : (this._config.default_entity ? [this._config.default_entity] : []);
-    if (controlled.length === 0) return;
+  _getScrollPosition() {
+    if (typeof window === 'undefined') return { x: 0, y: 0 };
+    const x = typeof window.scrollX === 'number' ? window.scrollX : window.pageXOffset || 0;
+    const y = typeof window.scrollY === 'number' ? window.scrollY : window.pageYOffset || 0;
+    return { x, y };
+  }
 
+  _getColorWheelColorAtEvent(e) {
     const canvas = this._els.colorWheel;
+    if (!canvas) return null;
     const rect = canvas.getBoundingClientRect();
     const x = (e.clientX - rect.left) * (canvas.width / rect.width);
     const y = (e.clientY - rect.top) * (canvas.height / rect.height);
 
     const ctx = canvas.getContext('2d');
+    if (!ctx) return null;
     const imageData = ctx.getImageData(Math.floor(x), Math.floor(y), 1, 1);
     const [r, g, b, a] = imageData.data;
-    if (a === 0) return; // click outside painted area (shouldn't happen with full wheel)
+    if (a === 0) return null; // click outside painted area (shouldn't happen with full wheel)
 
-    this._pendingColor = [r, g, b];
-    // Apply immediately (color picks feel best immediate)
+    return [r, g, b];
+  }
+
+  _applyColorWheelSelection(rgb) {
+    const controlled = this._selectedLights.size > 0
+      ? [...this._selectedLights]
+      : (this._config.default_entity ? [this._config.default_entity] : []);
+    if (controlled.length === 0 || !rgb) return;
+
+    this._pendingColor = rgb;
     controlled.forEach(entity_id => {
       this._hass.callService('light', 'turn_on', {
         entity_id,

@@ -697,7 +697,13 @@ class SpatialLightColorCard extends HTMLElement {
         :host { --transition-fast: 0ms; --transition-base: 0ms; }
         * { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
       }
-      ha-card { background: var(--surface-primary); overflow: hidden; font-family: var(--font-sans); }
+      ha-card {
+        background: var(--surface-primary);
+        overflow: hidden;
+        font-family: var(--font-sans);
+        position: relative;
+        z-index: 0;
+      }
 
       .header {
         padding: 16px 20px; display: flex; justify-content: space-between; align-items: center;

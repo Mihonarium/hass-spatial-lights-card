@@ -1812,28 +1812,53 @@ class SpatialLightColorCard extends HTMLElement {
   /** ---------- YAML generation ---------- */
   _generateYAML() {
     const indent = '  ';
-    let yaml = `type: custom:spatial-light-color-card\n`;
-    if (this._config.title) yaml += `title: ${this._config.title}\n`;
-    yaml += `canvas_height: ${this._config.canvas_height}\n`;
-    if (this._config.default_entity) yaml += `default_entity: ${this._config.default_entity}\n`;
-    if (this._config.always_show_controls) yaml += `always_show_controls: true\n`;
-    if (!this._config.controls_below) yaml += `controls_below: false\n`;
-    if (!this._config.show_settings_button) yaml += `show_settings_button: false\n`;
-    if (this._config.show_entity_icons) yaml += `show_entity_icons: true\n`;
-    if (this._config.icon_style !== 'mdi') yaml += `icon_style: ${this._config.icon_style}\n`;
-    if (Number.isFinite(this._config.temperature_min)) yaml += `temperature_min: ${Math.round(this._config.temperature_min)}\n`;
-    if (Number.isFinite(this._config.temperature_max)) yaml += `temperature_max: ${Math.round(this._config.temperature_max)}\n`;
+    const yamlLines = [`type: custom:spatial-light-color-card`];
 
-    yaml += `entities:\n`;
-    this._config.entities.forEach(ent => { yaml += `${indent}- ${ent}\n`; });
+    if (this._config.title) yamlLines.push(`title: ${this._config.title}`);
+    yamlLines.push(`canvas_height: ${this._config.canvas_height}`);
+    yamlLines.push(`grid_size: ${this._config.grid_size}`);
+    if (this._config.label_mode) yamlLines.push(`label_mode: ${this._config.label_mode}`);
+    yamlLines.push(`show_settings_button: ${this._config.show_settings_button !== false}`);
+    yamlLines.push(`always_show_controls: ${!!this._config.always_show_controls}`);
+    yamlLines.push(`controls_below: ${!!this._config.controls_below}`);
+    yamlLines.push(`show_entity_icons: ${!!this._config.show_entity_icons}`);
+    yamlLines.push(`icon_style: ${this._config.icon_style}`);
+    if (this._config.default_entity) yamlLines.push(`default_entity: ${this._config.default_entity}`);
+    if (Number.isFinite(this._config.temperature_min)) yamlLines.push(`temperature_min: ${this._config.temperature_min}`);
+    if (Number.isFinite(this._config.temperature_max)) yamlLines.push(`temperature_max: ${this._config.temperature_max}`);
 
-    yaml += `positions:\n`;
+    if (this._config.label_overrides && Object.keys(this._config.label_overrides).length) {
+      yamlLines.push('label_overrides:');
+      Object.entries(this._config.label_overrides).forEach(([entity, label]) => {
+        yamlLines.push(`${indent}${entity}: ${label}`);
+      });
+    }
+
+    if (this._config.background_image) {
+      const bg = this._config.background_image;
+      if (typeof bg === 'string') {
+        yamlLines.push(`background_image: ${bg}`);
+      } else {
+        yamlLines.push('background_image:');
+        if (bg.url) yamlLines.push(`${indent}url: ${bg.url}`);
+        if (bg.size) yamlLines.push(`${indent}size: ${bg.size}`);
+        if (bg.position) yamlLines.push(`${indent}position: ${bg.position}`);
+        if (bg.repeat) yamlLines.push(`${indent}repeat: ${bg.repeat}`);
+        if (bg.blend_mode) yamlLines.push(`${indent}blend_mode: ${bg.blend_mode}`);
+      }
+    }
+
+    yamlLines.push('entities:');
+    this._config.entities.forEach(ent => { yamlLines.push(`${indent}- ${ent}`); });
+
+    yamlLines.push('positions:');
     Object.entries(this._config.positions).forEach(([ent, pos]) => {
-      yaml += `${indent}${ent}:\n`;
-      yaml += `${indent}${indent}x: ${pos.x.toFixed(2)}\n`;
-      yaml += `${indent}${indent}y: ${pos.y.toFixed(2)}\n`;
+      yamlLines.push(`${indent}${ent}:`);
+      yamlLines.push(`${indent}${indent}x: ${Number(pos.x.toFixed ? pos.x.toFixed(2) : pos.x)}`);
+      yamlLines.push(`${indent}${indent}y: ${Number(pos.y.toFixed ? pos.y.toFixed(2) : pos.y)}`);
     });
-    return yaml;
+
+    return `${yamlLines.join('\n')}\n`;
   }
 
   getCardSize() { return 8; }

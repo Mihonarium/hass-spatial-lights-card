@@ -54,10 +54,12 @@ class SpatialLightColorCard extends HTMLElement {
       temperatureSlider: null,
       temperatureValue: null,
       colorWheel: null,
+      createSceneBtn: null,
       settingsBtn: null,
       settingsPanel: null,
       lockToggle: null,
       iconToggle: null,
+      sceneToggle: null,
       rearrangeBtn: null,
       exportBtn: null,
       yamlModal: null,
@@ -132,6 +134,7 @@ class SpatialLightColorCard extends HTMLElement {
       controls_below: config.controls_below !== false,
       show_entity_icons: config.show_entity_icons || false,
       icon_style: config.icon_style || 'mdi', // 'mdi' or 'emoji' (emoji kept as fallback only)
+      show_create_scene_button: config.show_create_scene_button || false,
       temperature_min: Number.isFinite(tempMin) ? tempMin : null,
       temperature_max: Number.isFinite(tempMax) ? tempMax : null,
       background_image: backgroundImage,
@@ -600,6 +603,8 @@ class SpatialLightColorCard extends HTMLElement {
     const showControls = this._config.always_show_controls || this._selectedLights.size > 0 || this._config.default_entity;
     const controlsPosition = this._config.controls_below ? 'below' : 'floating';
     const showHeader = this._config.title || this._config.show_settings_button;
+    const showSceneAction = this._config.show_create_scene_button;
+    const hasSelection = this._selectedLights.size > 0;
 
     this.shadowRoot.innerHTML = `
       <style>
@@ -611,10 +616,10 @@ class SpatialLightColorCard extends HTMLElement {
           <div class="canvas" id="canvas" role="application" aria-label="Spatial light control area" style="${this._canvasBackgroundStyle()}">
             <div class="grid"></div>
             ${this._renderLightsHTML()}
-            ${controlsPosition === 'floating' ? this._renderControlsFloating(showControls, controlContext) : ''}
+            ${controlsPosition === 'floating' ? this._renderControlsFloating(showControls, controlContext, showSceneAction, hasSelection) : ''}
             ${this._renderSettings()}
           </div>
-          ${controlsPosition === 'below' ? this._renderControlsBelow(controlContext) : ''}
+          ${controlsPosition === 'below' ? this._renderControlsBelow(controlContext, showSceneAction, hasSelection) : ''}
         </div>
         ${this._renderYamlModal()}
       </ha-card>
@@ -629,10 +634,12 @@ class SpatialLightColorCard extends HTMLElement {
     this._els.temperatureSlider = this.shadowRoot.getElementById('temperatureSlider');
     this._els.temperatureValue = this.shadowRoot.getElementById('temperatureValue');
     this._els.colorWheel = this.shadowRoot.getElementById('colorWheelMini');
+    this._els.createSceneBtn = this.shadowRoot.getElementById('createSceneBtn');
     this._els.settingsBtn = this.shadowRoot.getElementById('settingsBtn');
     this._els.settingsPanel = this.shadowRoot.getElementById('settingsPanel');
     this._els.lockToggle = this.shadowRoot.getElementById('lockToggle');
     this._els.iconToggle = this.shadowRoot.getElementById('iconToggle');
+    this._els.sceneToggle = this.shadowRoot.getElementById('sceneToggle');
     this._els.rearrangeBtn = this.shadowRoot.getElementById('rearrangeBtn');
     this._els.exportBtn = this.shadowRoot.getElementById('exportBtn');
     this._els.yamlModal = this.shadowRoot.getElementById('yamlModal');
@@ -822,6 +829,25 @@ class SpatialLightColorCard extends HTMLElement {
         border:2px solid var(--surface-primary); box-shadow: var(--shadow-sm);
       }
       .slider-value { font-size: 13px; color: var(--text-secondary); min-width: 52px; text-align:right; font-weight: 600; }
+      .control-actions { margin-top: 12px; display:flex; }
+      .primary-button {
+        width: 100%;
+        padding: 10px 12px;
+        background: var(--accent-primary);
+        color: #0b0b0b;
+        border: none;
+        border-radius: 8px;
+        font-weight: 700;
+        cursor: pointer;
+        transition: background 120ms ease, transform 120ms ease, box-shadow 120ms ease;
+        box-shadow: 0 6px 16px rgba(0,0,0,0.25);
+      }
+      .primary-button:hover { background: var(--accent-primary-strong); transform: translateY(-1px); }
+      .primary-button:active { transform: translateY(0); box-shadow: 0 2px 8px rgba(0,0,0,0.25); }
+      .primary-button:disabled { background: var(--surface-elevated); color: var(--text-tertiary); cursor: not-allowed; box-shadow: none; }
+      .primary-button:focus-visible { outline: 2px solid var(--accent-primary); outline-offset: 2px; }
+      .scene-button { display: ${this._config.show_create_scene_button ? 'flex' : 'none'}; }
+      .scene-button.hidden { display: none; }
 
       .settings-panel {
         position: absolute; top: 16px; right: 16px;
@@ -942,7 +968,7 @@ class SpatialLightColorCard extends HTMLElement {
     }).join('');
   }
 
-  _renderControlsFloating(visible, controlContext) {
+  _renderControlsFloating(visible, controlContext, showSceneButton, hasSelection) {
     const { avgState, tempRange } = controlContext;
     const clampedTemp = this._clampTemperature(avgState.temperature, tempRange);
     return `
@@ -960,11 +986,16 @@ class SpatialLightColorCard extends HTMLElement {
             <span class="slider-value" id="temperatureValue">${clampedTemp}K</span>
           </div>
         </div>
+        ${showSceneButton ? `
+          <div class="control-actions">
+            <button class="primary-button scene-button ${hasSelection ? '' : 'hidden'}" id="createSceneBtn">Create scene from selection</button>
+          </div>
+        ` : ''}
       </div>
     `;
   }
 
-  _renderControlsBelow(controlContext) {
+  _renderControlsBelow(controlContext, showSceneButton, hasSelection) {
     const { avgState, tempRange } = controlContext;
     const clampedTemp = this._clampTemperature(avgState.temperature, tempRange);
     return `
@@ -982,6 +1013,11 @@ class SpatialLightColorCard extends HTMLElement {
             <span class="slider-value" id="temperatureValue">${clampedTemp}K</span>
           </div>
         </div>
+        ${showSceneButton ? `
+          <div class="control-actions">
+            <button class="primary-button scene-button ${hasSelection ? '' : 'hidden'}" id="createSceneBtn">Create scene from selection</button>
+          </div>
+        ` : ''}
       </div>
     `;
   }
@@ -1001,6 +1037,10 @@ class SpatialLightColorCard extends HTMLElement {
           <div class="settings-option">
             <span>Show Entity Icons</span>
             <button class="toggle ${this._config.show_entity_icons ? 'on' : ''}" id="iconToggle" role="switch" aria-checked="${this._config.show_entity_icons}" aria-label="Show entity icons"></button>
+          </div>
+          <div class="settings-option">
+            <span>Show Create Scene Button</span>
+            <button class="toggle ${this._config.show_create_scene_button ? 'on' : ''}" id="sceneToggle" role="switch" aria-checked="${this._config.show_create_scene_button}" aria-label="Show create scene button"></button>
           </div>
         </div>
         <div class="settings-section">
@@ -1185,6 +1225,15 @@ class SpatialLightColorCard extends HTMLElement {
       });
     }
 
+    if (this._els.sceneToggle) {
+      this._els.sceneToggle.addEventListener('click', () => {
+        this._config.show_create_scene_button = !this._config.show_create_scene_button;
+        this._els.sceneToggle.classList.toggle('on', this._config.show_create_scene_button);
+        this._els.sceneToggle.setAttribute('aria-checked', String(this._config.show_create_scene_button));
+        this._renderAll();
+      });
+    }
+
     if (this._els.rearrangeBtn) {
       this._els.rearrangeBtn.addEventListener('click', () => {
         this._rearrangeAllLights();
@@ -1290,6 +1339,9 @@ class SpatialLightColorCard extends HTMLElement {
     if (this._els.temperatureSlider) {
       this._els.temperatureSlider.addEventListener('input', (e) => this._handleTemperatureInput(e));
       this._els.temperatureSlider.addEventListener('change', () => this._handleTemperatureChange());
+    }
+    if (this._els.createSceneBtn) {
+      this._els.createSceneBtn.addEventListener('click', () => this._handleCreateScene());
     }
   }
 
@@ -1863,10 +1915,51 @@ class SpatialLightColorCard extends HTMLElement {
         this._els.controlsFloating.classList.toggle('visible', visible);
       }
     }
+    if (this._els.createSceneBtn) {
+      const hasSelection = this._selectedLights.size > 0;
+      this._els.createSceneBtn.classList.toggle('hidden', !hasSelection);
+      this._els.createSceneBtn.disabled = !hasSelection;
+    }
     if ((this._config.always_show_controls || this._selectedLights.size > 0 || this._config.default_entity) && this._els.colorWheel) {
       this._requestColorWheelDraw();
     }
     this._refreshEntityIcons();
+  }
+
+  async _handleCreateScene() {
+    if (!this._hass) return;
+    const selected = [...this._selectedLights];
+    if (!selected.length) return;
+
+    const name = (typeof window !== 'undefined' ? window.prompt('Name for the new scene?', 'New Scene') : null) || '';
+    const trimmed = name.trim();
+    if (!trimmed) return;
+
+    const sceneId = trimmed
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '_')
+      .replace(/^_+|_+$/g, '') || 'custom_scene';
+
+    try {
+      await this._hass.callService('scene', 'create', {
+        scene_id: sceneId,
+        name: trimmed,
+        snapshot_entities: selected,
+      });
+      this._notify(`Scene "${trimmed}" created from ${selected.length} light${selected.length > 1 ? 's' : ''}.`);
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error('Failed to create scene', err);
+      this._notify('Failed to create scene');
+    }
+  }
+
+  _notify(message) {
+    this.dispatchEvent(new CustomEvent('hass-notification', {
+      detail: { message },
+      bubbles: true,
+      composed: true,
+    }));
   }
 
   /** ---------- YAML generation ---------- */
@@ -1883,6 +1976,7 @@ class SpatialLightColorCard extends HTMLElement {
     yamlLines.push(`controls_below: ${!!this._config.controls_below}`);
     yamlLines.push(`show_entity_icons: ${!!this._config.show_entity_icons}`);
     yamlLines.push(`icon_style: ${this._config.icon_style}`);
+    yamlLines.push(`show_create_scene_button: ${!!this._config.show_create_scene_button}`);
     if (this._config.default_entity) yamlLines.push(`default_entity: ${this._config.default_entity}`);
     if (Number.isFinite(this._config.temperature_min)) yamlLines.push(`temperature_min: ${this._config.temperature_min}`);
     if (Number.isFinite(this._config.temperature_max)) yamlLines.push(`temperature_max: ${this._config.temperature_max}`);
@@ -1928,6 +2022,7 @@ class SpatialLightColorCard extends HTMLElement {
       canvas_height: 450, grid_size: 25, label_mode: 'smart',
       show_settings_button: true, always_show_controls: false, controls_below: true,
       default_entity: null, show_entity_icons: false, icon_style: 'mdi',
+      show_create_scene_button: false,
     };
   }
 }

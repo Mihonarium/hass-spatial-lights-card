@@ -58,8 +58,10 @@ class SpatialLightColorCard extends HTMLElement {
       settingsPanel: null,
       lockToggle: null,
       iconToggle: null,
+      sceneCreateToggle: null,
       rearrangeBtn: null,
       exportBtn: null,
+      createSceneBtn: null,
       yamlModal: null,
       yamlOutput: null,
     };
@@ -132,6 +134,7 @@ class SpatialLightColorCard extends HTMLElement {
       controls_below: config.controls_below !== false,
       show_entity_icons: config.show_entity_icons || false,
       icon_style: config.icon_style || 'mdi', // 'mdi' or 'emoji' (emoji kept as fallback only)
+      show_scene_create_button: config.show_scene_create_button || false,
       temperature_min: Number.isFinite(tempMin) ? tempMin : null,
       temperature_max: Number.isFinite(tempMax) ? tempMax : null,
       background_image: backgroundImage,
@@ -496,6 +499,12 @@ class SpatialLightColorCard extends HTMLElement {
     return JSON.parse(JSON.stringify(source || {}));
   }
 
+  _slugifySceneId(name) {
+    const base = (name || '').toString().trim().toLowerCase();
+    const cleaned = base.replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+    return cleaned || 'new_scene';
+  }
+
   _resolveTemperatureRange(controlled) {
     const explicitMin = Number.isFinite(this._config.temperature_min) ? this._config.temperature_min : null;
     const explicitMax = Number.isFinite(this._config.temperature_max) ? this._config.temperature_max : null;
@@ -633,8 +642,10 @@ class SpatialLightColorCard extends HTMLElement {
     this._els.settingsPanel = this.shadowRoot.getElementById('settingsPanel');
     this._els.lockToggle = this.shadowRoot.getElementById('lockToggle');
     this._els.iconToggle = this.shadowRoot.getElementById('iconToggle');
+    this._els.sceneCreateToggle = this.shadowRoot.getElementById('sceneCreateToggle');
     this._els.rearrangeBtn = this.shadowRoot.getElementById('rearrangeBtn');
     this._els.exportBtn = this.shadowRoot.getElementById('exportBtn');
+    this._els.createSceneBtn = this.shadowRoot.getElementById('createSceneBtn');
     this._els.yamlModal = this.shadowRoot.getElementById('yamlModal');
     this._els.yamlOutput = this.shadowRoot.getElementById('yamlOutput');
 
@@ -823,6 +834,17 @@ class SpatialLightColorCard extends HTMLElement {
       }
       .slider-value { font-size: 13px; color: var(--text-secondary); min-width: 52px; text-align:right; font-weight: 600; }
 
+      .control-actions { display:flex; gap: 10px; margin-top: 8px; flex-wrap: wrap; }
+      .control-action-btn {
+        border: 1px solid var(--border-medium); background: var(--surface-tertiary); color: var(--text-secondary);
+        padding: 8px 12px; border-radius: 10px; font-weight: 700; font-size: 13px; cursor: pointer;
+        transition: background var(--transition-fast), border-color var(--transition-fast), transform var(--transition-fast);
+        display: inline-flex; align-items: center; gap: 6px;
+      }
+      .control-action-btn:hover { background: var(--surface-elevated); color: var(--text-primary); border-color: var(--border-medium); }
+      .control-action-btn:active { transform: translateY(1px); }
+      .control-action-btn:focus-visible { outline: 2px solid var(--accent-primary); outline-offset: 2px; }
+
       .settings-panel {
         position: absolute; top: 16px; right: 16px;
         background: rgba(20,20,20,0.98); backdrop-filter: blur(16px) saturate(160%);
@@ -959,6 +981,12 @@ class SpatialLightColorCard extends HTMLElement {
             <input type="range" class="slider temperature" id="temperatureSlider" min="${tempRange.min}" max="${tempRange.max}" value="${clampedTemp}" aria-label="Color temperature">
             <span class="slider-value" id="temperatureValue">${clampedTemp}K</span>
           </div>
+          <div class="control-actions">
+            <button class="control-action-btn" id="createSceneBtn" style="display:${this._config.show_scene_create_button && this._selectedLights.size > 0 ? 'inline-flex' : 'none'};">
+              <span aria-hidden="true">🎬</span>
+              <span>Create scene from selection</span>
+            </button>
+          </div>
         </div>
       </div>
     `;
@@ -981,6 +1009,12 @@ class SpatialLightColorCard extends HTMLElement {
             <input type="range" class="slider temperature" id="temperatureSlider" min="${tempRange.min}" max="${tempRange.max}" value="${clampedTemp}" aria-label="Color temperature">
             <span class="slider-value" id="temperatureValue">${clampedTemp}K</span>
           </div>
+          <div class="control-actions">
+            <button class="control-action-btn" id="createSceneBtn" style="display:${this._config.show_scene_create_button && this._selectedLights.size > 0 ? 'inline-flex' : 'none'};">
+              <span aria-hidden="true">🎬</span>
+              <span>Create scene from selection</span>
+            </button>
+          </div>
         </div>
       </div>
     `;
@@ -1001,6 +1035,10 @@ class SpatialLightColorCard extends HTMLElement {
           <div class="settings-option">
             <span>Show Entity Icons</span>
             <button class="toggle ${this._config.show_entity_icons ? 'on' : ''}" id="iconToggle" role="switch" aria-checked="${this._config.show_entity_icons}" aria-label="Show entity icons"></button>
+          </div>
+          <div class="settings-option">
+            <span>Show Scene Create Button</span>
+            <button class="toggle ${this._config.show_scene_create_button ? 'on' : ''}" id="sceneCreateToggle" role="switch" aria-checked="${this._config.show_scene_create_button}" aria-label="Show scene create button"></button>
           </div>
         </div>
         <div class="settings-section">
@@ -1185,6 +1223,15 @@ class SpatialLightColorCard extends HTMLElement {
       });
     }
 
+    if (this._els.sceneCreateToggle) {
+      this._els.sceneCreateToggle.addEventListener('click', () => {
+        this._config.show_scene_create_button = !this._config.show_scene_create_button;
+        this._els.sceneCreateToggle.classList.toggle('on', this._config.show_scene_create_button);
+        this._els.sceneCreateToggle.setAttribute('aria-checked', String(this._config.show_scene_create_button));
+        this._updateSceneButtonVisibility();
+      });
+    }
+
     if (this._els.rearrangeBtn) {
       this._els.rearrangeBtn.addEventListener('click', () => {
         this._rearrangeAllLights();
@@ -1197,6 +1244,12 @@ class SpatialLightColorCard extends HTMLElement {
         if (this._els.yamlModal) this._els.yamlModal.classList.add('visible');
         if (this._els.yamlOutput) this._els.yamlOutput.textContent = this._generateYAML();
         this._syncOverlayState();
+      });
+    }
+
+    if (this._els.createSceneBtn) {
+      this._els.createSceneBtn.addEventListener('click', () => {
+        this._handleCreateSceneFromSelection();
       });
     }
 
@@ -1694,6 +1747,28 @@ class SpatialLightColorCard extends HTMLElement {
     this._pendingColor = null;
   }
 
+  _handleCreateSceneFromSelection() {
+    if (!this._config.show_scene_create_button) return;
+    const selected = [...this._selectedLights];
+    if (selected.length === 0) return;
+    if (!this._hass || typeof this._hass.callService !== 'function') return;
+
+    const defaultName = this._config.title || 'New Scene';
+    const sceneName = typeof prompt === 'function'
+      ? prompt('Name your new scene', defaultName)
+      : defaultName;
+    if (!sceneName || !sceneName.trim()) return;
+
+    const scene_id = this._slugifySceneId(sceneName);
+    const payload = {
+      scene_id,
+      snapshot_entities: selected,
+      name: sceneName.trim(),
+    };
+
+    this._hass.callService('scene', 'create', payload);
+  }
+
   _handleBrightnessInput(e) {
     const val = parseInt(e.target.value, 10);
     if (this._els.brightnessValue) this._els.brightnessValue.textContent = `${Math.round((val / 255) * 100)}%`;
@@ -1826,6 +1901,17 @@ class SpatialLightColorCard extends HTMLElement {
     ctx.restore();
   }
 
+  _updateSceneButtonVisibility() {
+    if (!this._els.createSceneBtn) return;
+    const visible = this._config.show_scene_create_button && this._selectedLights.size > 0;
+    this._els.createSceneBtn.style.display = visible ? 'inline-flex' : 'none';
+    this._els.createSceneBtn.disabled = !visible;
+    const container = this._els.createSceneBtn.closest('.control-actions');
+    if (container) {
+      container.style.display = visible ? 'flex' : 'none';
+    }
+  }
+
   /** ---------- Light updates ---------- */
   updateLights() {
     if (!this._hass) return;
@@ -1866,6 +1952,7 @@ class SpatialLightColorCard extends HTMLElement {
     if ((this._config.always_show_controls || this._selectedLights.size > 0 || this._config.default_entity) && this._els.colorWheel) {
       this._requestColorWheelDraw();
     }
+    this._updateSceneButtonVisibility();
     this._refreshEntityIcons();
   }
 
@@ -1882,6 +1969,7 @@ class SpatialLightColorCard extends HTMLElement {
     yamlLines.push(`always_show_controls: ${!!this._config.always_show_controls}`);
     yamlLines.push(`controls_below: ${!!this._config.controls_below}`);
     yamlLines.push(`show_entity_icons: ${!!this._config.show_entity_icons}`);
+    yamlLines.push(`show_scene_create_button: ${!!this._config.show_scene_create_button}`);
     yamlLines.push(`icon_style: ${this._config.icon_style}`);
     if (this._config.default_entity) yamlLines.push(`default_entity: ${this._config.default_entity}`);
     if (Number.isFinite(this._config.temperature_min)) yamlLines.push(`temperature_min: ${this._config.temperature_min}`);
@@ -1927,7 +2015,7 @@ class SpatialLightColorCard extends HTMLElement {
       entities: [], positions: {}, title: '',
       canvas_height: 450, grid_size: 25, label_mode: 'smart',
       show_settings_button: true, always_show_controls: false, controls_below: true,
-      default_entity: null, show_entity_icons: false, icon_style: 'mdi',
+      default_entity: null, show_entity_icons: false, icon_style: 'mdi', show_scene_create_button: false,
     };
   }
 }

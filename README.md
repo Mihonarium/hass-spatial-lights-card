@@ -131,6 +131,7 @@ positions:
 | `always_show_controls` | boolean | `false` | Always show color controls even when nothing selected |
 | `controls_below` | boolean | `true` | Render controls below (`true`) or floating over (`false`) |
 | `default_entity` | string | `null` | Entity to control when nothing is selected |
+| `show_scene_create_button` | boolean | `false` | Show a button (when lights are selected) to create a scene snapshot via `scene.create` |
 
 > ℹ️ **Label modes:** `smart` uses friendly names when available, falling back to entity IDs. Override individual entities with `label_overrides`.
 
@@ -174,6 +175,11 @@ positions:
 1. Select the light(s) you want to control.
 2. Adjust color, brightness, and temperature from the controls.
 3. Click/tap away to deselect, or rely on `default_entity` to control the whole room.
+
+### Save Current Selection as a Scene
+1. Enable `show_scene_create_button` in your card configuration (or toggle **Show Scene Creation** in the card settings).
+2. Select the lights you want to include.
+3. Click **Create scene from…** and provide a friendly name and scene ID when prompted; the name is shown in Home Assistant's scene editor, and the ID is used internally.
 
 ### Mobile Tips
 1. Tap to select, long-press to extend the selection.

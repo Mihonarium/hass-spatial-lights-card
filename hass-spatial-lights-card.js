@@ -54,10 +54,13 @@ class SpatialLightColorCard extends HTMLElement {
       temperatureSlider: null,
       temperatureValue: null,
       colorWheel: null,
+      createSceneBtn: null,
+      sceneActionRow: null,
       settingsBtn: null,
       settingsPanel: null,
       lockToggle: null,
       iconToggle: null,
+      sceneToggle: null,
       rearrangeBtn: null,
       exportBtn: null,
       yamlModal: null,
@@ -132,6 +135,7 @@ class SpatialLightColorCard extends HTMLElement {
       controls_below: config.controls_below !== false,
       show_entity_icons: config.show_entity_icons || false,
       icon_style: config.icon_style || 'mdi', // 'mdi' or 'emoji' (emoji kept as fallback only)
+      show_scene_create_button: !!config.show_scene_create_button,
       temperature_min: Number.isFinite(tempMin) ? tempMin : null,
       temperature_max: Number.isFinite(tempMax) ? tempMax : null,
       background_image: backgroundImage,
@@ -629,10 +633,13 @@ class SpatialLightColorCard extends HTMLElement {
     this._els.temperatureSlider = this.shadowRoot.getElementById('temperatureSlider');
     this._els.temperatureValue = this.shadowRoot.getElementById('temperatureValue');
     this._els.colorWheel = this.shadowRoot.getElementById('colorWheelMini');
+    this._els.createSceneBtn = this.shadowRoot.getElementById('createSceneBtn');
+    this._els.sceneActionRow = this.shadowRoot.getElementById('sceneActionRow');
     this._els.settingsBtn = this.shadowRoot.getElementById('settingsBtn');
     this._els.settingsPanel = this.shadowRoot.getElementById('settingsPanel');
     this._els.lockToggle = this.shadowRoot.getElementById('lockToggle');
     this._els.iconToggle = this.shadowRoot.getElementById('iconToggle');
+    this._els.sceneToggle = this.shadowRoot.getElementById('sceneToggle');
     this._els.rearrangeBtn = this.shadowRoot.getElementById('rearrangeBtn');
     this._els.exportBtn = this.shadowRoot.getElementById('exportBtn');
     this._els.yamlModal = this.shadowRoot.getElementById('yamlModal');
@@ -776,30 +783,33 @@ class SpatialLightColorCard extends HTMLElement {
         position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%);
         background: rgba(20,20,20,0.95); backdrop-filter: blur(16px) saturate(160%);
         border: 1px solid var(--border-medium); border-radius: 12px; padding: 16px 20px;
-        display: flex; gap: 20px; align-items: center; box-shadow: var(--shadow-md);
+        display: flex; flex-direction: column; gap: 12px; box-shadow: var(--shadow-md);
         opacity: 0; pointer-events: none; transition: opacity var(--transition-base);
-        z-index: 50;
+        z-index: 50; min-width: 360px;
       }
       .controls-floating.visible { opacity: 1; pointer-events: auto; }
 
       .controls-below {
         padding: 20px; border-top: 1px solid var(--border-subtle); background: var(--surface-secondary);
         display: ${this._config.always_show_controls || this._selectedLights.size > 0 || this._config.default_entity ? 'flex' : 'none'};
-        gap: 24px; align-items: center; justify-content: center;
+        gap: 16px; align-items: center; justify-content: center; flex-direction: column;
       }
+
+      .controls-main { display:flex; align-items:center; gap: 20px; width:100%; justify-content:center; max-width: 960px; margin: 0 auto; }
 
       .color-wheel-mini {
         width: 128px; height: 128px; border-radius: 9999px; cursor: pointer;
         border: 2px solid var(--border-subtle); box-shadow: var(--shadow-sm); flex-shrink: 0;
       }
 
-      .slider-group { display:flex; flex-direction:column; gap:12px; min-width: 220px; flex:1; max-width: 480px; }
-      .slider-row { display:flex; align-items:center; gap:12px; }
+      .slider-group { display:flex; flex-direction:column; gap:14px; min-width: 240px; flex:1; max-width: 520px; }
+      .slider-row { display:flex; align-items:center; gap:12px; padding: 6px 0; min-height: 52px; }
       .slider-icon { font-size: 16px; opacity: 0.65; width: 20px; text-align:center; flex-shrink:0; }
 
       .slider {
-        flex:1; -webkit-appearance:none; height:8px; border-radius:9999px; background: var(--surface-tertiary);
+        flex:1; -webkit-appearance:none; height:12px; border-radius:9999px; background: var(--surface-tertiary);
         outline:none; position:relative; cursor:pointer; border:1px solid var(--border-subtle);
+        box-shadow: inset 0 1px 0 rgba(255,255,255,0.04);
       }
       .slider.temperature {
         background: linear-gradient(to right,
@@ -812,16 +822,27 @@ class SpatialLightColorCard extends HTMLElement {
         border: 1px solid rgba(255,255,255,0.1);
       }
       .slider::-webkit-slider-thumb {
-        -webkit-appearance:none; width:20px; height:20px; border-radius:9999px;
+        -webkit-appearance:none; width:24px; height:24px; border-radius:9999px;
         background: var(--text-primary); border:2px solid var(--surface-primary); box-shadow: var(--shadow-sm);
         transition: transform var(--transition-fast);
+        margin-top: -6px;
       }
       .slider::-webkit-slider-thumb:hover { transform: scale(1.08); }
       .slider::-moz-range-thumb {
-        width:20px; height:20px; border-radius:9999px; background: var(--text-primary);
+        width:24px; height:24px; border-radius:9999px; background: var(--text-primary);
         border:2px solid var(--surface-primary); box-shadow: var(--shadow-sm);
       }
       .slider-value { font-size: 13px; color: var(--text-secondary); min-width: 52px; text-align:right; font-weight: 600; }
+
+      .action-row { display:flex; align-items:center; justify-content:flex-end; gap:10px; width: 100%; margin-top: 4px; }
+      .action-row.hidden { display:none; }
+      .action-button {
+        padding: 8px 12px; background: var(--surface-tertiary); border:1px solid var(--border-subtle);
+        color: var(--text-primary); border-radius: 8px; cursor:pointer; font-size:13px; font-weight:600;
+        transition: background var(--transition-fast), border-color var(--transition-fast), transform var(--transition-fast);
+      }
+      .action-button:hover { background: var(--surface-elevated); border-color: var(--border-medium); }
+      .action-button:active { transform: scale(0.98); }
 
       .settings-panel {
         position: absolute; top: 16px; right: 16px;
@@ -942,24 +963,40 @@ class SpatialLightColorCard extends HTMLElement {
     }).join('');
   }
 
+  _renderSceneActionRow() {
+    const showButton = this._config.show_scene_create_button && this._selectedLights.size > 0;
+    const label = showButton
+      ? `Create scene from ${this._selectedLights.size} selected light${this._selectedLights.size === 1 ? '' : 's'}`
+      : 'Select lights to create a scene';
+    const hiddenClass = this._config.show_scene_create_button ? (showButton ? '' : 'hidden') : 'hidden';
+    return `
+      <div class="action-row ${hiddenClass}" id="sceneActionRow">
+        <button class="action-button" id="createSceneBtn" ${showButton ? '' : 'disabled'}>${label}</button>
+      </div>
+    `;
+  }
+
   _renderControlsFloating(visible, controlContext) {
     const { avgState, tempRange } = controlContext;
     const clampedTemp = this._clampTemperature(avgState.temperature, tempRange);
     return `
       <div class="controls-floating ${visible ? 'visible' : ''}" id="controlsFloating" role="region" aria-label="Light controls" aria-live="polite">
-        <canvas id="colorWheelMini" class="color-wheel-mini" width="256" height="256" role="img" aria-label="Color picker"></canvas>
-        <div class="slider-group">
-          <div class="slider-row">
-            <span class="slider-icon" aria-hidden="true">💡</span>
-            <input type="range" class="slider" id="brightnessSlider" min="0" max="255" value="${avgState.brightness}" aria-label="Brightness">
-            <span class="slider-value" id="brightnessValue">${Math.round((avgState.brightness/255)*100)}%</span>
-          </div>
-          <div class="slider-row">
-            <span class="slider-icon" aria-hidden="true">🌡️</span>
-            <input type="range" class="slider temperature" id="temperatureSlider" min="${tempRange.min}" max="${tempRange.max}" value="${clampedTemp}" aria-label="Color temperature">
-            <span class="slider-value" id="temperatureValue">${clampedTemp}K</span>
+        <div class="controls-main">
+          <canvas id="colorWheelMini" class="color-wheel-mini" width="256" height="256" role="img" aria-label="Color picker"></canvas>
+          <div class="slider-group">
+            <div class="slider-row">
+              <span class="slider-icon" aria-hidden="true">💡</span>
+              <input type="range" class="slider" id="brightnessSlider" min="0" max="255" value="${avgState.brightness}" aria-label="Brightness">
+              <span class="slider-value" id="brightnessValue">${Math.round((avgState.brightness/255)*100)}%</span>
+            </div>
+            <div class="slider-row">
+              <span class="slider-icon" aria-hidden="true">🌡️</span>
+              <input type="range" class="slider temperature" id="temperatureSlider" min="${tempRange.min}" max="${tempRange.max}" value="${clampedTemp}" aria-label="Color temperature">
+              <span class="slider-value" id="temperatureValue">${clampedTemp}K</span>
+            </div>
           </div>
         </div>
+        ${this._renderSceneActionRow()}
       </div>
     `;
   }
@@ -969,19 +1006,22 @@ class SpatialLightColorCard extends HTMLElement {
     const clampedTemp = this._clampTemperature(avgState.temperature, tempRange);
     return `
       <div class="controls-below" id="controlsBelow" role="region" aria-label="Light controls" aria-live="polite">
-        <canvas id="colorWheelMini" class="color-wheel-mini" width="256" height="256" role="img" aria-label="Color picker"></canvas>
-        <div class="slider-group">
-          <div class="slider-row">
-            <span class="slider-icon" aria-hidden="true">💡</span>
-            <input type="range" class="slider" id="brightnessSlider" min="0" max="255" value="${avgState.brightness}" aria-label="Brightness">
-            <span class="slider-value" id="brightnessValue">${Math.round((avgState.brightness/255)*100)}%</span>
-          </div>
-          <div class="slider-row">
-            <span class="slider-icon" aria-hidden="true">🌡️</span>
-            <input type="range" class="slider temperature" id="temperatureSlider" min="${tempRange.min}" max="${tempRange.max}" value="${clampedTemp}" aria-label="Color temperature">
-            <span class="slider-value" id="temperatureValue">${clampedTemp}K</span>
+        <div class="controls-main">
+          <canvas id="colorWheelMini" class="color-wheel-mini" width="256" height="256" role="img" aria-label="Color picker"></canvas>
+          <div class="slider-group">
+            <div class="slider-row">
+              <span class="slider-icon" aria-hidden="true">💡</span>
+              <input type="range" class="slider" id="brightnessSlider" min="0" max="255" value="${avgState.brightness}" aria-label="Brightness">
+              <span class="slider-value" id="brightnessValue">${Math.round((avgState.brightness/255)*100)}%</span>
+            </div>
+            <div class="slider-row">
+              <span class="slider-icon" aria-hidden="true">🌡️</span>
+              <input type="range" class="slider temperature" id="temperatureSlider" min="${tempRange.min}" max="${tempRange.max}" value="${clampedTemp}" aria-label="Color temperature">
+              <span class="slider-value" id="temperatureValue">${clampedTemp}K</span>
+            </div>
           </div>
         </div>
+        ${this._renderSceneActionRow()}
       </div>
     `;
   }
@@ -1001,6 +1041,10 @@ class SpatialLightColorCard extends HTMLElement {
           <div class="settings-option">
             <span>Show Entity Icons</span>
             <button class="toggle ${this._config.show_entity_icons ? 'on' : ''}" id="iconToggle" role="switch" aria-checked="${this._config.show_entity_icons}" aria-label="Show entity icons"></button>
+          </div>
+          <div class="settings-option">
+            <span>Show Scene Creation</span>
+            <button class="toggle ${this._config.show_scene_create_button ? 'on' : ''}" id="sceneToggle" role="switch" aria-checked="${this._config.show_scene_create_button}" aria-label="Show create scene button"></button>
           </div>
         </div>
         <div class="settings-section">
@@ -1185,6 +1229,15 @@ class SpatialLightColorCard extends HTMLElement {
       });
     }
 
+    if (this._els.sceneToggle) {
+      this._els.sceneToggle.addEventListener('click', () => {
+        this._config.show_scene_create_button = !this._config.show_scene_create_button;
+        this._els.sceneToggle.classList.toggle('on', this._config.show_scene_create_button);
+        this._els.sceneToggle.setAttribute('aria-checked', String(this._config.show_scene_create_button));
+        this._syncSceneActionVisibility();
+      });
+    }
+
     if (this._els.rearrangeBtn) {
       this._els.rearrangeBtn.addEventListener('click', () => {
         this._rearrangeAllLights();
@@ -1290,6 +1343,10 @@ class SpatialLightColorCard extends HTMLElement {
     if (this._els.temperatureSlider) {
       this._els.temperatureSlider.addEventListener('input', (e) => this._handleTemperatureInput(e));
       this._els.temperatureSlider.addEventListener('change', () => this._handleTemperatureChange());
+    }
+
+    if (this._els.createSceneBtn) {
+      this._els.createSceneBtn.addEventListener('click', () => this._createSceneFromSelection());
     }
   }
 
@@ -1732,6 +1789,43 @@ class SpatialLightColorCard extends HTMLElement {
     this._pendingTemperature = null;
   }
 
+  _slugifySceneId(value) {
+    return String(value || '')
+      .toLowerCase()
+      .replace(/[^a-z0-9_]+/g, '_')
+      .replace(/^_+|_+$/g, '')
+      .replace(/_{2,}/g, '_');
+  }
+
+  _createSceneFromSelection() {
+    if (!this._hass || !this._config.show_scene_create_button) return;
+    const entities = [...this._selectedLights];
+    if (entities.length === 0) return;
+
+    const baseName = entities.length === 1
+      ? `${this._generateLabel(entities[0])} scene`
+      : 'Selected lights scene';
+    const nameInput = typeof window !== 'undefined' && typeof window.prompt === 'function'
+      ? window.prompt('Name your new scene (ID will be generated automatically):', baseName)
+      : baseName;
+    const sceneName = (nameInput || '').trim();
+    if (!sceneName) return;
+
+    const derivedId = this._slugifySceneId(sceneName);
+    const defaultId = derivedId || this._slugifySceneId(baseName) || 'new_scene';
+    const idInput = typeof window !== 'undefined' && typeof window.prompt === 'function'
+      ? window.prompt('Enter a scene ID to save:', defaultId)
+      : defaultId;
+    const sceneId = this._slugifySceneId(idInput || defaultId);
+    if (!sceneId) return;
+
+    this._hass.callService('scene', 'create', {
+      scene_id: sceneId,
+      name: sceneName,
+      snapshot_entities: entities,
+    });
+  }
+
   _requestColorWheelDraw(force = false) {
     if (this._colorWheelFrame) return;
     const schedule = typeof requestAnimationFrame === 'function'
@@ -1867,6 +1961,18 @@ class SpatialLightColorCard extends HTMLElement {
       this._requestColorWheelDraw();
     }
     this._refreshEntityIcons();
+    this._syncSceneActionVisibility();
+  }
+
+  _syncSceneActionVisibility() {
+    if (!this._els.sceneActionRow || !this._els.createSceneBtn) return;
+    const showButton = this._config.show_scene_create_button && this._selectedLights.size > 0;
+    this._els.sceneActionRow.classList.toggle('hidden', !showButton);
+    this._els.createSceneBtn.disabled = !showButton;
+    const label = showButton
+      ? `Create scene from ${this._selectedLights.size} selected light${this._selectedLights.size === 1 ? '' : 's'}`
+      : 'Select lights to create a scene';
+    this._els.createSceneBtn.textContent = label;
   }
 
   /** ---------- YAML generation ---------- */
@@ -1883,6 +1989,7 @@ class SpatialLightColorCard extends HTMLElement {
     yamlLines.push(`controls_below: ${!!this._config.controls_below}`);
     yamlLines.push(`show_entity_icons: ${!!this._config.show_entity_icons}`);
     yamlLines.push(`icon_style: ${this._config.icon_style}`);
+    yamlLines.push(`show_scene_create_button: ${!!this._config.show_scene_create_button}`);
     if (this._config.default_entity) yamlLines.push(`default_entity: ${this._config.default_entity}`);
     if (Number.isFinite(this._config.temperature_min)) yamlLines.push(`temperature_min: ${this._config.temperature_min}`);
     if (Number.isFinite(this._config.temperature_max)) yamlLines.push(`temperature_max: ${this._config.temperature_max}`);
@@ -1928,6 +2035,7 @@ class SpatialLightColorCard extends HTMLElement {
       canvas_height: 450, grid_size: 25, label_mode: 'smart',
       show_settings_button: true, always_show_controls: false, controls_below: true,
       default_entity: null, show_entity_icons: false, icon_style: 'mdi',
+      show_scene_create_button: false,
     };
   }
 }

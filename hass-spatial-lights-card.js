@@ -58,6 +58,7 @@ class SpatialLightColorCard extends HTMLElement {
       settingsPanel: null,
       lockToggle: null,
       iconToggle: null,
+      switchTapToggle: null,
       rearrangeBtn: null,
       exportBtn: null,
       yamlModal: null,
@@ -131,6 +132,7 @@ class SpatialLightColorCard extends HTMLElement {
       default_entity: config.default_entity || null,
       controls_below: config.controls_below !== false,
       show_entity_icons: config.show_entity_icons || false,
+      switch_single_tap: config.switch_single_tap || false,
       icon_style: config.icon_style || 'mdi', // 'mdi' or 'emoji' (emoji kept as fallback only)
       temperature_min: Number.isFinite(tempMin) ? tempMin : null,
       temperature_max: Number.isFinite(tempMax) ? tempMax : null,
@@ -349,9 +351,9 @@ class SpatialLightColorCard extends HTMLElement {
     const stateObj = this._hass.states?.[entity];
     if (!stateObj) return;
     const [domain] = entity.split('.');
-    if (domain !== 'light') return;
+    if (domain !== 'light' && domain !== 'switch') return;
     const service = stateObj.state === 'on' ? 'turn_off' : 'turn_on';
-    this._hass.callService('light', service, { entity_id: entity });
+    this._hass.callService(domain, service, { entity_id: entity });
   }
 
   _openMoreInfo(entity) {
@@ -633,6 +635,7 @@ class SpatialLightColorCard extends HTMLElement {
     this._els.settingsPanel = this.shadowRoot.getElementById('settingsPanel');
     this._els.lockToggle = this.shadowRoot.getElementById('lockToggle');
     this._els.iconToggle = this.shadowRoot.getElementById('iconToggle');
+    this._els.switchTapToggle = this.shadowRoot.getElementById('switchTapToggle');
     this._els.rearrangeBtn = this.shadowRoot.getElementById('rearrangeBtn');
     this._els.exportBtn = this.shadowRoot.getElementById('exportBtn');
     this._els.yamlModal = this.shadowRoot.getElementById('yamlModal');
@@ -1004,6 +1007,13 @@ class SpatialLightColorCard extends HTMLElement {
           </div>
         </div>
         <div class="settings-section">
+          <div class="settings-label">Interaction</div>
+          <div class="settings-option">
+            <span>Single-Tap Switch Toggle</span>
+            <button class="toggle ${this._config.switch_single_tap ? 'on' : ''}" id="switchTapToggle" role="switch" aria-checked="${this._config.switch_single_tap}" aria-label="Toggle switches with a single tap"></button>
+          </div>
+        </div>
+        <div class="settings-section">
           <div class="settings-label">Layout</div>
           <button class="settings-button" id="rearrangeBtn">Rearrange All Lights</button>
         </div>
@@ -1182,6 +1192,14 @@ class SpatialLightColorCard extends HTMLElement {
         this._els.iconToggle.setAttribute('aria-checked', String(this._config.show_entity_icons));
         // Update light contents
         this._rerenderLightIconsOnly();
+      });
+    }
+
+    if (this._els.switchTapToggle) {
+      this._els.switchTapToggle.addEventListener('click', () => {
+        this._config.switch_single_tap = !this._config.switch_single_tap;
+        this._els.switchTapToggle.classList.toggle('on', this._config.switch_single_tap);
+        this._els.switchTapToggle.setAttribute('aria-checked', String(this._config.switch_single_tap));
       });
     }
 
@@ -1383,6 +1401,8 @@ class SpatialLightColorCard extends HTMLElement {
     if (targetLight) {
       const entity = targetLight.dataset.entity;
       const pointerType = e.pointerType || 'mouse';
+      const [domain] = entity.split('.');
+      const toggleOnSingleTap = this._config.switch_single_tap && domain === 'switch';
       if (this._lockPositions) {
         const additive = e.shiftKey || e.ctrlKey || e.metaKey;
         if (this._longPressTimer) {
@@ -1409,8 +1429,18 @@ class SpatialLightColorCard extends HTMLElement {
             startY: e.clientY,
             additive,
             pointerType,
+            toggleOnSingleTap,
           };
         } else {
+          if (toggleOnSingleTap) {
+            const now = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+            const isRepeat = this._lastTap && this._lastTap.entity === entity && (now - this._lastTap.time) < 350;
+            if (!isRepeat) {
+              this._toggleEntity(entity);
+            }
+            this._lastTap = { entity, time: now };
+            return;
+          }
           const newSelection = new Set(this._selectedLights);
           if (additive) {
             if (newSelection.has(entity)) newSelection.delete(entity);
@@ -1561,7 +1591,13 @@ class SpatialLightColorCard extends HTMLElement {
       if (!this._longPressTriggered) {
         const now = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
         const isTouch = this._pendingTap.pointerType === 'touch' || this._pendingTap.pointerType === 'pen';
-        if (isTouch && this._lastTap && this._lastTap.entity === this._pendingTap.entity && (now - this._lastTap.time) < 350) {
+        if (this._pendingTap.toggleOnSingleTap) {
+          const isRepeat = this._lastTap && this._lastTap.entity === this._pendingTap.entity && (now - this._lastTap.time) < 350;
+          if (!isRepeat) {
+            this._toggleEntity(this._pendingTap.entity);
+          }
+          this._lastTap = { entity: this._pendingTap.entity, time: now };
+        } else if (isTouch && this._lastTap && this._lastTap.entity === this._pendingTap.entity && (now - this._lastTap.time) < 350) {
           this._toggleEntity(this._pendingTap.entity);
           this._lastTap = null;
         } else {
@@ -1596,6 +1632,10 @@ class SpatialLightColorCard extends HTMLElement {
     if (!targetLight) return;
     const entity = targetLight.dataset.entity;
     if (!entity) return;
+    const [domain] = entity.split('.');
+    if (this._config.switch_single_tap && domain === 'switch') {
+      return;
+    }
     e.preventDefault();
     this._toggleEntity(entity);
     this._lastTap = null;
@@ -1882,6 +1922,7 @@ class SpatialLightColorCard extends HTMLElement {
     yamlLines.push(`always_show_controls: ${!!this._config.always_show_controls}`);
     yamlLines.push(`controls_below: ${!!this._config.controls_below}`);
     yamlLines.push(`show_entity_icons: ${!!this._config.show_entity_icons}`);
+    yamlLines.push(`switch_single_tap: ${!!this._config.switch_single_tap}`);
     yamlLines.push(`icon_style: ${this._config.icon_style}`);
     if (this._config.default_entity) yamlLines.push(`default_entity: ${this._config.default_entity}`);
     if (Number.isFinite(this._config.temperature_min)) yamlLines.push(`temperature_min: ${this._config.temperature_min}`);

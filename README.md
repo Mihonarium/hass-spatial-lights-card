@@ -131,6 +131,7 @@ positions:
 | `always_show_controls` | boolean | `false` | Always show color controls even when nothing selected |
 | `controls_below` | boolean | `true` | Render controls below (`true`) or floating over (`false`) |
 | `default_entity` | string | `null` | Entity to control when nothing is selected |
+| `switch_single_tap` | boolean | `false` | Toggle switch entities with a single tap instead of just selecting them |
 
 > ℹ️ **Label modes:** `smart` uses friendly names when available, falling back to entity IDs. Override individual entities with `label_overrides`.
 
@@ -140,6 +141,7 @@ positions:
 
 ### Desktop
 - **Click** to select a light.
+- **Double-click** a light or switch to toggle it (switches can toggle on a single tap if `switch_single_tap` is enabled).
 - **Shift+Click** to add to the current selection.
 - **Drag** to create a marquee selection (when nothing is selected).
 - **Unlock** in settings to drag lights around the canvas.
@@ -147,6 +149,7 @@ positions:
 
 ### Mobile
 - **Tap** to select a light.
+- **Double-tap** a light or switch to toggle it (switches can toggle on a single tap if `switch_single_tap` is enabled).
 - **Long press** (~500 ms) to add to the selection.
 - **Drag** with an empty selection to select an area.
 - **Unlock** in settings to drag lights.

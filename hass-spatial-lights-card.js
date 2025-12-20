@@ -797,12 +797,12 @@ class SpatialLightColorCard extends HTMLElement {
       }
 
       .slider-group { display:flex; flex-direction:column; gap:10px; min-width: 240px; flex:1; width:100%; }
-      .slider-row { display:flex; align-items:center; gap:12px; width:100%; padding: 2px 0; }
+      .slider-row { display:flex; align-items:center; gap:8px; width:100%; padding: 2px 0; }
 
       .slider {
         flex:1; -webkit-appearance:none; appearance:none;
         --slider-height: 20px;
-        --slider-thumb-size: 30px;
+        --slider-thumb-size: 24px;
         --slider-track-radius: 9999px;
         --slider-percent: 50%;
         --slider-fill: var(--accent-primary);
@@ -811,11 +811,11 @@ class SpatialLightColorCard extends HTMLElement {
           var(--slider-fill) var(--slider-percent),
           var(--surface-tertiary) var(--slider-percent),
           var(--surface-tertiary) 100%);
-        height: calc(var(--slider-height) + 6px);
+        height: var(--slider-height);
         border-radius: var(--slider-track-radius);
         background: var(--slider-track);
-        outline:none; position:relative; cursor:pointer; border:1px solid var(--border-subtle);
-        box-shadow: inset 0 1px 0 rgba(255,255,255,0.04), var(--shadow-sm);
+        outline:none; position:relative; cursor:pointer;
+        box-shadow: inset 0 1px 0 rgba(255,255,255,0.05), inset 0 -1px 0 rgba(0,0,0,0.12), var(--shadow-sm);
       }
       .slider.temperature {
         --slider-track: linear-gradient(to right,
@@ -832,7 +832,6 @@ class SpatialLightColorCard extends HTMLElement {
             rgba(255,255,255,0.08) var(--slider-percent),
             rgba(255,255,255,0.08) 100%),
           var(--slider-track);
-        border: 1px solid rgba(255,255,255,0.12);
       }
       .slider::-webkit-slider-thumb {
         -webkit-appearance:none; width:var(--slider-thumb-size); height:var(--slider-thumb-size); border-radius:9999px;
@@ -1128,11 +1127,11 @@ class SpatialLightColorCard extends HTMLElement {
   _bindSliderGesture(el) {
     if (!el || !el.addEventListener) return;
     const state = { pointerId: null, startX: 0, startY: 0, startValue: null, mode: 'idle' };
-    const reset = () => {
+    const reset = (keepIgnore = false) => {
       state.pointerId = null;
       state.mode = 'idle';
       state.startValue = null;
-      el.dataset.ignoreChange = 'false';
+      if (!keepIgnore) el.dataset.ignoreChange = 'false';
     };
 
     el.addEventListener('pointerdown', (e) => {
@@ -1150,7 +1149,7 @@ class SpatialLightColorCard extends HTMLElement {
       if (state.pointerId !== e.pointerId) return;
       const dx = e.clientX - state.startX;
       const dy = e.clientY - state.startY;
-      const threshold = 6;
+      const threshold = 4;
 
       if (state.mode === 'pending') {
         if (Math.abs(dx) > Math.abs(dy) && Math.abs(dx) > threshold) {
@@ -1182,11 +1181,16 @@ class SpatialLightColorCard extends HTMLElement {
       if (state.pointerId !== null && el.hasPointerCapture && el.hasPointerCapture(state.pointerId)) {
         el.releasePointerCapture(state.pointerId);
       }
-      if (state.mode === 'vertical' && state.startValue != null) {
+      const wasVertical = state.mode === 'vertical';
+      if (wasVertical && state.startValue != null) {
         el.value = state.startValue;
         this._updateSliderVisual(el);
       }
-      reset();
+      reset(wasVertical);
+      if (wasVertical) {
+        // Ensure change event ignores the reverted scroll interaction.
+        setTimeout(() => { el.dataset.ignoreChange = 'false'; }, 0);
+      }
     };
 
     el.addEventListener('pointerup', end);

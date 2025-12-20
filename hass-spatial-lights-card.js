@@ -1137,71 +1137,96 @@ class SpatialLightColorCard extends HTMLElement {
 
   _bindSliderGesture(el) {
     if (!el || !el.addEventListener) return;
-    const state = { pointerId: null, startX: 0, startY: 0, startValue: null, mode: 'idle' };
-    const reset = (keepIgnore = false) => {
+    const state = {
+      pointerId: null,
+      startValue: null,
+      startScroll: null,
+      verticalScroll: false,
+      active: false,
+    };
+    const updateLabel = (value) => {
+      const labelId = el.id === 'temperatureSlider' ? 'temperatureValue' : 'brightnessValue';
+      const labelEl = this.shadowRoot?.getElementById(labelId);
+      if (!labelEl) return;
+      if (el.id === 'temperatureSlider') {
+        labelEl.textContent = `${Math.round(value)}K`;
+      } else {
+        labelEl.textContent = `${Math.round((value / 255) * 100)}%`;
+      }
+    };
+    const clearPending = () => {
+      if (el.id === 'temperatureSlider') {
+        this._pendingTemperature = null;
+      } else {
+        this._pendingBrightness = null;
+      }
+    };
+    const applyFromPointer = (evt) => {
+      const rect = el.getBoundingClientRect();
+      const min = parseFloat(el.min || '0');
+      const max = parseFloat(el.max || '100');
+      const ratio = rect.width > 0 ? (evt.clientX - rect.left) / rect.width : 0;
+      const clamped = Math.min(1, Math.max(0, ratio));
+      const value = min + clamped * (max - min);
+      const rounded = Math.round(value);
+      el.value = String(rounded);
+      el.dataset.ignoreChange = state.verticalScroll ? 'true' : 'false';
+      if (el.id === 'temperatureSlider') {
+        this._handleTemperatureInput({ target: el });
+      } else {
+        this._handleBrightnessInput({ target: el });
+      }
+      updateLabel(rounded);
+    };
+    const reset = () => {
       state.pointerId = null;
-      state.mode = 'idle';
       state.startValue = null;
-      if (!keepIgnore) el.dataset.ignoreChange = 'false';
+      state.startScroll = null;
+      state.verticalScroll = false;
+      state.active = false;
     };
 
     el.addEventListener('pointerdown', (e) => {
       state.pointerId = e.pointerId;
-      state.startX = e.clientX;
-      state.startY = e.clientY;
       state.startValue = el.value;
+      state.startScroll = this._getScrollPosition();
+      state.verticalScroll = false;
+      state.active = true;
       el.dataset.startValue = el.value;
-      state.mode = 'pending';
       el.dataset.ignoreChange = 'false';
       if (el.setPointerCapture) el.setPointerCapture(e.pointerId);
+      applyFromPointer(e);
     });
 
     el.addEventListener('pointermove', (e) => {
-      if (state.pointerId !== e.pointerId) return;
-      const dx = e.clientX - state.startX;
-      const dy = e.clientY - state.startY;
-      const threshold = 4;
-
-      if (state.mode === 'pending') {
-        if (Math.abs(dx) > Math.abs(dy) && Math.abs(dx) > threshold) {
-          state.mode = 'horizontal';
-        } else if (Math.abs(dy) > Math.abs(dx) && Math.abs(dy) > threshold) {
-          state.mode = 'vertical';
-          el.dataset.ignoreChange = 'true';
-          el.value = state.startValue;
-          this._updateSliderVisual(el);
-          const labelId = el.id === 'temperatureSlider' ? 'temperatureValue' : 'brightnessValue';
-          const labelEl = this.shadowRoot.getElementById(labelId);
-          if (labelEl) {
-            if (el.id === 'temperatureSlider') {
-              labelEl.textContent = `${parseInt(state.startValue, 10)}K`;
-            } else {
-              labelEl.textContent = `${Math.round((parseInt(state.startValue, 10) / 255) * 100)}%`;
-            }
-          }
-        }
-      }
-
-      if (state.mode === 'vertical') {
+      if (state.pointerId !== e.pointerId || !state.active) return;
+      const scrollPos = this._getScrollPosition();
+      if (scrollPos.x !== state.startScroll?.x || scrollPos.y !== state.startScroll?.y) {
+        state.verticalScroll = true;
+        el.dataset.ignoreChange = 'true';
         el.value = state.startValue;
         this._updateSliderVisual(el);
+        updateLabel(parseFloat(state.startValue));
+        clearPending();
+        return;
       }
+      applyFromPointer(e);
     });
 
     const end = (e) => {
-      if (state.pointerId !== null && el.hasPointerCapture && el.hasPointerCapture(state.pointerId)) {
+      if (state.pointerId === null || state.pointerId !== e.pointerId) return;
+      if (el.hasPointerCapture?.(state.pointerId)) {
         el.releasePointerCapture(state.pointerId);
       }
-      const wasVertical = state.mode === 'vertical';
-      if (wasVertical && state.startValue != null) {
+      if (state.verticalScroll && state.startValue != null) {
+        el.dataset.ignoreChange = 'true';
         el.value = state.startValue;
         this._updateSliderVisual(el);
-      }
-      reset(wasVertical);
-      if (wasVertical) {
-        // Ensure change event ignores the reverted scroll interaction.
+        updateLabel(parseFloat(state.startValue));
+        clearPending();
         setTimeout(() => { el.dataset.ignoreChange = 'false'; }, 0);
       }
+      reset();
     };
 
     el.addEventListener('pointerup', end);

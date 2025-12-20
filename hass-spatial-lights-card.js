@@ -781,14 +781,14 @@ class SpatialLightColorCard extends HTMLElement {
         border: 1px solid var(--border-medium); border-radius: 12px; padding: 16px 20px;
         display: flex; gap: 20px; align-items: center; box-shadow: var(--shadow-md);
         opacity: 0; pointer-events: none; transition: opacity var(--transition-base);
-        z-index: 50;
+        z-index: 50; width: calc(100% - 32px); max-width: 1080px;
       }
       .controls-floating.visible { opacity: 1; pointer-events: auto; }
 
       .controls-below {
         padding: 20px; border-top: 1px solid var(--border-subtle); background: var(--surface-secondary);
         display: ${this._config.always_show_controls || this._selectedLights.size > 0 || this._config.default_entity ? 'flex' : 'none'};
-        gap: 24px; align-items: center; justify-content: center;
+        gap: 24px; align-items: stretch; justify-content: center; width: 100%; flex-wrap: wrap;
       }
 
       .color-wheel-mini {
@@ -796,32 +796,46 @@ class SpatialLightColorCard extends HTMLElement {
         border: 2px solid var(--border-subtle); box-shadow: var(--shadow-sm); flex-shrink: 0;
       }
 
-      .slider-group { display:flex; flex-direction:column; gap:12px; min-width: 220px; flex:1; max-width: 480px; }
-      .slider-row { display:flex; align-items:center; gap:12px; }
+      .slider-group { display:flex; flex-direction:column; gap:16px; min-width: 280px; flex:1 1 480px; width: 100%; max-width: 100%; }
+      .slider-row {
+        display:grid; grid-template-columns: auto 1fr auto; align-items:center; gap:12px;
+        background: var(--surface-elevated); border: 1px solid var(--border-subtle); border-radius: 14px;
+        padding: 12px 14px;
+      }
       .slider-icon { font-size: 16px; opacity: 0.65; width: 20px; text-align:center; flex-shrink:0; }
 
       .slider {
-        flex:1; -webkit-appearance:none; height:8px; border-radius:9999px; background: var(--surface-tertiary);
-        outline:none; position:relative; cursor:pointer; border:1px solid var(--border-subtle);
+        flex:1; -webkit-appearance:none; appearance:none; height: 28px;
+        border-radius:9999px; background: transparent;
+        outline:none; position:relative; cursor:pointer; border:none; padding: 6px 0;
       }
       .slider.temperature {
-        background: linear-gradient(to right,
+        --slider-track-bg: linear-gradient(to right,
           #ff9944 0%,
           #ffd480 30%,
           #ffffff 50%,
           #87ceeb 70%,
           #4d9fff 100%
         );
-        border: 1px solid rgba(255,255,255,0.1);
+        --slider-track-border: transparent;
+      }
+      .slider:focus-visible { outline: 2px solid var(--accent-primary); outline-offset: 4px; }
+      .slider::-webkit-slider-runnable-track {
+        height: 14px; border-radius: 9999px; background: var(--slider-track-bg, var(--surface-tertiary));
+        border: 1px solid var(--slider-track-border, var(--border-subtle));
+      }
+      .slider::-moz-range-track {
+        height: 14px; border-radius: 9999px; background: var(--slider-track-bg, var(--surface-tertiary));
+        border: 1px solid var(--slider-track-border, var(--border-subtle));
       }
       .slider::-webkit-slider-thumb {
-        -webkit-appearance:none; width:20px; height:20px; border-radius:9999px;
+        -webkit-appearance:none; width:26px; height:26px; border-radius:9999px;
         background: var(--text-primary); border:2px solid var(--surface-primary); box-shadow: var(--shadow-sm);
-        transition: transform var(--transition-fast);
+        transition: transform var(--transition-fast); margin-top: -6px;
       }
       .slider::-webkit-slider-thumb:hover { transform: scale(1.08); }
       .slider::-moz-range-thumb {
-        width:20px; height:20px; border-radius:9999px; background: var(--text-primary);
+        width:26px; height:26px; border-radius:9999px; background: var(--text-primary);
         border:2px solid var(--surface-primary); box-shadow: var(--shadow-sm);
       }
       .slider-value { font-size: 13px; color: var(--text-secondary); min-width: 52px; text-align:right; font-weight: 600; }

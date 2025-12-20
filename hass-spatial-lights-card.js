@@ -137,6 +137,12 @@ class SpatialLightColorCard extends HTMLElement {
       temperature_min: Number.isFinite(tempMin) ? tempMin : null,
       temperature_max: Number.isFinite(tempMax) ? tempMax : null,
       background_image: backgroundImage,
+      
+      // Color customization
+      switch_on_color: config.switch_on_color || '#ffa500',
+      switch_off_color: config.switch_off_color || '#2a2a2a',
+      scene_color: config.scene_color || '#6366f1',
+      color_overrides: config.color_overrides || {},
     };
 
     this._gridSize = this._config.grid_size;
@@ -236,8 +242,11 @@ class SpatialLightColorCard extends HTMLElement {
   /** ---------- Icon system (SVG via HA components) ---------- */
   _getEntityIconData(entity_id) {
     const st = this._hass?.states[entity_id];
-    if (!st) return { type: 'mdi', value: 'mdi:lightbulb' };
-    const icon = st.attributes.icon || 'mdi:lightbulb';
+    if (!st) {
+      if (entity_id.startsWith('scene.')) return { type: 'mdi', value: 'mdi:palette' };
+      return { type: 'mdi', value: 'mdi:lightbulb' };
+    }
+    const icon = st.attributes.icon || (entity_id.startsWith('scene.') ? 'mdi:palette' : 'mdi:lightbulb');
     if (this._config.icon_style === 'emoji') {
       // Fallback only; discouraged in this upgrade
       return { type: 'emoji', value: '💡' };
@@ -351,6 +360,12 @@ class SpatialLightColorCard extends HTMLElement {
     const stateObj = this._hass.states?.[entity];
     if (!stateObj) return;
     const [domain] = entity.split('.');
+    
+    if (domain === 'scene') {
+      this._hass.callService('scene', 'turn_on', { entity_id: entity });
+      return;
+    }
+
     if (domain !== 'light' && domain !== 'switch') return;
     const service = stateObj.state === 'on' ? 'turn_off' : 'turn_on';
     this._hass.callService(domain, service, { entity_id: entity });
@@ -750,7 +765,9 @@ class SpatialLightColorCard extends HTMLElement {
         content:''; position:absolute; inset:-6px; border-radius:inherit; background:inherit; filter: blur(10px);
         opacity: 0.22; z-index: -1;
       }
-      .light.off { background: linear-gradient(135deg,#2a2a2a 0%, #1a1a1a 100%) !important; opacity: 0.45; }
+      /* Remove forced gradient, allow JS to override background if needed */
+      .light.off { opacity: 0.45; }
+      .light.off:not([style*="background"]) { background: linear-gradient(135deg,#2a2a2a 0%, #1a1a1a 100%); }
       .light.off::after { display:none; }
 
       .light-icon-emoji { font-size: 22px; line-height: 1; filter: drop-shadow(0 1px 2px rgba(0,0,0,0.6)); }
@@ -946,29 +963,69 @@ class SpatialLightColorCard extends HTMLElement {
     `;
   }
 
+  _resolveEntityColor(entity_id, isOn, attributes) {
+    const [domain] = entity_id.split('.');
+    const override = this._config.color_overrides?.[entity_id];
+
+    // Helper to extract override based on state
+    const getOverride = (state) => {
+      if (!override) return null;
+      if (typeof override === 'string') return state === 'on' ? override : null;
+      if (state === 'on') return override.state_on || override.on || null;
+      return override.state_off || override.off || null;
+    };
+
+    if (domain === 'scene') {
+      const ov = getOverride('on') || (typeof override === 'string' ? override : null);
+      return ov || this._config.scene_color;
+    }
+
+    if (isOn) {
+      const ov = getOverride('on');
+      if (ov) return ov;
+      
+      if (domain === 'switch') return this._config.switch_on_color;
+      
+      if (attributes && attributes.rgb_color) {
+        const [r, g, b] = attributes.rgb_color;
+        return `rgb(${r}, ${g}, ${b})`;
+      }
+      return '#ffa500';
+    } else {
+      const ov = getOverride('off');
+      if (ov) return ov;
+      
+      if (domain === 'switch') return this._config.switch_off_color;
+      return 'transparent';
+    }
+  }
+
   _renderLightsHTML() {
     return this._config.entities.map(entity_id => {
       const pos = this._config.positions[entity_id] || { x: 50, y: 50 };
       const st = this._hass?.states[entity_id];
       if (!st) return '';
 
+      const [domain] = entity_id.split('.');
       const isOn = st.state === 'on';
       const isSelected = this._selectedLights.has(entity_id);
       const label = this._generateLabel(entity_id);
 
-      let color = '#2a2a2a';
-      if (isOn && st.attributes.rgb_color) {
-        const [r, g, b] = st.attributes.rgb_color;
-        color = `rgb(${r}, ${g}, ${b})`;
-      } else if (isOn) {
-        color = '#ffa500';
-      }
+      const color = this._resolveEntityColor(entity_id, isOn, st.attributes);
 
       const iconData = this._config.show_entity_icons ? this._getEntityIconData(entity_id) : null;
+      const stateClass = (domain === 'scene' || isOn) ? 'on' : 'off';
+      
+      let style = `left:${pos.x}%; top:${pos.y}%;`;
+      if (color !== 'transparent') {
+        style += `background:${color};`;
+      } else {
+        style += `background:`; // Allow CSS gradient fallback
+      }
 
       return `
-        <div class="light ${isOn ? 'on' : 'off'} ${isSelected ? 'selected' : ''}"
-             style="left:${pos.x}%; top:${pos.y}%; background:${color};"
+        <div class="light ${stateClass} ${isSelected ? 'selected' : ''}"
+             style="${style}"
              data-entity="${entity_id}"
              tabindex="0"
              role="button"
@@ -1051,7 +1108,7 @@ class SpatialLightColorCard extends HTMLElement {
         <div class="settings-section">
           <div class="settings-label">Interaction</div>
           <div class="settings-option">
-            <span>Single-Tap Switch Toggle</span>
+            <span>Single-Tap Switch/Scene</span>
             <button class="toggle ${this._config.switch_single_tap ? 'on' : ''}" id="switchTapToggle" role="switch" aria-checked="${this._config.switch_single_tap}" aria-label="Toggle switches with a single tap"></button>
           </div>
         </div>
@@ -1230,8 +1287,6 @@ class SpatialLightColorCard extends HTMLElement {
     const thumbSize = 26;
     
     // Calculate the effective travel distance of the thumb's center
-    // 0% is at rect.left + (thumbSize / 2)
-    // 100% is at rect.right - (thumbSize / 2)
     const availableWidth = rect.width - thumbSize;
     
     // Offset relative to the start of the travel area
@@ -1580,7 +1635,9 @@ class SpatialLightColorCard extends HTMLElement {
       const entity = targetLight.dataset.entity;
       const pointerType = e.pointerType || 'mouse';
       const [domain] = entity.split('.');
-      const toggleOnSingleTap = this._config.switch_single_tap && domain === 'switch';
+      // Check if this entity type is configured to toggle on single tap
+      const toggleOnSingleTap = this._config.switch_single_tap && (domain === 'switch' || domain === 'scene');
+      
       if (this._lockPositions) {
         const additive = e.shiftKey || e.ctrlKey || e.metaKey;
         if (this._longPressTimer) {
@@ -1811,7 +1868,7 @@ class SpatialLightColorCard extends HTMLElement {
     const entity = targetLight.dataset.entity;
     if (!entity) return;
     const [domain] = entity.split('.');
-    if (this._config.switch_single_tap && domain === 'switch') {
+    if (this._config.switch_single_tap && (domain === 'switch' || domain === 'scene')) {
       return;
     }
     e.preventDefault();
@@ -2072,19 +2129,21 @@ class SpatialLightColorCard extends HTMLElement {
       const id = light.dataset.entity;
       const st = this._hass.states[id];
       if (!st) return;
-      const isOn = st.state === 'on';
 
-      let color = '#2a2a2a';
-      if (isOn && st.attributes.rgb_color) {
-        const [r, g, b] = st.attributes.rgb_color;
-        color = `rgb(${r}, ${g}, ${b})`;
-      } else if (isOn) {
-        color = '#ffa500';
+      const [domain] = id.split('.');
+      const isOn = st.state === 'on';
+      const isScene = domain === 'scene';
+
+      const color = this._resolveEntityColor(id, isOn, st.attributes);
+
+      if (color !== 'transparent') {
+        light.style.background = color;
+      } else {
+        light.style.background = ''; // Fallback to CSS
       }
 
-      light.style.background = isOn ? color : 'linear-gradient(135deg,#2a2a2a 0%, #1a1a1a 100%)';
-      light.classList.toggle('off', !isOn);
-      light.classList.toggle('on', isOn);
+      light.classList.toggle('off', !isOn && !isScene);
+      light.classList.toggle('on', isOn || isScene);
 
       // Ensure selected styling matches current selection set
       const selected = this._selectedLights.has(id);
@@ -2125,6 +2184,24 @@ class SpatialLightColorCard extends HTMLElement {
     if (this._config.default_entity) yamlLines.push(`default_entity: ${this._config.default_entity}`);
     if (Number.isFinite(this._config.temperature_min)) yamlLines.push(`temperature_min: ${this._config.temperature_min}`);
     if (Number.isFinite(this._config.temperature_max)) yamlLines.push(`temperature_max: ${this._config.temperature_max}`);
+
+    // Colors
+    if (this._config.switch_on_color !== '#ffa500') yamlLines.push(`switch_on_color: "${this._config.switch_on_color}"`);
+    if (this._config.switch_off_color !== '#2a2a2a') yamlLines.push(`switch_off_color: "${this._config.switch_off_color}"`);
+    if (this._config.scene_color !== '#6366f1') yamlLines.push(`scene_color: "${this._config.scene_color}"`);
+
+    if (this._config.color_overrides && Object.keys(this._config.color_overrides).length) {
+      yamlLines.push('color_overrides:');
+      Object.entries(this._config.color_overrides).forEach(([entity, val]) => {
+        if (typeof val === 'string') {
+          yamlLines.push(`${indent}${entity}: "${val}"`);
+        } else {
+          yamlLines.push(`${indent}${entity}:`);
+          if (val.state_on) yamlLines.push(`${indent}${indent}state_on: "${val.state_on}"`);
+          if (val.state_off) yamlLines.push(`${indent}${indent}state_off: "${val.state_off}"`);
+        }
+      });
+    }
 
     if (this._config.label_overrides && Object.keys(this._config.label_overrides).length) {
       yamlLines.push('label_overrides:');
@@ -2167,6 +2244,7 @@ class SpatialLightColorCard extends HTMLElement {
       canvas_height: 450, grid_size: 25, label_mode: 'smart',
       show_settings_button: true, always_show_controls: false, controls_below: true,
       default_entity: null, show_entity_icons: false, icon_style: 'mdi',
+      switch_on_color: '#ffa500', switch_off_color: '#2a2a2a', scene_color: '#6366f1'
     };
   }
 }

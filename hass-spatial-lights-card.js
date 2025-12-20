@@ -801,7 +801,7 @@ class SpatialLightColorCard extends HTMLElement {
 
       .slider {
         flex:1; -webkit-appearance:none; appearance:none;
-        --slider-height: 20px;
+        --slider-height: 24px;
         --slider-thumb-size: 24px;
         --slider-track-radius: 9999px;
         --slider-percent: 50%;
@@ -814,6 +814,11 @@ class SpatialLightColorCard extends HTMLElement {
         height: var(--slider-height);
         border-radius: var(--slider-track-radius);
         background: var(--slider-track);
+        background-size: calc(100% - var(--slider-thumb-size)) 100%;
+        background-repeat: no-repeat;
+        background-position: center;
+        padding: 0 calc(var(--slider-thumb-size) / 2);
+        box-sizing: border-box;
         outline:none; position:relative; cursor:pointer;
         box-shadow: inset 0 1px 0 rgba(255,255,255,0.05), inset 0 -1px 0 rgba(0,0,0,0.12), var(--shadow-sm);
       }
@@ -837,7 +842,7 @@ class SpatialLightColorCard extends HTMLElement {
         -webkit-appearance:none; width:var(--slider-thumb-size); height:var(--slider-thumb-size); border-radius:9999px;
         background: var(--text-primary); border:3px solid var(--surface-primary); box-shadow: 0 2px 6px rgba(0,0,0,0.25);
         transition: transform var(--transition-fast), box-shadow var(--transition-fast);
-        margin-top: calc((var(--slider-height) - var(--slider-thumb-size)) / 2);
+        margin-top: 0;
       }
       .slider::-webkit-slider-thumb:hover { transform: scale(1.05); box-shadow: 0 3px 10px rgba(0,0,0,0.35); }
       .slider::-moz-range-thumb {
@@ -847,7 +852,7 @@ class SpatialLightColorCard extends HTMLElement {
       }
       .slider::-moz-range-thumb:hover { transform: scale(1.05); box-shadow: 0 3px 10px rgba(0,0,0,0.35); }
       .slider::-moz-range-track {
-        height: var(--slider-height);
+        height: 100%;
         border-radius: var(--slider-track-radius);
         background: var(--slider-track);
         border: none;

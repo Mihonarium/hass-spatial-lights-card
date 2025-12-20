@@ -1136,76 +1136,114 @@ class SpatialLightColorCard extends HTMLElement {
   }
 
   _bindSliderGesture(el) {
-    if (!el || !el.addEventListener) return;
-    const state = { pointerId: null, startX: 0, startY: 0, startValue: null, mode: 'idle' };
-    const reset = (keepIgnore = false) => {
-      state.pointerId = null;
-      state.mode = 'idle';
-      state.startValue = null;
-      if (!keepIgnore) el.dataset.ignoreChange = 'false';
+    if (!el) return;
+
+    const updateVisuals = () => {
+      this._updateSliderVisual(el);
+      // Manually update labels since programmatic changes don't fire input events
+      if (el.id === 'brightnessSlider' && this._els.brightnessValue) {
+        const pct = Math.round((parseInt(el.value, 10) / 255) * 100);
+        this._els.brightnessValue.textContent = `${pct}%`;
+      } else if (el.id === 'temperatureSlider' && this._els.temperatureValue) {
+        this._els.temperatureValue.textContent = `${el.value}K`;
+      }
+    };
+
+    const state = {
+      pointerId: null,
+      startX: 0,
+      startY: 0,
+      startValue: null,
+      isScrolling: false,
+      locked: false
     };
 
     el.addEventListener('pointerdown', (e) => {
+      // Prevent default browser dragging to ensure we handle the gesture
+      e.preventDefault();
+      el.setPointerCapture(e.pointerId);
+
       state.pointerId = e.pointerId;
       state.startX = e.clientX;
       state.startY = e.clientY;
       state.startValue = el.value;
-      el.dataset.startValue = el.value;
-      state.mode = 'pending';
-      el.dataset.ignoreChange = 'false';
-      if (el.setPointerCapture) el.setPointerCapture(e.pointerId);
+      state.isScrolling = false;
+      state.locked = false;
+
+      // Immediate update on tap start
+      this._applyPointerValue(el, e.clientX);
+      updateVisuals();
     });
 
     el.addEventListener('pointermove', (e) => {
       if (state.pointerId !== e.pointerId) return;
-      const dx = e.clientX - state.startX;
-      const dy = e.clientY - state.startY;
-      const threshold = 4;
+      if (state.isScrolling) return;
 
-      if (state.mode === 'pending') {
-        if (Math.abs(dx) > Math.abs(dy) && Math.abs(dx) > threshold) {
-          state.mode = 'horizontal';
-        } else if (Math.abs(dy) > Math.abs(dx) && Math.abs(dy) > threshold) {
-          state.mode = 'vertical';
-          el.dataset.ignoreChange = 'true';
+      const dx = Math.abs(e.clientX - state.startX);
+      const dy = Math.abs(e.clientY - state.startY);
+
+      // Check for scroll intent if not yet locked
+      if (!state.locked && (dx > 6 || dy > 6)) {
+        state.locked = true;
+        if (dy > dx) {
+          // Vertical scroll detected - Revert interaction
+          state.isScrolling = true;
           el.value = state.startValue;
-          this._updateSliderVisual(el);
-          const labelId = el.id === 'temperatureSlider' ? 'temperatureValue' : 'brightnessValue';
-          const labelEl = this.shadowRoot.getElementById(labelId);
-          if (labelEl) {
-            if (el.id === 'temperatureSlider') {
-              labelEl.textContent = `${parseInt(state.startValue, 10)}K`;
-            } else {
-              labelEl.textContent = `${Math.round((parseInt(state.startValue, 10) / 255) * 100)}%`;
-            }
-          }
+          updateVisuals();
+          el.releasePointerCapture(e.pointerId);
+          return;
         }
       }
 
-      if (state.mode === 'vertical') {
-        el.value = state.startValue;
-        this._updateSliderVisual(el);
-      }
+      // If we aren't scrolling, follow the finger
+      this._applyPointerValue(el, e.clientX);
+      updateVisuals();
     });
 
-    const end = (e) => {
-      if (state.pointerId !== null && el.hasPointerCapture && el.hasPointerCapture(state.pointerId)) {
-        el.releasePointerCapture(state.pointerId);
-      }
-      const wasVertical = state.mode === 'vertical';
-      if (wasVertical && state.startValue != null) {
-        el.value = state.startValue;
-        this._updateSliderVisual(el);
-      }
-      reset(wasVertical);
-      if (wasVertical) {
-        // Ensure change event ignores the reverted scroll interaction.
-        setTimeout(() => { el.dataset.ignoreChange = 'false'; }, 0);
+    const endInteraction = (e) => {
+      if (state.pointerId !== e.pointerId) return;
+      el.releasePointerCapture(e.pointerId);
+      state.pointerId = null;
+
+      if (!state.isScrolling) {
+        // Commit change
+        if (el.id === 'brightnessSlider') {
+          this._pendingBrightness = parseInt(el.value, 10);
+          this._handleBrightnessChange();
+        } else if (el.id === 'temperatureSlider') {
+          this._pendingTemperature = parseInt(el.value, 10);
+          this._handleTemperatureChange();
+        }
       }
     };
 
-    el.addEventListener('pointerup', end);
-    el.addEventListener('pointercancel', end);
+    el.addEventListener('pointerup', endInteraction);
+    el.addEventListener('pointercancel', endInteraction);
+  }
+
+  _applyPointerValue(el, clientX) {
+    const rect = el.getBoundingClientRect();
+    const min = parseFloat(el.min);
+    const max = parseFloat(el.max);
+    
+    // The thumb size matches CSS --slider-thumb-size: 26px
+    const thumbSize = 26;
+    
+    // Calculate the effective travel distance of the thumb's center
+    // 0% is at rect.left + (thumbSize / 2)
+    // 100% is at rect.right - (thumbSize / 2)
+    const availableWidth = rect.width - thumbSize;
+    
+    // Offset relative to the start of the travel area
+    const offset = clientX - rect.left - (thumbSize / 2);
+    
+    let pct = 0;
+    if (availableWidth > 0) {
+      pct = offset / availableWidth;
+    }
+    
+    pct = Math.max(0, Math.min(1, pct));
+    el.value = Math.round(min + pct * (max - min));
   }
 
   /** ---------- Events ---------- */
@@ -1439,6 +1477,7 @@ class SpatialLightColorCard extends HTMLElement {
       });
     }
     if (this._els.brightnessSlider) {
+      // Input/Change listeners kept for keyboard support but logic dominated by pointer events
       this._els.brightnessSlider.addEventListener('input', (e) => this._handleBrightnessInput(e));
       this._els.brightnessSlider.addEventListener('change', () => this._handleBrightnessChange());
       this._bindSliderGesture(this._els.brightnessSlider);

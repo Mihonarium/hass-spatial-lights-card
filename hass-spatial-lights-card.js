@@ -1137,11 +1137,54 @@ class SpatialLightColorCard extends HTMLElement {
 
   _bindSliderGesture(el) {
     if (!el || !el.addEventListener) return;
-    const state = { pointerId: null, startX: 0, startY: 0, startValue: null, mode: 'idle' };
+    const state = { pointerId: null, startX: 0, startY: 0, startValue: null, mode: 'idle', startScroll: null };
+    const updateLabel = (value) => {
+      const labelId = el.id === 'temperatureSlider' ? 'temperatureValue' : 'brightnessValue';
+      const labelEl = this.shadowRoot.getElementById(labelId);
+      if (!labelEl) return;
+      if (el.id === 'temperatureSlider') {
+        labelEl.textContent = `${parseInt(value, 10)}K`;
+      } else {
+        labelEl.textContent = `${Math.round((parseInt(value, 10) / 255) * 100)}%`;
+      }
+    };
+    const applyValueFromPointer = (e, emitInput = true) => {
+      const rect = el.getBoundingClientRect();
+      if (!rect || rect.width === 0) return;
+      const min = parseFloat(el.min || '0');
+      const max = parseFloat(el.max || '100');
+      const stepAttr = parseFloat(el.step || '1');
+      const step = Number.isFinite(stepAttr) && stepAttr > 0 ? stepAttr : 1;
+      const ratioRaw = (e.clientX - rect.left) / rect.width;
+      const ratio = Math.min(1, Math.max(0, ratioRaw));
+      const rawValue = min + ratio * (max - min);
+      const snapped = Math.round((rawValue - min) / step) * step + min;
+      const clamped = Math.min(max, Math.max(min, snapped));
+      el.value = `${clamped}`;
+      this._updateSliderVisual(el);
+      updateLabel(el.value);
+      if (emitInput) {
+        el.dispatchEvent(new Event('input', { bubbles: true }));
+      }
+    };
+    const revertToStart = () => {
+      if (state.startValue != null) {
+        el.value = state.startValue;
+        this._updateSliderVisual(el);
+        updateLabel(state.startValue);
+      }
+      if (el.id === 'temperatureSlider') {
+        this._pendingTemperature = null;
+      } else {
+        this._pendingBrightness = null;
+      }
+      el.dataset.ignoreChange = 'true';
+    };
     const reset = (keepIgnore = false) => {
       state.pointerId = null;
       state.mode = 'idle';
       state.startValue = null;
+      state.startScroll = null;
       if (!keepIgnore) el.dataset.ignoreChange = 'false';
     };
 
@@ -1150,10 +1193,12 @@ class SpatialLightColorCard extends HTMLElement {
       state.startX = e.clientX;
       state.startY = e.clientY;
       state.startValue = el.value;
+      state.startScroll = this._getScrollPosition();
       el.dataset.startValue = el.value;
       state.mode = 'pending';
       el.dataset.ignoreChange = 'false';
       if (el.setPointerCapture) el.setPointerCapture(e.pointerId);
+      applyValueFromPointer(e);
     });
 
     el.addEventListener('pointermove', (e) => {
@@ -1161,30 +1206,26 @@ class SpatialLightColorCard extends HTMLElement {
       const dx = e.clientX - state.startX;
       const dy = e.clientY - state.startY;
       const threshold = 4;
+      const scrollPos = this._getScrollPosition();
+
+      if (state.mode !== 'vertical' && state.startScroll && (scrollPos.y !== state.startScroll.y || scrollPos.x !== state.startScroll.x)) {
+        state.mode = 'vertical';
+        revertToStart();
+        return;
+      }
 
       if (state.mode === 'pending') {
         if (Math.abs(dx) > Math.abs(dy) && Math.abs(dx) > threshold) {
           state.mode = 'horizontal';
         } else if (Math.abs(dy) > Math.abs(dx) && Math.abs(dy) > threshold) {
           state.mode = 'vertical';
-          el.dataset.ignoreChange = 'true';
-          el.value = state.startValue;
-          this._updateSliderVisual(el);
-          const labelId = el.id === 'temperatureSlider' ? 'temperatureValue' : 'brightnessValue';
-          const labelEl = this.shadowRoot.getElementById(labelId);
-          if (labelEl) {
-            if (el.id === 'temperatureSlider') {
-              labelEl.textContent = `${parseInt(state.startValue, 10)}K`;
-            } else {
-              labelEl.textContent = `${Math.round((parseInt(state.startValue, 10) / 255) * 100)}%`;
-            }
-          }
+          revertToStart();
+          return;
         }
       }
 
-      if (state.mode === 'vertical') {
-        el.value = state.startValue;
-        this._updateSliderVisual(el);
+      if (state.mode !== 'vertical') {
+        applyValueFromPointer(e);
       }
     });
 
@@ -1193,9 +1234,12 @@ class SpatialLightColorCard extends HTMLElement {
         el.releasePointerCapture(state.pointerId);
       }
       const wasVertical = state.mode === 'vertical';
-      if (wasVertical && state.startValue != null) {
+      if (!wasVertical) {
+        applyValueFromPointer(e, false);
+      } else if (state.startValue != null) {
         el.value = state.startValue;
         this._updateSliderVisual(el);
+        updateLabel(state.startValue);
       }
       reset(wasVertical);
       if (wasVertical) {

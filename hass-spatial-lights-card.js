@@ -1138,6 +1138,42 @@ class SpatialLightColorCard extends HTMLElement {
   _bindSliderGesture(el) {
     if (!el || !el.addEventListener) return;
     const state = { pointerId: null, startX: 0, startY: 0, startValue: null, mode: 'idle' };
+    const updateLabelForValue = (value) => {
+      const labelId = el.id === 'temperatureSlider' ? 'temperatureValue' : 'brightnessValue';
+      const labelEl = this.shadowRoot.getElementById(labelId);
+      if (labelEl) {
+        if (el.id === 'temperatureSlider') {
+          labelEl.textContent = `${parseInt(value, 10)}K`;
+        } else {
+          labelEl.textContent = `${Math.round((parseInt(value, 10) / 255) * 100)}%`;
+        }
+      }
+    };
+    const clearPendingFor = () => {
+      if (el.id === 'temperatureSlider') {
+        this._pendingTemperature = null;
+      } else {
+        this._pendingBrightness = null;
+      }
+    };
+    const applyValueFromPointer = (clientX) => {
+      const rect = el.getBoundingClientRect();
+      if (!rect || !rect.width) return;
+      const min = parseFloat(el.min || '0');
+      const max = parseFloat(el.max || '100');
+      const step = parseFloat(el.step || '1');
+      const ratio = Math.min(1, Math.max(0, (clientX - rect.left) / rect.width));
+      const rawValue = min + ratio * (max - min);
+      const stepped = Number.isFinite(step) && step > 0 ? Math.round(rawValue / step) * step : rawValue;
+      const nextValue = Math.min(max, Math.max(min, stepped));
+      el.value = String(nextValue);
+      if (el.id === 'temperatureSlider') {
+        this._handleTemperatureInput({ target: el });
+      } else {
+        this._handleBrightnessInput({ target: el });
+      }
+      updateLabelForValue(nextValue);
+    };
     const reset = (keepIgnore = false) => {
       state.pointerId = null;
       state.mode = 'idle';
@@ -1153,6 +1189,7 @@ class SpatialLightColorCard extends HTMLElement {
       el.dataset.startValue = el.value;
       state.mode = 'pending';
       el.dataset.ignoreChange = 'false';
+      applyValueFromPointer(e.clientX);
       if (el.setPointerCapture) el.setPointerCapture(e.pointerId);
     });
 
@@ -1170,22 +1207,22 @@ class SpatialLightColorCard extends HTMLElement {
           el.dataset.ignoreChange = 'true';
           el.value = state.startValue;
           this._updateSliderVisual(el);
-          const labelId = el.id === 'temperatureSlider' ? 'temperatureValue' : 'brightnessValue';
-          const labelEl = this.shadowRoot.getElementById(labelId);
-          if (labelEl) {
-            if (el.id === 'temperatureSlider') {
-              labelEl.textContent = `${parseInt(state.startValue, 10)}K`;
-            } else {
-              labelEl.textContent = `${Math.round((parseInt(state.startValue, 10) / 255) * 100)}%`;
-            }
-          }
+          updateLabelForValue(state.startValue);
+          clearPendingFor();
+          return;
         }
       }
 
       if (state.mode === 'vertical') {
         el.value = state.startValue;
         this._updateSliderVisual(el);
+        updateLabelForValue(state.startValue);
+        clearPendingFor();
+        return;
       }
+
+      e.preventDefault();
+      applyValueFromPointer(e.clientX);
     });
 
     const end = (e) => {
@@ -1196,6 +1233,8 @@ class SpatialLightColorCard extends HTMLElement {
       if (wasVertical && state.startValue != null) {
         el.value = state.startValue;
         this._updateSliderVisual(el);
+        updateLabelForValue(state.startValue);
+        clearPendingFor();
       }
       reset(wasVertical);
       if (wasVertical) {

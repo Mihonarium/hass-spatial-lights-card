@@ -781,14 +781,15 @@ class SpatialLightColorCard extends HTMLElement {
         border: 1px solid var(--border-medium); border-radius: 12px; padding: 16px 20px;
         display: flex; gap: 20px; align-items: center; box-shadow: var(--shadow-md);
         opacity: 0; pointer-events: none; transition: opacity var(--transition-base);
-        z-index: 50;
+        z-index: 50; width: min(1080px, calc(100% - 32px));
       }
       .controls-floating.visible { opacity: 1; pointer-events: auto; }
 
       .controls-below {
         padding: 20px; border-top: 1px solid var(--border-subtle); background: var(--surface-secondary);
         display: ${this._config.always_show_controls || this._selectedLights.size > 0 || this._config.default_entity ? 'flex' : 'none'};
-        gap: 24px; align-items: center; justify-content: center;
+        gap: 24px; align-items: stretch; justify-content: center; flex-wrap: wrap;
+        width: 100%; box-sizing: border-box;
       }
 
       .color-wheel-mini {
@@ -796,35 +797,57 @@ class SpatialLightColorCard extends HTMLElement {
         border: 2px solid var(--border-subtle); box-shadow: var(--shadow-sm); flex-shrink: 0;
       }
 
-      .slider-group { display:flex; flex-direction:column; gap:12px; min-width: 220px; flex:1; max-width: 480px; }
-      .slider-row { display:flex; align-items:center; gap:12px; }
-      .slider-icon { font-size: 16px; opacity: 0.65; width: 20px; text-align:center; flex-shrink:0; }
+      .slider-group { display:flex; flex-direction:column; gap:14px; min-width: 240px; flex:1 1 320px; max-width: none; width: 100%; }
+      .slider-row {
+        display:flex; align-items:center; gap:14px; width: 100%; padding: 12px 14px;
+        background: var(--surface-tertiary); border: 1px solid var(--border-subtle); border-radius: 14px;
+        box-shadow: inset 0 1px 0 rgba(255,255,255,0.02), inset 0 -1px 0 rgba(0,0,0,0.15);
+      }
+      .slider-icon { font-size: 18px; opacity: 0.75; width: 22px; text-align:center; flex-shrink:0; }
 
       .slider {
-        flex:1; -webkit-appearance:none; height:8px; border-radius:9999px; background: var(--surface-tertiary);
-        outline:none; position:relative; cursor:pointer; border:1px solid var(--border-subtle);
+        flex:1; -webkit-appearance:none; height:18px; border-radius:9999px; position:relative;
+        cursor:pointer; --slider-progress: 50%; --slider-fill: linear-gradient(90deg, #f7af3e 0%, #ffd365 60%, #ffe9a6 100%);
+        --slider-track-base: linear-gradient(90deg, rgba(255,255,255,0.12) 0%, rgba(255,255,255,0.08) 100%);
+        background: var(--slider-fill) 0 0/var(--slider-progress) 100% no-repeat, var(--slider-track-base);
+        border:1px solid var(--border-subtle);
+        outline:none; padding: 0 2px; min-height: 18px;
       }
+      .slider:focus-visible { outline: 2px solid var(--accent-primary); outline-offset: 4px; box-shadow: 0 0 0 4px rgba(99,102,241,0.25); }
       .slider.temperature {
-        background: linear-gradient(to right,
-          #ff9944 0%,
-          #ffd480 30%,
-          #ffffff 50%,
-          #87ceeb 70%,
+        --slider-fill: linear-gradient(to right,
+          #ffb347 0%,
+          #ffd480 25%,
+          #fff7e6 50%,
+          #a9dbff 72%,
           #4d9fff 100%
         );
-        border: 1px solid rgba(255,255,255,0.1);
+        --slider-track-base: linear-gradient(to right,
+          rgba(255,153,68,0.35) 0%,
+          rgba(255,212,128,0.35) 30%,
+          rgba(255,255,255,0.25) 50%,
+          rgba(135,206,235,0.35) 70%,
+          rgba(77,159,255,0.35) 100%
+        );
+      }
+      .slider::-webkit-slider-runnable-track {
+        height: 18px; border-radius: 9999px; background: transparent;
+      }
+      .slider::-moz-range-track {
+        height: 18px; border-radius: 9999px; background: transparent;
       }
       .slider::-webkit-slider-thumb {
-        -webkit-appearance:none; width:20px; height:20px; border-radius:9999px;
-        background: var(--text-primary); border:2px solid var(--surface-primary); box-shadow: var(--shadow-sm);
-        transition: transform var(--transition-fast);
+        -webkit-appearance:none; width:26px; height:26px; border-radius:9999px;
+        background: var(--surface-primary); border:2px solid var(--text-primary); box-shadow: var(--shadow-sm);
+        transition: transform var(--transition-fast), box-shadow var(--transition-fast);
       }
-      .slider::-webkit-slider-thumb:hover { transform: scale(1.08); }
+      .slider::-webkit-slider-thumb:hover { transform: scale(1.08); box-shadow: 0 6px 16px rgba(0,0,0,0.35); }
       .slider::-moz-range-thumb {
-        width:20px; height:20px; border-radius:9999px; background: var(--text-primary);
-        border:2px solid var(--surface-primary); box-shadow: var(--shadow-sm);
+        width:26px; height:26px; border-radius:9999px; background: var(--surface-primary);
+        border:2px solid var(--text-primary); box-shadow: var(--shadow-sm);
+        transition: transform var(--transition-fast), box-shadow var(--transition-fast);
       }
-      .slider-value { font-size: 13px; color: var(--text-secondary); min-width: 52px; text-align:right; font-weight: 600; }
+      .slider-value { font-size: 13px; color: var(--text-secondary); min-width: 64px; text-align:right; font-weight: 700; letter-spacing: -0.01em; }
 
       .settings-panel {
         position: absolute; top: 16px; right: 16px;
@@ -1043,6 +1066,15 @@ class SpatialLightColorCard extends HTMLElement {
     `;
   }
 
+  _setSliderProgress(el, value = null) {
+    if (!el) return;
+    const min = Number.isFinite(parseFloat(el.min)) ? parseFloat(el.min) : 0;
+    const max = Number.isFinite(parseFloat(el.max)) ? parseFloat(el.max) : 100;
+    const val = value != null ? value : parseFloat(el.value);
+    const pct = max > min ? Math.max(0, Math.min(100, ((val - min) / (max - min)) * 100)) : 0;
+    el.style.setProperty('--slider-progress', `${pct}%`);
+  }
+
   _updateControlValues(controlContext) {
     const context = controlContext || { avgState: { brightness: 128, temperature: 4000 }, tempRange: { min: 2000, max: 6500 } };
     const { avgState, tempRange } = context;
@@ -1053,6 +1085,7 @@ class SpatialLightColorCard extends HTMLElement {
 
     if (this._els.brightnessSlider) {
       this._els.brightnessSlider.value = String(brightness);
+      this._setSliderProgress(this._els.brightnessSlider, brightness);
     }
     if (this._els.brightnessValue) {
       this._els.brightnessValue.textContent = `${Math.round((brightness / 255) * 100)}%`;
@@ -1065,6 +1098,7 @@ class SpatialLightColorCard extends HTMLElement {
         this._els.temperatureSlider.max = String(tempRange.max);
       }
       this._els.temperatureSlider.value = String(temperature);
+      this._setSliderProgress(this._els.temperatureSlider, temperature);
     }
     if (this._els.temperatureValue) {
       this._els.temperatureValue.textContent = `${temperature}K`;
@@ -1737,6 +1771,7 @@ class SpatialLightColorCard extends HTMLElement {
   _handleBrightnessInput(e) {
     const val = parseInt(e.target.value, 10);
     if (this._els.brightnessValue) this._els.brightnessValue.textContent = `${Math.round((val / 255) * 100)}%`;
+    this._setSliderProgress(this._els.brightnessSlider, val);
     this._pendingBrightness = val;
   }
   _handleBrightnessChange() {
@@ -1756,6 +1791,7 @@ class SpatialLightColorCard extends HTMLElement {
   _handleTemperatureInput(e) {
     const k = parseInt(e.target.value, 10);
     if (this._els.temperatureValue) this._els.temperatureValue.textContent = `${k}K`;
+    this._setSliderProgress(this._els.temperatureSlider, k);
     this._pendingTemperature = k;
   }
   _handleTemperatureChange() {

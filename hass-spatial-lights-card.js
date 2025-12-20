@@ -1135,9 +1135,16 @@ class SpatialLightColorCard extends HTMLElement {
     el.style.setProperty('--slider-ratio', `${percent / 100}`);
   }
 
-  _bindSliderGesture(el) {
+  _bindSliderGesture(el, { onInput } = {}) {
     if (!el || !el.addEventListener) return;
-    const state = { pointerId: null, startX: 0, startY: 0, startValue: null, mode: 'idle' };
+    const state = {
+      pointerId: null,
+      startX: 0,
+      startY: 0,
+      startScroll: { x: 0, y: 0 },
+      startValue: null,
+      mode: 'idle',
+    };
     const reset = (keepIgnore = false) => {
       state.pointerId = null;
       state.mode = 'idle';
@@ -1145,14 +1152,55 @@ class SpatialLightColorCard extends HTMLElement {
       if (!keepIgnore) el.dataset.ignoreChange = 'false';
     };
 
+    const clamp = (val, min, max) => Math.min(max, Math.max(min, val));
+    const updateFromPointer = (e) => {
+      const rect = el.getBoundingClientRect();
+      const min = parseFloat(el.min || '0');
+      const max = parseFloat(el.max || '100');
+      const step = Number.isFinite(parseFloat(el.step)) ? parseFloat(el.step) : 1;
+      const ratio = rect.width > 0 ? clamp((e.clientX - rect.left) / rect.width, 0, 1) : 0;
+      const rawVal = min + ratio * (max - min);
+      const steps = step > 0 ? Math.round((rawVal - min) / step) : rawVal - min;
+      const val = step > 0 ? min + steps * step : rawVal;
+      const nextValue = String(clamp(val, min, max));
+      if (el.value !== nextValue) {
+        el.value = nextValue;
+        if (typeof onInput === 'function') {
+          onInput({ target: el });
+        } else {
+          this._updateSliderVisual(el);
+        }
+      } else {
+        this._updateSliderVisual(el);
+      }
+    };
+
+    const revertToStart = () => {
+      if (state.startValue != null) {
+        el.value = state.startValue;
+        this._updateSliderVisual(el);
+        const labelId = el.id === 'temperatureSlider' ? 'temperatureValue' : 'brightnessValue';
+        const labelEl = this.shadowRoot.getElementById(labelId);
+        if (labelEl) {
+          if (el.id === 'temperatureSlider') {
+            labelEl.textContent = `${parseInt(state.startValue, 10)}K`;
+          } else {
+            labelEl.textContent = `${Math.round((parseInt(state.startValue, 10) / 255) * 100)}%`;
+          }
+        }
+      }
+    };
+
     el.addEventListener('pointerdown', (e) => {
       state.pointerId = e.pointerId;
       state.startX = e.clientX;
       state.startY = e.clientY;
+      state.startScroll = this._getScrollPosition();
       state.startValue = el.value;
       el.dataset.startValue = el.value;
-      state.mode = 'pending';
+      state.mode = 'active';
       el.dataset.ignoreChange = 'false';
+      updateFromPointer(e);
       if (el.setPointerCapture) el.setPointerCapture(e.pointerId);
     });
 
@@ -1161,30 +1209,23 @@ class SpatialLightColorCard extends HTMLElement {
       const dx = e.clientX - state.startX;
       const dy = e.clientY - state.startY;
       const threshold = 4;
+      const scrollPos = this._getScrollPosition();
 
-      if (state.mode === 'pending') {
-        if (Math.abs(dx) > Math.abs(dy) && Math.abs(dx) > threshold) {
-          state.mode = 'horizontal';
-        } else if (Math.abs(dy) > Math.abs(dx) && Math.abs(dy) > threshold) {
-          state.mode = 'vertical';
-          el.dataset.ignoreChange = 'true';
-          el.value = state.startValue;
-          this._updateSliderVisual(el);
-          const labelId = el.id === 'temperatureSlider' ? 'temperatureValue' : 'brightnessValue';
-          const labelEl = this.shadowRoot.getElementById(labelId);
-          if (labelEl) {
-            if (el.id === 'temperatureSlider') {
-              labelEl.textContent = `${parseInt(state.startValue, 10)}K`;
-            } else {
-              labelEl.textContent = `${Math.round((parseInt(state.startValue, 10) / 255) * 100)}%`;
-            }
-          }
-        }
+      if (
+        (scrollPos.y !== state.startScroll.y || scrollPos.x !== state.startScroll.x) ||
+        (Math.abs(dy) > Math.abs(dx) && Math.abs(dy) > threshold)
+      ) {
+        state.mode = 'vertical';
+        el.dataset.ignoreChange = 'true';
+        revertToStart();
+        return;
       }
 
       if (state.mode === 'vertical') {
-        el.value = state.startValue;
+        revertToStart();
         this._updateSliderVisual(el);
+      } else {
+        updateFromPointer(e);
       }
     });
 
@@ -1441,12 +1482,16 @@ class SpatialLightColorCard extends HTMLElement {
     if (this._els.brightnessSlider) {
       this._els.brightnessSlider.addEventListener('input', (e) => this._handleBrightnessInput(e));
       this._els.brightnessSlider.addEventListener('change', () => this._handleBrightnessChange());
-      this._bindSliderGesture(this._els.brightnessSlider);
+      this._bindSliderGesture(this._els.brightnessSlider, {
+        onInput: (evt) => this._handleBrightnessInput(evt),
+      });
     }
     if (this._els.temperatureSlider) {
       this._els.temperatureSlider.addEventListener('input', (e) => this._handleTemperatureInput(e));
       this._els.temperatureSlider.addEventListener('change', () => this._handleTemperatureChange());
-      this._bindSliderGesture(this._els.temperatureSlider);
+      this._bindSliderGesture(this._els.temperatureSlider, {
+        onInput: (evt) => this._handleTemperatureInput(evt),
+      });
     }
   }
 

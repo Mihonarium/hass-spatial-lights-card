@@ -8,7 +8,7 @@ Very useful when you have a lot of lights, and searching the one you need by nam
 
 You can also drag to draw a rectangle around lights, which you'll immediately be able to control as a group.
 
-<img height="700" alt="image" src="https://github.com/user-attachments/assets/94edccc5-5cb9-45b3-8ca3-1e172cf89bae" />
+<img height="700" alt="image" src="https://github.com/user-attachments/assets/01665e89-fe23-4bc2-8aff-517b7e9b0f9b" />
 
 
 ---

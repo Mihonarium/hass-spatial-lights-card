@@ -1137,12 +1137,53 @@ class SpatialLightColorCard extends HTMLElement {
 
   _bindSliderGesture(el) {
     if (!el || !el.addEventListener) return;
-    const state = { pointerId: null, startX: 0, startY: 0, startValue: null, mode: 'idle' };
+    const state = {
+      pointerId: null,
+      startX: 0,
+      startY: 0,
+      startValue: null,
+      mode: 'idle',
+      startScroll: { x: 0, y: 0 },
+    };
     const reset = (keepIgnore = false) => {
       state.pointerId = null;
       state.mode = 'idle';
       state.startValue = null;
+      state.startScroll = { x: 0, y: 0 };
       if (!keepIgnore) el.dataset.ignoreChange = 'false';
+    };
+
+    const updateLabel = (value) => {
+      const labelId = el.id === 'temperatureSlider' ? 'temperatureValue' : 'brightnessValue';
+      const labelEl = this.shadowRoot.getElementById(labelId);
+      if (!labelEl) return;
+      if (el.id === 'temperatureSlider') {
+        labelEl.textContent = `${parseInt(value, 10)}K`;
+      } else {
+        labelEl.textContent = `${Math.round((parseInt(value, 10) / 255) * 100)}%`;
+      }
+    };
+
+    const applyValueFromPointer = (event) => {
+      const rect = el.getBoundingClientRect();
+      const min = parseFloat(el.min || '0');
+      const max = parseFloat(el.max || '100');
+      const step = Math.max(parseFloat(el.step || '1'), 0.0001);
+      const ratio = rect.width > 0 ? (event.clientX - rect.left) / rect.width : 0;
+      const clampedRatio = Math.min(1, Math.max(0, ratio));
+      const rawValue = min + clampedRatio * (max - min);
+      const steppedValue = Math.round(rawValue / step) * step;
+      const value = Math.min(max, Math.max(min, steppedValue));
+
+      el.value = String(value);
+      this._updateSliderVisual(el);
+      updateLabel(value);
+
+      if (el.id === 'temperatureSlider') {
+        this._handleTemperatureInput({ target: el });
+      } else {
+        this._handleBrightnessInput({ target: el });
+      }
     };
 
     el.addEventListener('pointerdown', (e) => {
@@ -1151,41 +1192,42 @@ class SpatialLightColorCard extends HTMLElement {
       state.startY = e.clientY;
       state.startValue = el.value;
       el.dataset.startValue = el.value;
+      state.startScroll = this._getScrollPosition();
       state.mode = 'pending';
       el.dataset.ignoreChange = 'false';
       if (el.setPointerCapture) el.setPointerCapture(e.pointerId);
+      applyValueFromPointer(e);
     });
 
     el.addEventListener('pointermove', (e) => {
       if (state.pointerId !== e.pointerId) return;
       const dx = e.clientX - state.startX;
       const dy = e.clientY - state.startY;
+      const scrollPos = this._getScrollPosition();
+      const scrollDeltaY = scrollPos ? scrollPos.y - state.startScroll.y : 0;
       const threshold = 4;
 
       if (state.mode === 'pending') {
-        if (Math.abs(dx) > Math.abs(dy) && Math.abs(dx) > threshold) {
-          state.mode = 'horizontal';
-        } else if (Math.abs(dy) > Math.abs(dx) && Math.abs(dy) > threshold) {
+        if (Math.abs(scrollDeltaY) > threshold || (Math.abs(dy) > Math.abs(dx) && Math.abs(dy) > threshold)) {
           state.mode = 'vertical';
           el.dataset.ignoreChange = 'true';
           el.value = state.startValue;
           this._updateSliderVisual(el);
-          const labelId = el.id === 'temperatureSlider' ? 'temperatureValue' : 'brightnessValue';
-          const labelEl = this.shadowRoot.getElementById(labelId);
-          if (labelEl) {
-            if (el.id === 'temperatureSlider') {
-              labelEl.textContent = `${parseInt(state.startValue, 10)}K`;
-            } else {
-              labelEl.textContent = `${Math.round((parseInt(state.startValue, 10) / 255) * 100)}%`;
-            }
-          }
+          updateLabel(state.startValue);
+          return;
+        } else if (Math.abs(dx) > threshold) {
+          state.mode = 'horizontal';
         }
       }
 
       if (state.mode === 'vertical') {
         el.value = state.startValue;
         this._updateSliderVisual(el);
+        updateLabel(state.startValue);
+        return;
       }
+
+      applyValueFromPointer(e);
     });
 
     const end = (e) => {

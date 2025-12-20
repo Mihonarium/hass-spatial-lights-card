@@ -1137,12 +1137,38 @@ class SpatialLightColorCard extends HTMLElement {
 
   _bindSliderGesture(el) {
     if (!el || !el.addEventListener) return;
-    const state = { pointerId: null, startX: 0, startY: 0, startValue: null, mode: 'idle' };
+    const state = { pointerId: null, startX: 0, startY: 0, startValue: null, startScroll: null, mode: 'idle' };
     const reset = (keepIgnore = false) => {
       state.pointerId = null;
       state.mode = 'idle';
       state.startValue = null;
+      state.startScroll = null;
       if (!keepIgnore) el.dataset.ignoreChange = 'false';
+    };
+    const isTemperature = el.id === 'temperatureSlider';
+    const updateLabelForValue = (value) => {
+      const parsed = parseInt(value, 10);
+      if (Number.isNaN(parsed)) return;
+      if (isTemperature) {
+        if (this._els.temperatureValue) this._els.temperatureValue.textContent = `${parsed}K`;
+      } else if (this._els.brightnessValue) {
+        this._els.brightnessValue.textContent = `${Math.round((parsed / 255) * 100)}%`;
+      }
+      this._updateSliderVisual(el);
+    };
+    const updateFromPointer = (clientX) => {
+      const rect = el.getBoundingClientRect();
+      const min = parseFloat(el.min || '0');
+      const max = parseFloat(el.max || '100');
+      const ratio = rect.width > 0 ? (clientX - rect.left) / rect.width : 0;
+      const clamped = Math.min(1, Math.max(0, ratio));
+      const value = Math.round(min + (max - min) * clamped);
+      el.value = String(value);
+      if (isTemperature) {
+        this._handleTemperatureInput({ target: el });
+      } else {
+        this._handleBrightnessInput({ target: el });
+      }
     };
 
     el.addEventListener('pointerdown', (e) => {
@@ -1150,10 +1176,12 @@ class SpatialLightColorCard extends HTMLElement {
       state.startX = e.clientX;
       state.startY = e.clientY;
       state.startValue = el.value;
+      state.startScroll = this._getScrollPosition();
       el.dataset.startValue = el.value;
-      state.mode = 'pending';
+      state.mode = 'dragging';
       el.dataset.ignoreChange = 'false';
       if (el.setPointerCapture) el.setPointerCapture(e.pointerId);
+      updateFromPointer(e.clientX);
     });
 
     el.addEventListener('pointermove', (e) => {
@@ -1161,34 +1189,36 @@ class SpatialLightColorCard extends HTMLElement {
       const dx = e.clientX - state.startX;
       const dy = e.clientY - state.startY;
       const threshold = 4;
+      const scrollPos = this._getScrollPosition();
+      const scrolledY = state.startScroll ? Math.abs(scrollPos.y - state.startScroll.y) : 0;
 
-      if (state.mode === 'pending') {
-        if (Math.abs(dx) > Math.abs(dy) && Math.abs(dx) > threshold) {
-          state.mode = 'horizontal';
-        } else if (Math.abs(dy) > Math.abs(dx) && Math.abs(dy) > threshold) {
-          state.mode = 'vertical';
-          el.dataset.ignoreChange = 'true';
-          el.value = state.startValue;
-          this._updateSliderVisual(el);
-          const labelId = el.id === 'temperatureSlider' ? 'temperatureValue' : 'brightnessValue';
-          const labelEl = this.shadowRoot.getElementById(labelId);
-          if (labelEl) {
-            if (el.id === 'temperatureSlider') {
-              labelEl.textContent = `${parseInt(state.startValue, 10)}K`;
-            } else {
-              labelEl.textContent = `${Math.round((parseInt(state.startValue, 10) / 255) * 100)}%`;
-            }
-          }
-        }
+      if (state.mode !== 'vertical' && scrolledY > 2) {
+        state.mode = 'vertical';
+        el.dataset.ignoreChange = 'true';
+        el.value = state.startValue;
+        updateLabelForValue(state.startValue);
+        return;
+      }
+
+      if (state.mode === 'dragging' && Math.abs(dy) > Math.abs(dx) && Math.abs(dy) > threshold) {
+        state.mode = 'vertical';
+        el.dataset.ignoreChange = 'true';
+        el.value = state.startValue;
+        updateLabelForValue(state.startValue);
+        return;
       }
 
       if (state.mode === 'vertical') {
         el.value = state.startValue;
         this._updateSliderVisual(el);
+        return;
       }
+
+      updateFromPointer(e.clientX);
     });
 
     const end = (e) => {
+      if (state.pointerId !== null && e && state.pointerId !== e.pointerId) return;
       if (state.pointerId !== null && el.hasPointerCapture && el.hasPointerCapture(state.pointerId)) {
         el.releasePointerCapture(state.pointerId);
       }

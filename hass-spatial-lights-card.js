@@ -779,16 +779,16 @@ class SpatialLightColorCard extends HTMLElement {
         position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%);
         background: rgba(20,20,20,0.95); backdrop-filter: blur(16px) saturate(160%);
         border: 1px solid var(--border-medium); border-radius: 12px; padding: 16px 20px;
-        display: flex; gap: 20px; align-items: center; box-shadow: var(--shadow-md);
+        display: flex; gap: 20px; align-items: stretch; box-shadow: var(--shadow-md);
         opacity: 0; pointer-events: none; transition: opacity var(--transition-base);
-        z-index: 50;
+        z-index: 50; width: min(100%, 980px); flex-wrap: wrap;
       }
       .controls-floating.visible { opacity: 1; pointer-events: auto; }
 
       .controls-below {
         padding: 20px; border-top: 1px solid var(--border-subtle); background: var(--surface-secondary);
         display: ${this._config.always_show_controls || this._selectedLights.size > 0 || this._config.default_entity ? 'flex' : 'none'};
-        gap: 24px; align-items: center; justify-content: center;
+        gap: 24px; align-items: stretch; justify-content: center; flex-wrap: wrap;
       }
 
       .color-wheel-mini {
@@ -796,13 +796,25 @@ class SpatialLightColorCard extends HTMLElement {
         border: 2px solid var(--border-subtle); box-shadow: var(--shadow-sm); flex-shrink: 0;
       }
 
-      .slider-group { display:flex; flex-direction:column; gap:12px; min-width: 220px; flex:1; max-width: 480px; }
-      .slider-row { display:flex; align-items:center; gap:12px; }
-      .slider-icon { font-size: 16px; opacity: 0.65; width: 20px; text-align:center; flex-shrink:0; }
+      .slider-group { display:flex; flex-direction:column; gap:14px; min-width: 260px; flex: 1 1 520px; max-width: none; width:100%; }
+      .slider-row { display:flex; align-items:center; gap:12px; width:100%; padding: 6px 0; }
+      .slider-icon { font-size: 18px; opacity: 0.7; width: 26px; text-align:center; flex-shrink:0; }
 
       .slider {
-        flex:1; -webkit-appearance:none; height:8px; border-radius:9999px; background: var(--surface-tertiary);
+        flex:1; -webkit-appearance:none; height:18px; border-radius:9999px; background: var(--surface-tertiary);
         outline:none; position:relative; cursor:pointer; border:1px solid var(--border-subtle);
+        box-shadow: inset 0 1px 0 rgba(255,255,255,0.05), 0 1px 2px rgba(0,0,0,0.35);
+      }
+      .slider.brightness {
+        background: linear-gradient(to right,
+          rgba(255,255,255,0.05) 0%,
+          rgba(255,166,64,0.7) 35%,
+          #ffc46b 75%,
+          #ffd995 100%);
+      }
+      .slider:focus-visible {
+        outline: 2px solid var(--accent-primary);
+        outline-offset: 4px;
       }
       .slider.temperature {
         background: linear-gradient(to right,
@@ -814,17 +826,20 @@ class SpatialLightColorCard extends HTMLElement {
         );
         border: 1px solid rgba(255,255,255,0.1);
       }
+      .slider::-webkit-slider-runnable-track { height: 100%; border-radius: inherit; background: transparent; }
+      .slider::-moz-range-track { height: 100%; border-radius: inherit; background: transparent; }
       .slider::-webkit-slider-thumb {
-        -webkit-appearance:none; width:20px; height:20px; border-radius:9999px;
-        background: var(--text-primary); border:2px solid var(--surface-primary); box-shadow: var(--shadow-sm);
-        transition: transform var(--transition-fast);
+        -webkit-appearance:none; width:28px; height:28px; border-radius:9999px;
+        background: var(--text-primary); border:2px solid var(--surface-primary);
+        box-shadow: 0 2px 6px rgba(0,0,0,0.35), 0 0 0 1px rgba(255,255,255,0.05);
+        transition: transform var(--transition-fast), box-shadow var(--transition-fast);
       }
-      .slider::-webkit-slider-thumb:hover { transform: scale(1.08); }
+      .slider::-webkit-slider-thumb:hover { transform: scale(1.08); box-shadow: 0 3px 8px rgba(0,0,0,0.4), 0 0 0 1px rgba(255,255,255,0.06); }
       .slider::-moz-range-thumb {
-        width:20px; height:20px; border-radius:9999px; background: var(--text-primary);
-        border:2px solid var(--surface-primary); box-shadow: var(--shadow-sm);
+        width:28px; height:28px; border-radius:9999px; background: var(--text-primary);
+        border:2px solid var(--surface-primary); box-shadow: 0 2px 6px rgba(0,0,0,0.35), 0 0 0 1px rgba(255,255,255,0.05);
       }
-      .slider-value { font-size: 13px; color: var(--text-secondary); min-width: 52px; text-align:right; font-weight: 600; }
+      .slider-value { font-size: 14px; color: var(--text-secondary); min-width: 60px; text-align:right; font-weight: 700; }
 
       .settings-panel {
         position: absolute; top: 16px; right: 16px;
@@ -954,7 +969,7 @@ class SpatialLightColorCard extends HTMLElement {
         <div class="slider-group">
           <div class="slider-row">
             <span class="slider-icon" aria-hidden="true">💡</span>
-            <input type="range" class="slider" id="brightnessSlider" min="0" max="255" value="${avgState.brightness}" aria-label="Brightness">
+            <input type="range" class="slider brightness" id="brightnessSlider" min="0" max="255" value="${avgState.brightness}" aria-label="Brightness">
             <span class="slider-value" id="brightnessValue">${Math.round((avgState.brightness/255)*100)}%</span>
           </div>
           <div class="slider-row">
@@ -976,7 +991,7 @@ class SpatialLightColorCard extends HTMLElement {
         <div class="slider-group">
           <div class="slider-row">
             <span class="slider-icon" aria-hidden="true">💡</span>
-            <input type="range" class="slider" id="brightnessSlider" min="0" max="255" value="${avgState.brightness}" aria-label="Brightness">
+            <input type="range" class="slider brightness" id="brightnessSlider" min="0" max="255" value="${avgState.brightness}" aria-label="Brightness">
             <span class="slider-value" id="brightnessValue">${Math.round((avgState.brightness/255)*100)}%</span>
           </div>
           <div class="slider-row">

@@ -1137,11 +1137,44 @@ class SpatialLightColorCard extends HTMLElement {
 
   _bindSliderGesture(el) {
     if (!el || !el.addEventListener) return;
-    const state = { pointerId: null, startX: 0, startY: 0, startValue: null, mode: 'idle' };
+    const state = {
+      pointerId: null,
+      startX: 0,
+      startY: 0,
+      startValue: null,
+      startScroll: null,
+      mode: 'idle',
+    };
+    const updateLabel = (value) => {
+      const labelId = el.id === 'temperatureSlider' ? 'temperatureValue' : 'brightnessValue';
+      const labelEl = this.shadowRoot.getElementById(labelId);
+      if (!labelEl) return;
+      if (el.id === 'temperatureSlider') {
+        labelEl.textContent = `${parseInt(value, 10)}K`;
+      } else {
+        labelEl.textContent = `${Math.round((parseInt(value, 10) / 255) * 100)}%`;
+      }
+    };
+    const applyValueFromPointer = (event) => {
+      const rect = el.getBoundingClientRect();
+      const min = parseFloat(el.min || '0');
+      const max = parseFloat(el.max || '100');
+      const step = Math.abs(parseFloat(el.step || '1')) || 1;
+      const ratio = rect.width > 0 ? (event.clientX - rect.left) / rect.width : 0;
+      const clampedRatio = Math.min(1, Math.max(0, ratio));
+      const rawValue = min + (max - min) * clampedRatio;
+      const stepped = Math.round(rawValue / step) * step;
+      const finalValue = Math.min(max, Math.max(min, stepped));
+      el.value = String(finalValue);
+      this._updateSliderVisual(el);
+      updateLabel(finalValue);
+      el.dispatchEvent(new Event('input', { bubbles: true, composed: true }));
+    };
     const reset = (keepIgnore = false) => {
       state.pointerId = null;
       state.mode = 'idle';
       state.startValue = null;
+      state.startScroll = null;
       if (!keepIgnore) el.dataset.ignoreChange = 'false';
     };
 
@@ -1150,10 +1183,12 @@ class SpatialLightColorCard extends HTMLElement {
       state.startX = e.clientX;
       state.startY = e.clientY;
       state.startValue = el.value;
+      state.startScroll = this._getScrollPosition();
       el.dataset.startValue = el.value;
       state.mode = 'pending';
       el.dataset.ignoreChange = 'false';
       if (el.setPointerCapture) el.setPointerCapture(e.pointerId);
+      applyValueFromPointer(e);
     });
 
     el.addEventListener('pointermove', (e) => {
@@ -1161,31 +1196,29 @@ class SpatialLightColorCard extends HTMLElement {
       const dx = e.clientX - state.startX;
       const dy = e.clientY - state.startY;
       const threshold = 4;
+      const scrollPos = this._getScrollPosition();
+      const scrolled = !!state.startScroll && (scrollPos.x !== state.startScroll.x || scrollPos.y !== state.startScroll.y);
 
       if (state.mode === 'pending') {
+        if (scrolled) {
+          state.mode = 'vertical';
+        }
         if (Math.abs(dx) > Math.abs(dy) && Math.abs(dx) > threshold) {
           state.mode = 'horizontal';
         } else if (Math.abs(dy) > Math.abs(dx) && Math.abs(dy) > threshold) {
           state.mode = 'vertical';
-          el.dataset.ignoreChange = 'true';
-          el.value = state.startValue;
-          this._updateSliderVisual(el);
-          const labelId = el.id === 'temperatureSlider' ? 'temperatureValue' : 'brightnessValue';
-          const labelEl = this.shadowRoot.getElementById(labelId);
-          if (labelEl) {
-            if (el.id === 'temperatureSlider') {
-              labelEl.textContent = `${parseInt(state.startValue, 10)}K`;
-            } else {
-              labelEl.textContent = `${Math.round((parseInt(state.startValue, 10) / 255) * 100)}%`;
-            }
-          }
         }
       }
 
       if (state.mode === 'vertical') {
         el.value = state.startValue;
         this._updateSliderVisual(el);
+        updateLabel(state.startValue);
+        el.dataset.ignoreChange = 'true';
+        return;
       }
+
+      applyValueFromPointer(e);
     });
 
     const end = (e) => {
@@ -1196,6 +1229,7 @@ class SpatialLightColorCard extends HTMLElement {
       if (wasVertical && state.startValue != null) {
         el.value = state.startValue;
         this._updateSliderVisual(el);
+        updateLabel(state.startValue);
       }
       reset(wasVertical);
       if (wasVertical) {

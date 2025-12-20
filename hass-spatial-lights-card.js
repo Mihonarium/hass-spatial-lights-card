@@ -796,35 +796,69 @@ class SpatialLightColorCard extends HTMLElement {
         border: 2px solid var(--border-subtle); box-shadow: var(--shadow-sm); flex-shrink: 0;
       }
 
-      .slider-group { display:flex; flex-direction:column; gap:12px; min-width: 220px; flex:1; max-width: 480px; }
-      .slider-row { display:flex; align-items:center; gap:12px; }
-      .slider-icon { font-size: 16px; opacity: 0.65; width: 20px; text-align:center; flex-shrink:0; }
+      .slider-group { display:flex; flex-direction:column; gap:10px; min-width: 240px; flex:1; width:100%; }
+      .slider-row { display:flex; align-items:center; gap:8px; width:100%; padding: 2px 0; }
 
       .slider {
-        flex:1; -webkit-appearance:none; height:8px; border-radius:9999px; background: var(--surface-tertiary);
-        outline:none; position:relative; cursor:pointer; border:1px solid var(--border-subtle);
+        flex:1; -webkit-appearance:none; appearance:none;
+        --slider-height: 24px;
+        --slider-thumb-size: 26px;
+        --slider-track-radius: 9999px;
+        --slider-percent: 50%;
+        --slider-ratio: 0.5;
+        --slider-fill: var(--accent-primary);
+        height: var(--slider-height);
+        border-radius: var(--slider-track-radius);
+        background:
+          linear-gradient(to right, var(--slider-fill) 0%, var(--slider-fill) 100%),
+          linear-gradient(to right, var(--surface-tertiary) 0%, var(--surface-tertiary) 100%);
+        background-size:
+          calc((100% - var(--slider-thumb-size)) * var(--slider-ratio) + (var(--slider-thumb-size) / 2)) 100%,
+          100% 100%;
+        background-repeat: no-repeat, no-repeat;
+        background-position: left center, left center;
+        outline:none; position:relative; cursor:pointer;
+        box-shadow: inset 0 1px 0 rgba(255,255,255,0.05), inset 0 -1px 0 rgba(0,0,0,0.12), var(--shadow-sm);
       }
       .slider.temperature {
-        background: linear-gradient(to right,
-          #ff9944 0%,
-          #ffd480 30%,
-          #ffffff 50%,
-          #87ceeb 70%,
-          #4d9fff 100%
-        );
-        border: 1px solid rgba(255,255,255,0.1);
+        background:
+          linear-gradient(to right,
+            rgba(255,255,255,0.18) 0%,
+            rgba(255,255,255,0.18) 100%),
+          linear-gradient(to right,
+            #ff9944 0%,
+            #ffd480 30%,
+            #ffffff 50%,
+            #87ceeb 70%,
+            #4d9fff 100%),
+          linear-gradient(to right, var(--surface-tertiary) 0%, var(--surface-tertiary) 100%);
+        background-size:
+          calc((100% - var(--slider-thumb-size)) * var(--slider-ratio) + (var(--slider-thumb-size) / 2)) 100%,
+          calc((100% - var(--slider-thumb-size)) * var(--slider-ratio) + (var(--slider-thumb-size) / 2)) 100%,
+          100% 100%;
+        background-repeat: no-repeat, no-repeat, no-repeat;
+        background-position: left center, left center, left center;
       }
       .slider::-webkit-slider-thumb {
-        -webkit-appearance:none; width:20px; height:20px; border-radius:9999px;
-        background: var(--text-primary); border:2px solid var(--surface-primary); box-shadow: var(--shadow-sm);
-        transition: transform var(--transition-fast);
+        -webkit-appearance:none; width:var(--slider-thumb-size); height:var(--slider-thumb-size); border-radius:9999px;
+        background: var(--text-primary); border:3px solid var(--surface-primary); box-shadow: 0 2px 6px rgba(0,0,0,0.25);
+        transition: transform var(--transition-fast), box-shadow var(--transition-fast);
+        margin-top: 0;
       }
-      .slider::-webkit-slider-thumb:hover { transform: scale(1.08); }
+      .slider::-webkit-slider-thumb:hover { transform: scale(1.05); box-shadow: 0 3px 10px rgba(0,0,0,0.35); }
       .slider::-moz-range-thumb {
-        width:20px; height:20px; border-radius:9999px; background: var(--text-primary);
-        border:2px solid var(--surface-primary); box-shadow: var(--shadow-sm);
+        width:var(--slider-thumb-size); height:var(--slider-thumb-size); border-radius:9999px; background: var(--text-primary);
+        border:3px solid var(--surface-primary); box-shadow: 0 2px 6px rgba(0,0,0,0.25);
+        transition: transform var(--transition-fast), box-shadow var(--transition-fast);
       }
-      .slider-value { font-size: 13px; color: var(--text-secondary); min-width: 52px; text-align:right; font-weight: 600; }
+      .slider::-moz-range-thumb:hover { transform: scale(1.05); box-shadow: 0 3px 10px rgba(0,0,0,0.35); }
+      .slider::-moz-range-track {
+        height: 100%;
+        border-radius: var(--slider-track-radius);
+        background: var(--slider-track);
+        border: none;
+      }
+      .slider-value { font-size: 13px; color: var(--text-secondary); min-width: 56px; text-align:right; font-weight: 700; letter-spacing: 0.01em; align-self:center; }
 
       .settings-panel {
         position: absolute; top: 16px; right: 16px;
@@ -948,18 +982,21 @@ class SpatialLightColorCard extends HTMLElement {
   _renderControlsFloating(visible, controlContext) {
     const { avgState, tempRange } = controlContext;
     const clampedTemp = this._clampTemperature(avgState.temperature, tempRange);
+    const brightnessPercent = Math.min(100, Math.max(0, (avgState.brightness / 255) * 100));
+    const tempPercent = (tempRange.max > tempRange.min)
+      ? Math.min(100, Math.max(0, ((clampedTemp - tempRange.min) / (tempRange.max - tempRange.min)) * 100))
+      : 0;
+    const brightnessColor = Array.isArray(avgState.color) ? `rgb(${avgState.color.join(',')})` : 'var(--accent-primary)';
     return `
       <div class="controls-floating ${visible ? 'visible' : ''}" id="controlsFloating" role="region" aria-label="Light controls" aria-live="polite">
         <canvas id="colorWheelMini" class="color-wheel-mini" width="256" height="256" role="img" aria-label="Color picker"></canvas>
         <div class="slider-group">
           <div class="slider-row">
-            <span class="slider-icon" aria-hidden="true">💡</span>
-            <input type="range" class="slider" id="brightnessSlider" min="0" max="255" value="${avgState.brightness}" aria-label="Brightness">
+            <input type="range" class="slider" id="brightnessSlider" min="0" max="255" value="${avgState.brightness}" aria-label="Brightness" style="--slider-percent:${brightnessPercent}%;--slider-ratio:${brightnessPercent/100};--slider-fill:${brightnessColor};">
             <span class="slider-value" id="brightnessValue">${Math.round((avgState.brightness/255)*100)}%</span>
           </div>
           <div class="slider-row">
-            <span class="slider-icon" aria-hidden="true">🌡️</span>
-            <input type="range" class="slider temperature" id="temperatureSlider" min="${tempRange.min}" max="${tempRange.max}" value="${clampedTemp}" aria-label="Color temperature">
+            <input type="range" class="slider temperature" id="temperatureSlider" min="${tempRange.min}" max="${tempRange.max}" value="${clampedTemp}" aria-label="Color temperature" style="--slider-percent:${tempPercent}%;--slider-ratio:${tempPercent/100};">
             <span class="slider-value" id="temperatureValue">${clampedTemp}K</span>
           </div>
         </div>
@@ -970,18 +1007,21 @@ class SpatialLightColorCard extends HTMLElement {
   _renderControlsBelow(controlContext) {
     const { avgState, tempRange } = controlContext;
     const clampedTemp = this._clampTemperature(avgState.temperature, tempRange);
+    const brightnessPercent = Math.min(100, Math.max(0, (avgState.brightness / 255) * 100));
+    const tempPercent = (tempRange.max > tempRange.min)
+      ? Math.min(100, Math.max(0, ((clampedTemp - tempRange.min) / (tempRange.max - tempRange.min)) * 100))
+      : 0;
+    const brightnessColor = Array.isArray(avgState.color) ? `rgb(${avgState.color.join(',')})` : 'var(--accent-primary)';
     return `
       <div class="controls-below" id="controlsBelow" role="region" aria-label="Light controls" aria-live="polite">
         <canvas id="colorWheelMini" class="color-wheel-mini" width="256" height="256" role="img" aria-label="Color picker"></canvas>
         <div class="slider-group">
           <div class="slider-row">
-            <span class="slider-icon" aria-hidden="true">💡</span>
-            <input type="range" class="slider" id="brightnessSlider" min="0" max="255" value="${avgState.brightness}" aria-label="Brightness">
+            <input type="range" class="slider" id="brightnessSlider" min="0" max="255" value="${avgState.brightness}" aria-label="Brightness" style="--slider-percent:${brightnessPercent}%;--slider-ratio:${brightnessPercent/100};--slider-fill:${brightnessColor};">
             <span class="slider-value" id="brightnessValue">${Math.round((avgState.brightness/255)*100)}%</span>
           </div>
           <div class="slider-row">
-            <span class="slider-icon" aria-hidden="true">🌡️</span>
-            <input type="range" class="slider temperature" id="temperatureSlider" min="${tempRange.min}" max="${tempRange.max}" value="${clampedTemp}" aria-label="Color temperature">
+            <input type="range" class="slider temperature" id="temperatureSlider" min="${tempRange.min}" max="${tempRange.max}" value="${clampedTemp}" aria-label="Color temperature" style="--slider-percent:${tempPercent}%;--slider-ratio:${tempPercent/100};">
             <span class="slider-value" id="temperatureValue">${clampedTemp}K</span>
           </div>
         </div>
@@ -1050,9 +1090,17 @@ class SpatialLightColorCard extends HTMLElement {
     const temperature = Number.isFinite(avgState?.temperature)
       ? this._clampTemperature(avgState.temperature, tempRange)
       : this._clampTemperature(4000, tempRange);
+    const brightnessPercent = Math.min(100, Math.max(0, (brightness / 255) * 100));
+    const tempPercent = (tempRange.max > tempRange.min)
+      ? Math.min(100, Math.max(0, ((temperature - tempRange.min) / (tempRange.max - tempRange.min)) * 100))
+      : 0;
+    const brightnessColor = Array.isArray(avgState?.color) ? `rgb(${avgState.color.join(',')})` : 'var(--accent-primary)';
 
     if (this._els.brightnessSlider) {
       this._els.brightnessSlider.value = String(brightness);
+      this._els.brightnessSlider.style.setProperty('--slider-percent', `${brightnessPercent}%`);
+      this._els.brightnessSlider.style.setProperty('--slider-ratio', `${brightnessPercent / 100}`);
+      this._els.brightnessSlider.style.setProperty('--slider-fill', brightnessColor);
     }
     if (this._els.brightnessValue) {
       this._els.brightnessValue.textContent = `${Math.round((brightness / 255) * 100)}%`;
@@ -1065,10 +1113,97 @@ class SpatialLightColorCard extends HTMLElement {
         this._els.temperatureSlider.max = String(tempRange.max);
       }
       this._els.temperatureSlider.value = String(temperature);
+      this._els.temperatureSlider.style.setProperty('--slider-percent', `${tempPercent}%`);
+      this._els.temperatureSlider.style.setProperty('--slider-ratio', `${tempPercent / 100}`);
     }
     if (this._els.temperatureValue) {
       this._els.temperatureValue.textContent = `${temperature}K`;
     }
+  }
+
+  _updateSliderVisual(el) {
+    if (!el) return;
+    const min = parseFloat(el.min || '0');
+    const max = parseFloat(el.max || '100');
+    const val = parseFloat(el.value || '0');
+    const percent = Number.isFinite(min) && Number.isFinite(max) && max > min
+      ? Math.min(100, Math.max(0, ((val - min) / (max - min)) * 100))
+      : 0;
+    el.style.setProperty('--slider-percent', `${percent}%`);
+    el.style.setProperty('--slider-ratio', `${percent / 100}`);
+  }
+
+  _bindSliderGesture(el) {
+    if (!el || !el.addEventListener) return;
+    const state = { pointerId: null, startX: 0, startY: 0, startValue: null, mode: 'idle' };
+    const reset = (keepIgnore = false) => {
+      state.pointerId = null;
+      state.mode = 'idle';
+      state.startValue = null;
+      if (!keepIgnore) el.dataset.ignoreChange = 'false';
+    };
+
+    el.addEventListener('pointerdown', (e) => {
+      state.pointerId = e.pointerId;
+      state.startX = e.clientX;
+      state.startY = e.clientY;
+      state.startValue = el.value;
+      el.dataset.startValue = el.value;
+      state.mode = 'pending';
+      el.dataset.ignoreChange = 'false';
+      if (el.setPointerCapture) el.setPointerCapture(e.pointerId);
+    });
+
+    el.addEventListener('pointermove', (e) => {
+      if (state.pointerId !== e.pointerId) return;
+      const dx = e.clientX - state.startX;
+      const dy = e.clientY - state.startY;
+      const threshold = 4;
+
+      if (state.mode === 'pending') {
+        if (Math.abs(dx) > Math.abs(dy) && Math.abs(dx) > threshold) {
+          state.mode = 'horizontal';
+        } else if (Math.abs(dy) > Math.abs(dx) && Math.abs(dy) > threshold) {
+          state.mode = 'vertical';
+          el.dataset.ignoreChange = 'true';
+          el.value = state.startValue;
+          this._updateSliderVisual(el);
+          const labelId = el.id === 'temperatureSlider' ? 'temperatureValue' : 'brightnessValue';
+          const labelEl = this.shadowRoot.getElementById(labelId);
+          if (labelEl) {
+            if (el.id === 'temperatureSlider') {
+              labelEl.textContent = `${parseInt(state.startValue, 10)}K`;
+            } else {
+              labelEl.textContent = `${Math.round((parseInt(state.startValue, 10) / 255) * 100)}%`;
+            }
+          }
+        }
+      }
+
+      if (state.mode === 'vertical') {
+        el.value = state.startValue;
+        this._updateSliderVisual(el);
+      }
+    });
+
+    const end = (e) => {
+      if (state.pointerId !== null && el.hasPointerCapture && el.hasPointerCapture(state.pointerId)) {
+        el.releasePointerCapture(state.pointerId);
+      }
+      const wasVertical = state.mode === 'vertical';
+      if (wasVertical && state.startValue != null) {
+        el.value = state.startValue;
+        this._updateSliderVisual(el);
+      }
+      reset(wasVertical);
+      if (wasVertical) {
+        // Ensure change event ignores the reverted scroll interaction.
+        setTimeout(() => { el.dataset.ignoreChange = 'false'; }, 0);
+      }
+    };
+
+    el.addEventListener('pointerup', end);
+    el.addEventListener('pointercancel', end);
   }
 
   /** ---------- Events ---------- */
@@ -1304,10 +1439,12 @@ class SpatialLightColorCard extends HTMLElement {
     if (this._els.brightnessSlider) {
       this._els.brightnessSlider.addEventListener('input', (e) => this._handleBrightnessInput(e));
       this._els.brightnessSlider.addEventListener('change', () => this._handleBrightnessChange());
+      this._bindSliderGesture(this._els.brightnessSlider);
     }
     if (this._els.temperatureSlider) {
       this._els.temperatureSlider.addEventListener('input', (e) => this._handleTemperatureInput(e));
       this._els.temperatureSlider.addEventListener('change', () => this._handleTemperatureChange());
+      this._bindSliderGesture(this._els.temperatureSlider);
     }
   }
 
@@ -1736,11 +1873,21 @@ class SpatialLightColorCard extends HTMLElement {
 
   _handleBrightnessInput(e) {
     const val = parseInt(e.target.value, 10);
+    if (e.target.dataset.ignoreChange === 'true') {
+      e.target.value = e.target.dataset.startValue || e.target.value;
+      this._updateSliderVisual(e.target);
+      return;
+    }
     if (this._els.brightnessValue) this._els.brightnessValue.textContent = `${Math.round((val / 255) * 100)}%`;
+    this._updateSliderVisual(this._els.brightnessSlider);
     this._pendingBrightness = val;
   }
   _handleBrightnessChange() {
     if (this._pendingBrightness == null) return;
+    if (this._els.brightnessSlider && this._els.brightnessSlider.dataset.ignoreChange === 'true') {
+      this._pendingBrightness = null;
+      return;
+    }
     const controlled = this._selectedLights.size > 0
       ? [...this._selectedLights]
       : (this._config.default_entity ? [this._config.default_entity] : []);
@@ -1755,11 +1902,21 @@ class SpatialLightColorCard extends HTMLElement {
 
   _handleTemperatureInput(e) {
     const k = parseInt(e.target.value, 10);
+    if (e.target.dataset.ignoreChange === 'true') {
+      e.target.value = e.target.dataset.startValue || e.target.value;
+      this._updateSliderVisual(e.target);
+      return;
+    }
     if (this._els.temperatureValue) this._els.temperatureValue.textContent = `${k}K`;
+    this._updateSliderVisual(this._els.temperatureSlider);
     this._pendingTemperature = k;
   }
   _handleTemperatureChange() {
     if (this._pendingTemperature == null) return;
+    if (this._els.temperatureSlider && this._els.temperatureSlider.dataset.ignoreChange === 'true') {
+      this._pendingTemperature = null;
+      return;
+    }
     const controlled = this._selectedLights.size > 0
       ? [...this._selectedLights]
       : (this._config.default_entity ? [this._config.default_entity] : []);

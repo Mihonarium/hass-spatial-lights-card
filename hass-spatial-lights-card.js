@@ -1135,70 +1135,120 @@ class SpatialLightColorCard extends HTMLElement {
     el.style.setProperty('--slider-ratio', `${percent / 100}`);
   }
 
+  _updateSliderLabel(el, value) {
+    if (!el) return;
+    const labelId = el.id === 'temperatureSlider' ? 'temperatureValue' : 'brightnessValue';
+    const labelEl = this.shadowRoot.getElementById(labelId);
+    if (!labelEl) return;
+    if (el.id === 'temperatureSlider') {
+      labelEl.textContent = `${Math.round(value)}K`;
+    } else {
+      labelEl.textContent = `${Math.round((parseFloat(value) / 255) * 100)}%`;
+    }
+  }
+
+  _getSliderValueFromPointer(el, clientX) {
+    if (!el || typeof clientX !== 'number') return null;
+    const rect = el.getBoundingClientRect();
+    if (!rect || rect.width === 0) return null;
+    const min = parseFloat(el.min || '0');
+    const max = parseFloat(el.max || '100');
+    const stepRaw = parseFloat(el.step || '1');
+    const step = Number.isFinite(stepRaw) && stepRaw > 0 ? stepRaw : 1;
+    const ratio = Math.min(1, Math.max(0, (clientX - rect.left) / rect.width));
+    const unclamped = min + ratio * (max - min);
+    const snapped = min + Math.round((unclamped - min) / step) * step;
+    return Math.min(max, Math.max(min, snapped));
+  }
+
+  _triggerSliderInput(el) {
+    if (!el) return;
+    const syntheticEvent = { target: el };
+    if (el.id === 'temperatureSlider') {
+      this._handleTemperatureInput(syntheticEvent);
+    } else {
+      this._handleBrightnessInput(syntheticEvent);
+    }
+  }
+
+  _clearPendingForSlider(el) {
+    if (!el) return;
+    if (el.id === 'temperatureSlider') {
+      this._pendingTemperature = null;
+    } else {
+      this._pendingBrightness = null;
+    }
+  }
+
   _bindSliderGesture(el) {
     if (!el || !el.addEventListener) return;
-    const state = { pointerId: null, startX: 0, startY: 0, startValue: null, mode: 'idle' };
+    const state = { pointerId: null, startValue: null, startScroll: null, mode: 'idle' };
     const reset = (keepIgnore = false) => {
       state.pointerId = null;
+      state.startScroll = null;
       state.mode = 'idle';
       state.startValue = null;
       if (!keepIgnore) el.dataset.ignoreChange = 'false';
     };
 
+    const revertToStart = () => {
+      if (state.startValue == null) return;
+      el.value = state.startValue;
+      this._updateSliderVisual(el);
+      this._updateSliderLabel(el, parseFloat(state.startValue));
+      this._clearPendingForSlider(el);
+    };
+
+    const applyFromPointer = (evt) => {
+      const nextVal = this._getSliderValueFromPointer(el, evt.clientX);
+      if (nextVal == null) return;
+      el.value = `${nextVal}`;
+      this._updateSliderVisual(el);
+      this._updateSliderLabel(el, nextVal);
+      this._triggerSliderInput(el);
+    };
+
     el.addEventListener('pointerdown', (e) => {
       state.pointerId = e.pointerId;
-      state.startX = e.clientX;
-      state.startY = e.clientY;
       state.startValue = el.value;
+      state.startScroll = this._getScrollPosition();
       el.dataset.startValue = el.value;
-      state.mode = 'pending';
+      state.mode = 'active';
       el.dataset.ignoreChange = 'false';
+      applyFromPointer(e);
       if (el.setPointerCapture) el.setPointerCapture(e.pointerId);
     });
 
     el.addEventListener('pointermove', (e) => {
       if (state.pointerId !== e.pointerId) return;
-      const dx = e.clientX - state.startX;
-      const dy = e.clientY - state.startY;
-      const threshold = 4;
-
-      if (state.mode === 'pending') {
-        if (Math.abs(dx) > Math.abs(dy) && Math.abs(dx) > threshold) {
-          state.mode = 'horizontal';
-        } else if (Math.abs(dy) > Math.abs(dx) && Math.abs(dy) > threshold) {
-          state.mode = 'vertical';
-          el.dataset.ignoreChange = 'true';
-          el.value = state.startValue;
-          this._updateSliderVisual(el);
-          const labelId = el.id === 'temperatureSlider' ? 'temperatureValue' : 'brightnessValue';
-          const labelEl = this.shadowRoot.getElementById(labelId);
-          if (labelEl) {
-            if (el.id === 'temperatureSlider') {
-              labelEl.textContent = `${parseInt(state.startValue, 10)}K`;
-            } else {
-              labelEl.textContent = `${Math.round((parseInt(state.startValue, 10) / 255) * 100)}%`;
-            }
-          }
-        }
+      const scrollPos = this._getScrollPosition();
+      if (state.startScroll && scrollPos.y !== state.startScroll.y) {
+        state.mode = 'vertical';
+        el.dataset.ignoreChange = 'true';
+        revertToStart();
+        return;
       }
 
       if (state.mode === 'vertical') {
-        el.value = state.startValue;
-        this._updateSliderVisual(el);
+        revertToStart();
+        return;
       }
+
+      applyFromPointer(e);
     });
 
     const end = (e) => {
+      if (state.pointerId !== e.pointerId) return;
+      const wasVertical = state.mode === 'vertical';
       if (state.pointerId !== null && el.hasPointerCapture && el.hasPointerCapture(state.pointerId)) {
         el.releasePointerCapture(state.pointerId);
       }
-      const wasVertical = state.mode === 'vertical';
       if (wasVertical && state.startValue != null) {
-        el.value = state.startValue;
-        this._updateSliderVisual(el);
+        revertToStart();
       }
       reset(wasVertical);
       if (wasVertical) {
+        this._clearPendingForSlider(el);
         // Ensure change event ignores the reverted scroll interaction.
         setTimeout(() => { el.dataset.ignoreChange = 'false'; }, 0);
       }

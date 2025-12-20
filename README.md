@@ -1,15 +1,15 @@
+
 [![Open your Home Assistant instance and open this repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=Mihonarium&repository=hass-spatial-lights-card)
 
 # Spatial Lights Card for Home Assistant
 
-The Spatial Lights Card lets you place many Home Assistant lights on a 2D canvas, making it easy to control arbitrary groups of lights with few taps and little attention.
+The Spatial Lights Card lets you place many Home Assistant lights on a 2D canvas, making it easy to control arbitrary groups of entities with few taps and little attention.
 
 Very useful when you have a lot of lights, and searching the one you need by name and icon is tiresome; you can position all the lights in a layout that corresponds to the physical room layout, making it easy to select the light you need.
 
 You can also drag to draw a rectangle around lights, which you'll immediately be able to control as a group.
 
-<img height="700" alt="image" src="https://github.com/user-attachments/assets/01665e89-fe23-4bc2-8aff-517b7e9b0f9b" />
-
+<img height="700" alt="Spatial Lights Card Screenshot" src="https://github.com/user-attachments/assets/01665e89-fe23-4bc2-8aff-517b7e9b0f9b" />
 
 ---
 
@@ -20,11 +20,12 @@ You can also drag to draw a rectangle around lights, which you'll immediately be
 3. [Quick Start](#-quick-start)
 4. [Configuration Reference](#-all-configuration-options)
 5. [Usage Tips](#-usage)
-6. [Common Workflows](#-common-workflows)
-7. [Visual Layout Options](#-visual-options)
-8. [Locking & Positioning](#-lockunlock)
-9. [Example Setups](#-example-setups)
-10. [Troubleshooting](#troubleshooting)
+6. [Custom Colors & Backgrounds](#-custom-colors--backgrounds)
+7. [Common Workflows](#-common-workflows)
+8. [Visual Layout Options](#-visual-options)
+9. [Locking & Positioning](#-lockunlock)
+10. [Example Setups](#-example-setups)
+11. [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -32,6 +33,8 @@ You can also drag to draw a rectangle around lights, which you'll immediately be
 
 - Interactive 2D layout to position lights exactly where they are in a room.
 - Multi-select and batch control color, brightness, and temperature.
+- Support for Scenes and Switches, customizable display colors for scenes and switches.
+- Background image support (URL, size, blend modes).
 - Optional default entity for whole-room adjustments.
 - Toggleable floating/below controls to match your dashboard style.
 - Built-in position locking and export tools for hassle-free editing.
@@ -70,6 +73,8 @@ title: Living Room
 entities:
   - light.ceiling
   - light.floor_lamp
+  - switch.fan
+  - scene.movie_night
 ```
 
 ### With Always-Visible Controls
@@ -120,18 +125,27 @@ positions:
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `title` | string | `"Lights"` | Card title |
-| `entities` | list | **required** | Light entities to display |
-| `positions` | map | `{}` | Per-entity x/y positions from 0–100 (percentage) |
-| `canvas_height` | number | `450` | Canvas height in pixels |
-| `grid_size` | number | `25` | Grid spacing in pixels when snapping |
-| `label_mode` | string | `"smart"` | Label generation mode (`smart`, `friendly_name`, `entity_id`) |
-| `label_overrides` | map | `{}` | Map entity_id → custom label |
-| `show_settings_button` | boolean | `true` | Display settings gear in card header |
-| `always_show_controls` | boolean | `false` | Always show color controls even when nothing selected |
-| `controls_below` | boolean | `true` | Render controls below (`true`) or floating over (`false`) |
-| `default_entity` | string | `null` | Entity to control when nothing is selected |
-| `switch_single_tap` | boolean | `false` | Toggle switch entities with a single tap instead of just selecting them |
+| `title` | string | `"Lights"` | Card title. |
+| `entities` | list | **required** | Entities (lights, switches, scenes) to display. |
+| `positions` | map | `{}` | Per-entity x/y positions from 0–100 (percentage). |
+| `canvas_height` | number | `450` | Canvas height in pixels. |
+| `grid_size` | number | `25` | Grid spacing in pixels when snapping. |
+| `label_mode` | string | `"smart"` | Label generation mode (`smart`, `friendly_name`, `entity_id`). |
+| `label_overrides` | map | `{}` | Map entity_id → custom label. |
+| `color_overrides` | map | `{}` | Map entity_id → color string OR object (`state_on`, `state_off`). |
+| `switch_on_color` | string | `"#ffa500"` | Default color for active switches. |
+| `switch_off_color` | string | `"#2a2a2a"` | Default color for inactive switches. |
+| `scene_color` | string | `"#6366f1"` | Default color for scenes. |
+| `show_settings_button` | boolean | `true` | Display settings gear in card header. |
+| `always_show_controls` | boolean | `false` | Always show color controls even when nothing selected. |
+| `controls_below` | boolean | `true` | Render controls below (`true`) or floating over (`false`). |
+| `default_entity` | string | `null` | Entity to control when nothing is selected. |
+| `switch_single_tap` | boolean | `false` | Toggle switches/scenes with a single tap instead of selecting them. |
+| `show_entity_icons` | boolean | `false` | Show MDI icons inside the light circles. |
+| `icon_style` | string | `"mdi"` | Icon style (`mdi` or `emoji`). |
+| `background_image` | string/map | `null` | URL string or object `{url, size, position, blend_mode}`. |
+| `temperature_min` | number | `null` | Override minimum Kelvin for temperature slider. |
+| `temperature_max` | number | `null` | Override maximum Kelvin for temperature slider. |
 
 > ℹ️ **Label modes:** `smart` uses friendly names when available, falling back to entity IDs. Override individual entities with `label_overrides`.
 
@@ -141,7 +155,7 @@ positions:
 
 ### Desktop
 - **Click** to select a light.
-- **Double-click** a light or switch to toggle it (switches can toggle on a single tap if `switch_single_tap` is enabled).
+- **Double-click** a light, switch, or scene to toggle/activate it.
 - **Shift+Click** to add to the current selection.
 - **Drag** to create a marquee selection (when nothing is selected).
 - **Unlock** in settings to drag lights around the canvas.
@@ -149,16 +163,55 @@ positions:
 
 ### Mobile
 - **Tap** to select a light.
-- **Double-tap** a light or switch to toggle it (switches can toggle on a single tap if `switch_single_tap` is enabled).
+- **Double-tap** a light, switch, or scene to toggle/activate it.
 - **Long press** (~500 ms) to add to the selection.
 - **Drag** with an empty selection to select an area.
 - **Unlock** in settings to drag lights.
 
+> **Note:** If `switch_single_tap` is enabled, switches and scenes activate immediately on a single tap/click. To move them in this mode, you must unlock positions in settings first.
+
 ### Controls
 - **Color wheel** — tap anywhere to set hue and saturation.
-- **Brightness slider** — drag horizontally or vertically (depending on theme) to set brightness.
+- **Brightness slider** — drag horizontally to set brightness. Tap to jump to value.
 - **Temperature slider** — adjust white-temperature capable lights.
 - **Default entity** — when configured, controls this entity if no light is selected.
+
+---
+
+## 🖌 Custom Colors & Backgrounds
+
+### Global Colors
+Customize the default appearance of non-light entities:
+```yaml
+switch_on_color: "#00ff00"
+switch_off_color: "#ff0000"
+scene_color: "#55aaff"
+```
+
+### Individual Overrides
+Target specific entities with `color_overrides`. You can provide a single color (applied when "on") or specific colors for both states.
+
+```yaml
+color_overrides:
+  # Simple string = On color
+  scene.movie_night: "#a855f7"
+  switch.kitchen_fan: "#00ff00"
+
+  # Object = Specific state colors
+  switch.hallway:
+    state_on: "#ffffff"
+    state_off: "#444444"
+```
+
+### Background Image
+Add a floorplan or texture behind your lights.
+```yaml
+background_image:
+  url: "/local/floorplan.png"
+  size: "cover"      # or "contain", "100% 100%"
+  position: "center"
+  blend_mode: "overlay" # Optional CSS blend mode
+```
 
 ---
 
@@ -231,10 +284,12 @@ show_settings_button: false
 always_show_controls: true
 controls_below: true
 default_entity: light.theater_all
+scene_color: "#ff00ff"
 entities:
   - light.screen_backlight
   - light.ceiling_cans
-  - light.floor_accents
+  - scene.movie_mode
+  - scene.intermission
 ```
 
 ### Bedroom
@@ -244,6 +299,7 @@ title: Bedroom
 canvas_height: 450
 always_show_controls: false
 controls_below: false
+background_image: "/local/bedroom_plan.png"
 entities:
   - light.bedside_left
   - light.bedside_right
@@ -257,10 +313,11 @@ title: Office
 show_settings_button: false
 always_show_controls: true
 default_entity: light.office_all
+switch_single_tap: true
 entities:
   - light.desk
   - light.bookshelf
-  - light.overhead
+  - switch.monitor_plug
 ```
 
 ---

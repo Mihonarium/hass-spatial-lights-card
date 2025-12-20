@@ -1135,14 +1135,74 @@ class SpatialLightColorCard extends HTMLElement {
     el.style.setProperty('--slider-ratio', `${percent / 100}`);
   }
 
+  _updateSliderLabel(el, value) {
+    if (!el) return;
+    if (el.id === 'temperatureSlider') {
+      if (this._els.temperatureValue) this._els.temperatureValue.textContent = `${Math.round(value)}K`;
+    } else if (el.id === 'brightnessSlider') {
+      if (this._els.brightnessValue) this._els.brightnessValue.textContent = `${Math.round((value / 255) * 100)}%`;
+    }
+  }
+
+  _syncSliderState(el, value) {
+    this._updateSliderLabel(el, value);
+    if (el && el.id === 'temperatureSlider') {
+      this._pendingTemperature = Math.round(value);
+    } else if (el && el.id === 'brightnessSlider') {
+      this._pendingBrightness = Math.round(value);
+    }
+  }
+
+  _clearSliderPending(el) {
+    if (el && el.id === 'temperatureSlider') {
+      this._pendingTemperature = null;
+    } else if (el && el.id === 'brightnessSlider') {
+      this._pendingBrightness = null;
+    }
+  }
+
+  _setSliderValueFromPointer(el, clientX, { syncPending = true } = {}) {
+    if (!el) return;
+    const rect = el.getBoundingClientRect();
+    const min = parseFloat(el.min || '0');
+    const max = parseFloat(el.max || '100');
+    const stepRaw = el.step && el.step !== 'any' ? parseFloat(el.step) : null;
+    const ratio = rect.width > 0
+      ? Math.min(1, Math.max(0, (clientX - rect.left) / rect.width))
+      : 0;
+    let value = min + ratio * (max - min);
+    if (Number.isFinite(stepRaw) && stepRaw > 0) {
+      value = Math.round(value / stepRaw) * stepRaw;
+    }
+    value = Math.min(max, Math.max(min, value));
+    el.value = `${value}`;
+    this._updateSliderVisual(el);
+    if (syncPending) {
+      this._syncSliderState(el, value);
+    } else {
+      this._updateSliderLabel(el, value);
+    }
+  }
+
   _bindSliderGesture(el) {
     if (!el || !el.addEventListener) return;
-    const state = { pointerId: null, startX: 0, startY: 0, startValue: null, mode: 'idle' };
+    const state = { pointerId: null, startX: 0, startY: 0, startValue: null, mode: 'idle', startScroll: null };
     const reset = (keepIgnore = false) => {
       state.pointerId = null;
       state.mode = 'idle';
       state.startValue = null;
+      state.startScroll = null;
       if (!keepIgnore) el.dataset.ignoreChange = 'false';
+    };
+
+    const revertToStart = () => {
+      el.dataset.ignoreChange = 'true';
+      this._clearSliderPending(el);
+      if (state.startValue != null) {
+        el.value = state.startValue;
+        this._updateSliderVisual(el);
+        this._updateSliderLabel(el, parseFloat(state.startValue));
+      }
     };
 
     el.addEventListener('pointerdown', (e) => {
@@ -1150,58 +1210,69 @@ class SpatialLightColorCard extends HTMLElement {
       state.startX = e.clientX;
       state.startY = e.clientY;
       state.startValue = el.value;
+      state.startScroll = this._getScrollPosition();
       el.dataset.startValue = el.value;
       state.mode = 'pending';
       el.dataset.ignoreChange = 'false';
+      this._clearSliderPending(el);
+      this._setSliderValueFromPointer(el, e.clientX);
       if (el.setPointerCapture) el.setPointerCapture(e.pointerId);
     });
 
     el.addEventListener('pointermove', (e) => {
       if (state.pointerId !== e.pointerId) return;
+      const scrollPos = this._getScrollPosition();
+      const scrolled = scrollPos && state.startScroll && scrollPos.y !== state.startScroll.y;
       const dx = e.clientX - state.startX;
       const dy = e.clientY - state.startY;
       const threshold = 4;
+
+      if (scrolled) {
+        state.mode = 'vertical';
+        revertToStart();
+        return;
+      }
 
       if (state.mode === 'pending') {
         if (Math.abs(dx) > Math.abs(dy) && Math.abs(dx) > threshold) {
           state.mode = 'horizontal';
         } else if (Math.abs(dy) > Math.abs(dx) && Math.abs(dy) > threshold) {
           state.mode = 'vertical';
-          el.dataset.ignoreChange = 'true';
-          el.value = state.startValue;
-          this._updateSliderVisual(el);
-          const labelId = el.id === 'temperatureSlider' ? 'temperatureValue' : 'brightnessValue';
-          const labelEl = this.shadowRoot.getElementById(labelId);
-          if (labelEl) {
-            if (el.id === 'temperatureSlider') {
-              labelEl.textContent = `${parseInt(state.startValue, 10)}K`;
-            } else {
-              labelEl.textContent = `${Math.round((parseInt(state.startValue, 10) / 255) * 100)}%`;
-            }
-          }
+          revertToStart();
         }
       }
 
       if (state.mode === 'vertical') {
-        el.value = state.startValue;
-        this._updateSliderVisual(el);
+        revertToStart();
+      } else {
+        e.preventDefault();
+        this._setSliderValueFromPointer(el, e.clientX);
       }
     });
 
     const end = (e) => {
+      if (state.pointerId !== null && e.pointerId != null && state.pointerId !== e.pointerId) return;
       if (state.pointerId !== null && el.hasPointerCapture && el.hasPointerCapture(state.pointerId)) {
         el.releasePointerCapture(state.pointerId);
       }
       const wasVertical = state.mode === 'vertical';
       if (wasVertical && state.startValue != null) {
-        el.value = state.startValue;
-        this._updateSliderVisual(el);
-      }
-      reset(wasVertical);
-      if (wasVertical) {
-        // Ensure change event ignores the reverted scroll interaction.
+        revertToStart();
+        reset(true);
         setTimeout(() => { el.dataset.ignoreChange = 'false'; }, 0);
+        return;
       }
+
+      const clientX = Number.isFinite(e.clientX) ? e.clientX : state.startX;
+      this._setSliderValueFromPointer(el, clientX);
+      if (el.id === 'temperatureSlider') {
+        this._handleTemperatureChange();
+      } else {
+        this._handleBrightnessChange();
+      }
+      el.dataset.ignoreNativeChange = 'true';
+      setTimeout(() => { el.dataset.ignoreNativeChange = 'false'; }, 0);
+      reset(false);
     };
 
     el.addEventListener('pointerup', end);
@@ -1878,14 +1949,19 @@ class SpatialLightColorCard extends HTMLElement {
     if (e.target.dataset.ignoreChange === 'true') {
       e.target.value = e.target.dataset.startValue || e.target.value;
       this._updateSliderVisual(e.target);
+      this._clearSliderPending(e.target);
       return;
     }
-    if (this._els.brightnessValue) this._els.brightnessValue.textContent = `${Math.round((val / 255) * 100)}%`;
+    this._syncSliderState(e.target, val);
     this._updateSliderVisual(this._els.brightnessSlider);
-    this._pendingBrightness = val;
   }
   _handleBrightnessChange() {
     if (this._pendingBrightness == null) return;
+    if (this._els.brightnessSlider && this._els.brightnessSlider.dataset.ignoreNativeChange === 'true') {
+      this._pendingBrightness = null;
+      this._els.brightnessSlider.dataset.ignoreNativeChange = 'false';
+      return;
+    }
     if (this._els.brightnessSlider && this._els.brightnessSlider.dataset.ignoreChange === 'true') {
       this._pendingBrightness = null;
       return;
@@ -1907,14 +1983,19 @@ class SpatialLightColorCard extends HTMLElement {
     if (e.target.dataset.ignoreChange === 'true') {
       e.target.value = e.target.dataset.startValue || e.target.value;
       this._updateSliderVisual(e.target);
+      this._clearSliderPending(e.target);
       return;
     }
-    if (this._els.temperatureValue) this._els.temperatureValue.textContent = `${k}K`;
+    this._syncSliderState(e.target, k);
     this._updateSliderVisual(this._els.temperatureSlider);
-    this._pendingTemperature = k;
   }
   _handleTemperatureChange() {
     if (this._pendingTemperature == null) return;
+    if (this._els.temperatureSlider && this._els.temperatureSlider.dataset.ignoreNativeChange === 'true') {
+      this._pendingTemperature = null;
+      this._els.temperatureSlider.dataset.ignoreNativeChange = 'false';
+      return;
+    }
     if (this._els.temperatureSlider && this._els.temperatureSlider.dataset.ignoreChange === 'true') {
       this._pendingTemperature = null;
       return;

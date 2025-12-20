@@ -796,35 +796,64 @@ class SpatialLightColorCard extends HTMLElement {
         border: 2px solid var(--border-subtle); box-shadow: var(--shadow-sm); flex-shrink: 0;
       }
 
-      .slider-group { display:flex; flex-direction:column; gap:12px; min-width: 220px; flex:1; max-width: 480px; }
-      .slider-row { display:flex; align-items:center; gap:12px; }
-      .slider-icon { font-size: 16px; opacity: 0.65; width: 20px; text-align:center; flex-shrink:0; }
+      .slider-group { display:flex; flex-direction:column; gap:14px; min-width: 260px; flex:1; width:100%; }
+      .slider-row { display:flex; align-items:center; gap:14px; width:100%; padding: 2px 0; }
+      .slider-icon { font-size: 16px; opacity: 0.65; width: 24px; text-align:center; flex-shrink:0; }
 
       .slider {
-        flex:1; -webkit-appearance:none; height:8px; border-radius:9999px; background: var(--surface-tertiary);
+        flex:1; -webkit-appearance:none; appearance:none;
+        --slider-height: 18px;
+        --slider-thumb-size: 26px;
+        --slider-track-radius: 9999px;
+        --slider-percent: 50%;
+        --slider-track: linear-gradient(to right,
+          var(--accent-primary) 0%,
+          var(--accent-primary) var(--slider-percent),
+          var(--surface-tertiary) var(--slider-percent),
+          var(--surface-tertiary) 100%);
+        height: calc(var(--slider-height) + 6px);
+        border-radius: var(--slider-track-radius);
+        background: var(--slider-track);
         outline:none; position:relative; cursor:pointer; border:1px solid var(--border-subtle);
+        box-shadow: inset 0 1px 0 rgba(255,255,255,0.04), var(--shadow-sm);
       }
       .slider.temperature {
-        background: linear-gradient(to right,
+        --slider-track: linear-gradient(to right,
           #ff9944 0%,
           #ffd480 30%,
           #ffffff 50%,
           #87ceeb 70%,
           #4d9fff 100%
         );
-        border: 1px solid rgba(255,255,255,0.1);
+        background:
+          linear-gradient(to right,
+            rgba(255,255,255,0.18) 0%,
+            rgba(255,255,255,0.18) var(--slider-percent),
+            rgba(255,255,255,0.08) var(--slider-percent),
+            rgba(255,255,255,0.08) 100%),
+          var(--slider-track);
+        border: 1px solid rgba(255,255,255,0.12);
       }
       .slider::-webkit-slider-thumb {
-        -webkit-appearance:none; width:20px; height:20px; border-radius:9999px;
-        background: var(--text-primary); border:2px solid var(--surface-primary); box-shadow: var(--shadow-sm);
+        -webkit-appearance:none; width:var(--slider-thumb-size); height:var(--slider-thumb-size); border-radius:9999px;
+        background: var(--surface-primary); border:2px solid var(--text-primary); box-shadow: var(--shadow-sm);
+        transition: transform var(--transition-fast);
+        margin-top: calc((var(--slider-height) - var(--slider-thumb-size)) / 2);
+      }
+      .slider::-webkit-slider-thumb:hover { transform: scale(1.06); }
+      .slider::-moz-range-thumb {
+        width:var(--slider-thumb-size); height:var(--slider-thumb-size); border-radius:9999px; background: var(--surface-primary);
+        border:2px solid var(--text-primary); box-shadow: var(--shadow-sm);
         transition: transform var(--transition-fast);
       }
-      .slider::-webkit-slider-thumb:hover { transform: scale(1.08); }
-      .slider::-moz-range-thumb {
-        width:20px; height:20px; border-radius:9999px; background: var(--text-primary);
-        border:2px solid var(--surface-primary); box-shadow: var(--shadow-sm);
+      .slider::-moz-range-thumb:hover { transform: scale(1.06); }
+      .slider::-moz-range-track {
+        height: var(--slider-height);
+        border-radius: var(--slider-track-radius);
+        background: var(--slider-track);
+        border: none;
       }
-      .slider-value { font-size: 13px; color: var(--text-secondary); min-width: 52px; text-align:right; font-weight: 600; }
+      .slider-value { font-size: 13px; color: var(--text-secondary); min-width: 56px; text-align:right; font-weight: 700; letter-spacing: 0.01em; }
 
       .settings-panel {
         position: absolute; top: 16px; right: 16px;
@@ -948,18 +977,22 @@ class SpatialLightColorCard extends HTMLElement {
   _renderControlsFloating(visible, controlContext) {
     const { avgState, tempRange } = controlContext;
     const clampedTemp = this._clampTemperature(avgState.temperature, tempRange);
+    const brightnessPercent = Math.min(100, Math.max(0, (avgState.brightness / 255) * 100));
+    const tempPercent = (tempRange.max > tempRange.min)
+      ? Math.min(100, Math.max(0, ((clampedTemp - tempRange.min) / (tempRange.max - tempRange.min)) * 100))
+      : 0;
     return `
       <div class="controls-floating ${visible ? 'visible' : ''}" id="controlsFloating" role="region" aria-label="Light controls" aria-live="polite">
         <canvas id="colorWheelMini" class="color-wheel-mini" width="256" height="256" role="img" aria-label="Color picker"></canvas>
         <div class="slider-group">
           <div class="slider-row">
             <span class="slider-icon" aria-hidden="true">💡</span>
-            <input type="range" class="slider" id="brightnessSlider" min="0" max="255" value="${avgState.brightness}" aria-label="Brightness">
+            <input type="range" class="slider" id="brightnessSlider" min="0" max="255" value="${avgState.brightness}" aria-label="Brightness" style="--slider-percent:${brightnessPercent}%">
             <span class="slider-value" id="brightnessValue">${Math.round((avgState.brightness/255)*100)}%</span>
           </div>
           <div class="slider-row">
             <span class="slider-icon" aria-hidden="true">🌡️</span>
-            <input type="range" class="slider temperature" id="temperatureSlider" min="${tempRange.min}" max="${tempRange.max}" value="${clampedTemp}" aria-label="Color temperature">
+            <input type="range" class="slider temperature" id="temperatureSlider" min="${tempRange.min}" max="${tempRange.max}" value="${clampedTemp}" aria-label="Color temperature" style="--slider-percent:${tempPercent}%">
             <span class="slider-value" id="temperatureValue">${clampedTemp}K</span>
           </div>
         </div>
@@ -970,18 +1003,22 @@ class SpatialLightColorCard extends HTMLElement {
   _renderControlsBelow(controlContext) {
     const { avgState, tempRange } = controlContext;
     const clampedTemp = this._clampTemperature(avgState.temperature, tempRange);
+    const brightnessPercent = Math.min(100, Math.max(0, (avgState.brightness / 255) * 100));
+    const tempPercent = (tempRange.max > tempRange.min)
+      ? Math.min(100, Math.max(0, ((clampedTemp - tempRange.min) / (tempRange.max - tempRange.min)) * 100))
+      : 0;
     return `
       <div class="controls-below" id="controlsBelow" role="region" aria-label="Light controls" aria-live="polite">
         <canvas id="colorWheelMini" class="color-wheel-mini" width="256" height="256" role="img" aria-label="Color picker"></canvas>
         <div class="slider-group">
           <div class="slider-row">
             <span class="slider-icon" aria-hidden="true">💡</span>
-            <input type="range" class="slider" id="brightnessSlider" min="0" max="255" value="${avgState.brightness}" aria-label="Brightness">
+            <input type="range" class="slider" id="brightnessSlider" min="0" max="255" value="${avgState.brightness}" aria-label="Brightness" style="--slider-percent:${brightnessPercent}%">
             <span class="slider-value" id="brightnessValue">${Math.round((avgState.brightness/255)*100)}%</span>
           </div>
           <div class="slider-row">
             <span class="slider-icon" aria-hidden="true">🌡️</span>
-            <input type="range" class="slider temperature" id="temperatureSlider" min="${tempRange.min}" max="${tempRange.max}" value="${clampedTemp}" aria-label="Color temperature">
+            <input type="range" class="slider temperature" id="temperatureSlider" min="${tempRange.min}" max="${tempRange.max}" value="${clampedTemp}" aria-label="Color temperature" style="--slider-percent:${tempPercent}%">
             <span class="slider-value" id="temperatureValue">${clampedTemp}K</span>
           </div>
         </div>
@@ -1050,9 +1087,14 @@ class SpatialLightColorCard extends HTMLElement {
     const temperature = Number.isFinite(avgState?.temperature)
       ? this._clampTemperature(avgState.temperature, tempRange)
       : this._clampTemperature(4000, tempRange);
+    const brightnessPercent = Math.min(100, Math.max(0, (brightness / 255) * 100));
+    const tempPercent = (tempRange.max > tempRange.min)
+      ? Math.min(100, Math.max(0, ((temperature - tempRange.min) / (tempRange.max - tempRange.min)) * 100))
+      : 0;
 
     if (this._els.brightnessSlider) {
       this._els.brightnessSlider.value = String(brightness);
+      this._els.brightnessSlider.style.setProperty('--slider-percent', `${brightnessPercent}%`);
     }
     if (this._els.brightnessValue) {
       this._els.brightnessValue.textContent = `${Math.round((brightness / 255) * 100)}%`;
@@ -1065,6 +1107,7 @@ class SpatialLightColorCard extends HTMLElement {
         this._els.temperatureSlider.max = String(tempRange.max);
       }
       this._els.temperatureSlider.value = String(temperature);
+      this._els.temperatureSlider.style.setProperty('--slider-percent', `${tempPercent}%`);
     }
     if (this._els.temperatureValue) {
       this._els.temperatureValue.textContent = `${temperature}K`;
@@ -1737,6 +1780,10 @@ class SpatialLightColorCard extends HTMLElement {
   _handleBrightnessInput(e) {
     const val = parseInt(e.target.value, 10);
     if (this._els.brightnessValue) this._els.brightnessValue.textContent = `${Math.round((val / 255) * 100)}%`;
+    if (this._els.brightnessSlider) {
+      const percent = Math.min(100, Math.max(0, (val / 255) * 100));
+      this._els.brightnessSlider.style.setProperty('--slider-percent', `${percent}%`);
+    }
     this._pendingBrightness = val;
   }
   _handleBrightnessChange() {
@@ -1756,6 +1803,14 @@ class SpatialLightColorCard extends HTMLElement {
   _handleTemperatureInput(e) {
     const k = parseInt(e.target.value, 10);
     if (this._els.temperatureValue) this._els.temperatureValue.textContent = `${k}K`;
+    if (this._els.temperatureSlider) {
+      const min = parseFloat(this._els.temperatureSlider.min);
+      const max = parseFloat(this._els.temperatureSlider.max);
+      const percent = Number.isFinite(min) && Number.isFinite(max) && max > min
+        ? Math.min(100, Math.max(0, ((k - min) / (max - min)) * 100))
+        : 0;
+      this._els.temperatureSlider.style.setProperty('--slider-percent', `${percent}%`);
+    }
     this._pendingTemperature = k;
   }
   _handleTemperatureChange() {

@@ -3,11 +3,12 @@
 
 # Spatial Lights Card for Home Assistant
 
-The Spatial Lights Card lets you place many Home Assistant lights on a 2D canvas, making it easy to control arbitrary groups of entities with few taps and little attention.
+The Spatial Lights Card lets you place many Home Assistant lights on a 2D canvas, making it easy to control arbitrary groups of entities with very few taps and little attention.
 
-Very useful when you have a lot of lights, and searching the one you need by name and icon is tiresome; you can position all the lights in a layout that corresponds to the physical room layout, making it easy to select the light you need.
+You can drag to draw a rectangle around lights, which you'll immediately be able to control as a group. You can toggle individual lights
 
-You can also drag to draw a rectangle around lights, which you'll immediately be able to control as a group.
+Very useful when you have a lot of lights, and searching for the one you need by name and icon is tiresome; you can position the lights in a layout that corresponds to the physical room layout, making it easy to select the light you need. You can add a background image, e.g., with the room layout.
+
 
 <img height="700" alt="Spatial Lights Card Screenshot" src="https://github.com/user-attachments/assets/01665e89-fe23-4bc2-8aff-517b7e9b0f9b" />
 
@@ -48,14 +49,18 @@ You can also drag to draw a rectangle around lights, which you'll immediately be
 2. Install the card and reload your browser when prompted.
 
 ### Manual Installation
+
 ```bash
 # Copy file
 cp hass-spatial-lights-card.js /config/www/
 
-# Add to resources (configuration.yaml or UI)
+# Add to resources. configuration.yaml:
 resources:
   - url: /local/hass-spatial-lights-card.js
     type: module
+
+Alternatively, open Settings → Dashboards → (three dots) → Resources to add via UI.
+
 ```
 
 ---
@@ -63,8 +68,8 @@ resources:
 ## 🎯 Quick Start
 
 1. Install the resource using one of the methods above.
-2. Open **Settings → Dashboards → (three dots) → Edit dashboard**.
-3. Choose **Add card → Custom: Spatial Lights Card** (or **Manual** and paste YAML).
+2. Choose **Add card → Custom: Spatial Lights Card** (or **Manual** and paste YAML).
+
 
 ### Minimal Setup
 ```yaml
@@ -345,4 +350,4 @@ entities:
 
 ---
 
-**You're all set! Enjoy your perfectly designed light controller.** 🎉
+**You're all set!** 🎉

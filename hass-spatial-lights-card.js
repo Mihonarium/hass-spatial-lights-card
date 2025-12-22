@@ -32,6 +32,8 @@ class SpatialLightColorCard extends HTMLElement {
     this._gridSize = 25;
     this._snapOnModifier = true;  // if true, requires Alt key to snap
     this._lockPositions = true;
+    this._lightSize = 56;
+    this._iconOnlyDisplay = false;
     this._iconRefreshHandle = null;
     this._iconRehydrateHandle = null;
 
@@ -58,6 +60,9 @@ class SpatialLightColorCard extends HTMLElement {
       settingsPanel: null,
       lockToggle: null,
       iconToggle: null,
+      iconOnlyToggle: null,
+      lightSizeSlider: null,
+      lightSizeValue: null,
       switchTapToggle: null,
       rearrangeBtn: null,
       exportBtn: null,
@@ -132,8 +137,10 @@ class SpatialLightColorCard extends HTMLElement {
       default_entity: config.default_entity || null,
       controls_below: config.controls_below !== false,
       show_entity_icons: config.show_entity_icons || false,
+      icon_only: config.icon_only || false,
       switch_single_tap: config.switch_single_tap || false,
       icon_style: config.icon_style || 'mdi', // 'mdi' or 'emoji' (emoji kept as fallback only)
+      light_size: Number.isFinite(config.light_size) ? config.light_size : (config.light_size ? parseFloat(config.light_size) : 56),
       temperature_min: Number.isFinite(tempMin) ? tempMin : null,
       temperature_max: Number.isFinite(tempMax) ? tempMax : null,
       background_image: backgroundImage,
@@ -145,7 +152,13 @@ class SpatialLightColorCard extends HTMLElement {
       color_overrides: config.color_overrides || {},
     };
 
+    if (this._config.icon_only && !this._config.show_entity_icons) {
+      this._config.show_entity_icons = true;
+    }
+
     this._gridSize = this._config.grid_size;
+    this._lightSize = Math.min(140, Math.max(32, Number(this._config.light_size) || 56));
+    this._iconOnlyDisplay = !!this._config.icon_only;
     this._initializePositions();
   }
 
@@ -650,6 +663,9 @@ class SpatialLightColorCard extends HTMLElement {
     this._els.settingsPanel = this.shadowRoot.getElementById('settingsPanel');
     this._els.lockToggle = this.shadowRoot.getElementById('lockToggle');
     this._els.iconToggle = this.shadowRoot.getElementById('iconToggle');
+    this._els.iconOnlyToggle = this.shadowRoot.getElementById('iconOnlyToggle');
+    this._els.lightSizeSlider = this.shadowRoot.getElementById('lightSizeSlider');
+    this._els.lightSizeValue = this.shadowRoot.getElementById('lightSizeValue');
     this._els.switchTapToggle = this.shadowRoot.getElementById('switchTapToggle');
     this._els.rearrangeBtn = this.shadowRoot.getElementById('rearrangeBtn');
     this._els.exportBtn = this.shadowRoot.getElementById('exportBtn');
@@ -711,6 +727,10 @@ class SpatialLightColorCard extends HTMLElement {
 
         --transition-fast: 120ms cubic-bezier(0.4,0,0.2,1);
         --transition-base: 200ms cubic-bezier(0.4,0,0.2,1);
+
+        --light-size: ${this._lightSize}px;
+        --light-icon-size: ${Math.max(16, Math.round(this._lightSize * 0.42))}px;
+        --light-icon-color: rgba(255,255,255,0.92);
       }
       @media (prefers-reduced-motion: reduce) {
         :host { --transition-fast: 0ms; --transition-base: 0ms; }
@@ -755,7 +775,7 @@ class SpatialLightColorCard extends HTMLElement {
       }
 
       .light {
-        position: absolute; width: 56px; height: 56px; border-radius: var(--radius-full);
+        position: absolute; width: var(--light-size); height: var(--light-size); border-radius: var(--radius-full);
         transform: translate(-50%,-50%); cursor: ${this._lockPositions ? 'pointer' : 'grab'};
         display:flex; align-items:center; justify-content:center; flex-direction:column;
         will-change: transform, left, top, background; z-index: 1;
@@ -770,8 +790,21 @@ class SpatialLightColorCard extends HTMLElement {
       .light.off:not([style*="background"]) { background: linear-gradient(135deg,#2a2a2a 0%, #1a1a1a 100%); }
       .light.off::after { display:none; }
 
-      .light-icon-emoji { font-size: 22px; line-height: 1; filter: drop-shadow(0 1px 2px rgba(0,0,0,0.6)); }
-      .light-icon-mdi { --mdc-icon-size: 22px; color: rgba(255,255,255,0.92); filter: drop-shadow(0 1px 2px rgba(0,0,0,0.6)); }
+      .light-icon-mdi { --mdc-icon-size: var(--light-icon-size); color: var(--light-icon-color, rgba(255,255,255,0.92)); filter: drop-shadow(0 1px 2px rgba(0,0,0,0.6)); }
+      .light-icon-emoji { font-size: var(--light-icon-size); line-height: 1; color: var(--light-icon-color, rgba(255,255,255,0.92)); filter: drop-shadow(0 1px 2px rgba(0,0,0,0.6)); }
+
+      .light.icon-only {
+        background: transparent !important;
+        box-shadow: none;
+      }
+      .light.icon-only::before,
+      .light.icon-only::after {
+        display: none;
+      }
+      .light.icon-only .light-label { top: calc(100% + 4px); }
+      .light.icon-only.selected {
+        box-shadow: 0 0 0 3px rgba(99,102,241,0.45);
+      }
 
       .light-label {
         position: absolute; top: calc(100% + 8px); left: 50%; transform: translateX(-50%);
@@ -891,12 +924,17 @@ class SpatialLightColorCard extends HTMLElement {
       .settings-section:last-child { margin-bottom: 0; }
       .settings-label { font-size:11px; color: var(--text-tertiary); text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 6px; font-weight: 700; }
       .settings-option { display:flex; align-items:center; justify-content:space-between; padding: 6px 0; color: var(--text-secondary); font-size:14px; }
+      .settings-option.stack { flex-direction: column; align-items: flex-start; gap: 8px; }
+      .settings-range { width: 100%; display: flex; align-items: center; gap: 10px; }
+      .settings-range input[type="range"] { flex: 1; }
+      .settings-range .range-value { font-size: 12px; color: var(--text-tertiary); min-width: 48px; text-align: right; }
 
       .toggle {
         width: 44px; height:24px; background: var(--surface-tertiary); border:1px solid var(--border-subtle);
         border-radius: 9999px; position:relative; cursor:pointer; transition: all var(--transition-base);
       }
       .toggle.on { background: var(--accent-primary); border-color: var(--accent-primary); }
+      .toggle.disabled { opacity: 0.4; cursor: not-allowed; }
       .toggle::after {
         content:''; position:absolute; width:18px; height:18px; background: var(--text-primary); border-radius: 9999px; top:2px; left:2px;
         transition: left 220ms cubic-bezier(0.34,1.56,0.64,1);
@@ -938,7 +976,7 @@ class SpatialLightColorCard extends HTMLElement {
       @media (max-width: 768px) {
         .controls-floating, .controls-below { flex-direction:column; gap: 16px; }
         .controls-floating { left: 16px; right: 16px; width: auto; transform: none; }
-        .light { width: 50px; height: 50px; }
+        .light { width: calc(var(--light-size) * 0.9); height: calc(var(--light-size) * 0.9); }
       }
 
       .settings-btn:focus-visible, .modal-close:focus-visible, .settings-button:focus-visible { outline: 2px solid var(--accent-primary); outline-offset: 2px; }
@@ -1012,19 +1050,26 @@ class SpatialLightColorCard extends HTMLElement {
       const label = this._generateLabel(entity_id);
 
       const color = this._resolveEntityColor(entity_id, isOn, st.attributes);
+      const iconColor = color !== 'transparent'
+        ? color
+        : (domain === 'switch' ? this._config.switch_off_color : 'rgba(255,255,255,0.65)');
 
-      const iconData = this._config.show_entity_icons ? this._getEntityIconData(entity_id) : null;
+      const showIcon = this._config.show_entity_icons || this._iconOnlyDisplay;
+      const iconData = showIcon ? this._getEntityIconData(entity_id) : null;
       const stateClass = (domain === 'scene' || isOn) ? 'on' : 'off';
-      
-      let style = `left:${pos.x}%; top:${pos.y}%;`;
-      if (color !== 'transparent') {
-        style += `background:${color};`;
-      } else {
-        style += `background:`; // Allow CSS gradient fallback
+      const iconOnlyClass = this._iconOnlyDisplay ? 'icon-only' : '';
+
+      let style = `left:${pos.x}%; top:${pos.y}%; --light-icon-color:${iconColor};`;
+      if (!this._iconOnlyDisplay) {
+        if (color !== 'transparent') {
+          style += `background:${color};`;
+        } else {
+          style += `background:`; // Allow CSS gradient fallback
+        }
       }
 
       return `
-        <div class="light ${stateClass} ${isSelected ? 'selected' : ''}"
+        <div class="light ${stateClass} ${isSelected ? 'selected' : ''} ${iconOnlyClass}"
              style="${style}"
              data-entity="${entity_id}"
              tabindex="0"
@@ -1103,6 +1148,17 @@ class SpatialLightColorCard extends HTMLElement {
           <div class="settings-option">
             <span>Show Entity Icons</span>
             <button class="toggle ${this._config.show_entity_icons ? 'on' : ''}" id="iconToggle" role="switch" aria-checked="${this._config.show_entity_icons}" aria-label="Show entity icons"></button>
+          </div>
+          <div class="settings-option">
+            <span>Icon Only (no circles)</span>
+            <button class="toggle ${this._iconOnlyDisplay ? 'on' : ''}" id="iconOnlyToggle" role="switch" aria-checked="${this._iconOnlyDisplay}" aria-label="Show icons without circles"></button>
+          </div>
+          <div class="settings-option stack">
+            <span>Light Size</span>
+            <div class="settings-range">
+              <input type="range" id="lightSizeSlider" min="32" max="140" value="${this._lightSize}" aria-label="Light size">
+              <span class="range-value" id="lightSizeValue">${Math.round(this._lightSize)}px</span>
+            </div>
           </div>
         </div>
         <div class="settings-section">
@@ -1425,6 +1481,44 @@ class SpatialLightColorCard extends HTMLElement {
       });
     }
 
+    if (this._els.iconOnlyToggle) {
+      this._els.iconOnlyToggle.addEventListener('click', () => {
+        this._iconOnlyDisplay = !this._iconOnlyDisplay;
+        this._config.icon_only = this._iconOnlyDisplay;
+        if (this._iconOnlyDisplay) {
+          this._config.show_entity_icons = true;
+          if (this._els.iconToggle) {
+            this._els.iconToggle.classList.add('on');
+            this._els.iconToggle.setAttribute('aria-checked', 'true');
+          }
+        }
+        this._els.iconOnlyToggle.classList.toggle('on', this._iconOnlyDisplay);
+        this._els.iconOnlyToggle.setAttribute('aria-checked', String(this._iconOnlyDisplay));
+        this._rerenderLightIconsOnly();
+        this.updateLights();
+      });
+    }
+
+    if (this._els.lightSizeSlider) {
+      const onSizeChange = (value) => {
+        const parsed = parseInt(value, 10);
+        const clamped = Math.min(140, Math.max(32, Number.isFinite(parsed) ? parsed : this._lightSize));
+        this._lightSize = clamped;
+        this._config.light_size = clamped;
+        this.style.setProperty('--light-size', `${clamped}px`);
+        this.style.setProperty('--light-icon-size', `${Math.max(16, Math.round(clamped * 0.42))}px`);
+        if (this._els.lightSizeValue) {
+          this._els.lightSizeValue.textContent = `${clamped}px`;
+        }
+      };
+      this._els.lightSizeSlider.addEventListener('input', (e) => {
+        onSizeChange(e.target.value);
+      });
+      this._els.lightSizeSlider.addEventListener('change', (e) => {
+        onSizeChange(e.target.value);
+      });
+    }
+
     if (this._els.switchTapToggle) {
       this._els.switchTapToggle.addEventListener('click', () => {
         this._config.switch_single_tap = !this._config.switch_single_tap;
@@ -1546,13 +1640,25 @@ class SpatialLightColorCard extends HTMLElement {
 
   _rerenderLightIconsOnly() {
     const nodes = this.shadowRoot.querySelectorAll('.light');
+    const showIcons = this._config.show_entity_icons || this._iconOnlyDisplay;
     nodes.forEach(light => {
       const entity = light.dataset.entity;
       const iconWrap = light.querySelector('.light-icon, ha-icon, ha-svg-icon, .light-icon-emoji');
       if (iconWrap) iconWrap.remove();
-      if (this._config.show_entity_icons) {
+      light.classList.toggle('icon-only', this._iconOnlyDisplay);
+      if (showIcons) {
         const iconData = this._getEntityIconData(entity);
         light.insertAdjacentHTML('afterbegin', this._renderIcon(iconData));
+        const st = this._hass?.states?.[entity];
+        const [domain] = entity.split('.');
+        const isOn = st?.state === 'on';
+        const color = st ? this._resolveEntityColor(entity, isOn, st.attributes) : null;
+        const iconColor = color && color !== 'transparent'
+          ? color
+          : (domain === 'switch' ? this._config.switch_off_color : 'rgba(255,255,255,0.65)');
+        light.style.setProperty('--light-icon-color', iconColor);
+      } else {
+        light.style.removeProperty('--light-icon-color');
       }
     });
     this._refreshEntityIcons();
@@ -2135,15 +2241,24 @@ class SpatialLightColorCard extends HTMLElement {
       const isScene = domain === 'scene';
 
       const color = this._resolveEntityColor(id, isOn, st.attributes);
+      const iconColor = color !== 'transparent'
+        ? color
+        : (domain === 'switch' ? this._config.switch_off_color : 'rgba(255,255,255,0.65)');
 
-      if (color !== 'transparent') {
-        light.style.background = color;
+      if (!this._iconOnlyDisplay) {
+        if (color !== 'transparent') {
+          light.style.background = color;
+        } else {
+          light.style.background = ''; // Fallback to CSS
+        }
       } else {
-        light.style.background = ''; // Fallback to CSS
+        light.style.background = 'transparent';
       }
+      light.style.setProperty('--light-icon-color', iconColor);
 
       light.classList.toggle('off', !isOn && !isScene);
       light.classList.toggle('on', isOn || isScene);
+      light.classList.toggle('icon-only', this._iconOnlyDisplay);
 
       // Ensure selected styling matches current selection set
       const selected = this._selectedLights.has(id);
@@ -2179,6 +2294,8 @@ class SpatialLightColorCard extends HTMLElement {
     yamlLines.push(`always_show_controls: ${!!this._config.always_show_controls}`);
     yamlLines.push(`controls_below: ${!!this._config.controls_below}`);
     yamlLines.push(`show_entity_icons: ${!!this._config.show_entity_icons}`);
+    yamlLines.push(`icon_only: ${!!this._iconOnlyDisplay}`);
+    yamlLines.push(`light_size: ${this._lightSize}`);
     yamlLines.push(`switch_single_tap: ${!!this._config.switch_single_tap}`);
     yamlLines.push(`icon_style: ${this._config.icon_style}`);
     if (this._config.default_entity) yamlLines.push(`default_entity: ${this._config.default_entity}`);
@@ -2243,7 +2360,8 @@ class SpatialLightColorCard extends HTMLElement {
       entities: [], positions: {}, title: '',
       canvas_height: 450, grid_size: 25, label_mode: 'smart',
       show_settings_button: true, always_show_controls: false, controls_below: true,
-      default_entity: null, show_entity_icons: false, icon_style: 'mdi',
+      default_entity: null, show_entity_icons: false, icon_only: false, icon_style: 'mdi',
+      light_size: 56,
       switch_on_color: '#ffa500', switch_off_color: '#2a2a2a', scene_color: '#6366f1'
     };
   }

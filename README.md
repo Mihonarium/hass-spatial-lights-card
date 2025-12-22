@@ -38,6 +38,7 @@ Very useful when you have a lot of lights, and searching for the one you need by
 - Background image support (URL, size, blend modes).
 - Optional default entity for whole-room adjustments.
 - Toggleable floating/below controls to match your dashboard style.
+- Adjustable light/icon size plus an icon-only mode for dense layouts.
 - Built-in position locking and export tools for hassle-free editing.
 
 ---
@@ -147,6 +148,8 @@ positions:
 | `default_entity` | string | `null` | Entity to control when nothing is selected. |
 | `switch_single_tap` | boolean | `false` | Toggle switches/scenes with a single tap instead of selecting them. |
 | `show_entity_icons` | boolean | `false` | Show MDI icons inside the light circles. |
+| `icon_only` | boolean | `false` | Display only the colored icons (no circles). |
+| `light_size` | number | `56` | Diameter of each light/icon in pixels (32–140). |
 | `icon_style` | string | `"mdi"` | Icon style (`mdi` or `emoji`). |
 | `background_image` | string/map | `null` | URL string or object `{url, size, position, blend_mode}`. |
 | `temperature_min` | number | `null` | Override minimum Kelvin for temperature slider. |
@@ -259,6 +262,21 @@ always_show_controls: true
 ```
 - Controls remain visible below the layout for quick access.
 - Ideal when you never want controls to cover the floor plan.
+
+### Icon-Only Display
+```yaml
+icon_only: true
+show_entity_icons: true  # auto-enabled when icon_only is true
+```
+- Hides the circle backgrounds and colors the icons directly.
+- Helpful when you need a denser layout or want icons to sit on a custom background.
+
+### Adjust Light Size
+```yaml
+light_size: 72  # any value between 32 and 140
+```
+- Scales the diameter of each circle/icon.
+- Useful for matching your background image scale or fitting many entities on one canvas.
 
 ---
 

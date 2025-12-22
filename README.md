@@ -147,6 +147,8 @@ positions:
 | `default_entity` | string | `null` | Entity to control when nothing is selected. |
 | `switch_single_tap` | boolean | `false` | Toggle switches/scenes with a single tap instead of selecting them. |
 | `show_entity_icons` | boolean | `false` | Show MDI icons inside the light circles. |
+| `icon_only_display` | boolean | `false` | Render only the entity icons (no circles), tinted with each entity's color. |
+| `light_size` | number | `56` | Diameter of each light marker in pixels (32–110). |
 | `icon_style` | string | `"mdi"` | Icon style (`mdi` or `emoji`). |
 | `background_image` | string/map | `null` | URL string or object `{url, size, position, blend_mode}`. |
 | `temperature_min` | number | `null` | Override minimum Kelvin for temperature slider. |
@@ -258,6 +260,14 @@ controls_below: true
 always_show_controls: true
 ```
 - Controls remain visible below the layout for quick access.
+
+### Icon-Only or Resized Markers
+```yaml
+icon_only_display: true
+light_size: 48
+```
+- `icon_only_display` removes the circular background and shows only the entity icons, tinted with each light's current color.
+- `light_size` lets you shrink or enlarge the markers (32–110px) to suit dense or spacious layouts.
 - Ideal when you never want controls to cover the floor plan.
 
 ---

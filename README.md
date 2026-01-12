@@ -148,6 +148,10 @@ positions:
 | `switch_single_tap` | boolean | `false` | Toggle switches/scenes with a single tap instead of selecting them. |
 | `show_entity_icons` | boolean | `false` | Show MDI icons inside the light circles. |
 | `icon_style` | string | `"mdi"` | Icon style (`mdi` or `emoji`). |
+| `light_size` | number | `56` | Size of light circles in pixels (24-96). |
+| `icon_only_mode` | boolean | `false` | Display lights as icons only (no filled circles). |
+| `size_overrides` | map | `{}` | Per-entity size overrides (e.g., `light.lamp: 40`). |
+| `icon_only_overrides` | map | `{}` | Per-entity icon-only mode overrides (e.g., `light.lamp: true`). |
 | `background_image` | string/map | `null` | URL string or object `{url, size, position, blend_mode}`. |
 | `temperature_min` | number | `null` | Override minimum Kelvin for temperature slider. |
 | `temperature_max` | number | `null` | Override maximum Kelvin for temperature slider. |
@@ -217,6 +221,37 @@ background_image:
   position: "center"
   blend_mode: "overlay" # Optional CSS blend mode
 ```
+
+### Light Size
+Customize the size of light circles globally or per-entity:
+```yaml
+# Global size (default is 56px)
+light_size: 40
+
+# Per-entity sizes
+size_overrides:
+  light.ceiling: 70    # Make ceiling light larger
+  light.accent: 30     # Make accent light smaller
+```
+
+### Icon-Only Mode
+Display lights as icons without the filled circle background. Icons show the light's color when on and remain visible (dimmed) when off:
+```yaml
+# Enable for all lights
+icon_only_mode: true
+
+# Or per-entity
+icon_only_overrides:
+  light.ceiling: true      # Icon-only for ceiling
+  switch.fan: true         # Icon-only for fan switch
+  light.floor_lamp: false  # Keep filled circle for floor lamp
+```
+
+When icon-only mode is enabled:
+- Icons are colored based on the light's state
+- A subtle border ring shows the light's color when on
+- Off lights remain visible with a dimmed appearance
+- Great for cleaner layouts or when using background images
 
 ---
 

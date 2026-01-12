@@ -382,7 +382,7 @@ class SpatialLightColorCard extends HTMLElement {
       return;
     }
 
-    if (domain !== 'light' && domain !== 'switch') return;
+    if (domain !== 'light' && domain !== 'switch' && domain !== 'input_boolean') return;
     const service = stateObj.state === 'on' ? 'turn_off' : 'turn_on';
     this._hass.callService(domain, service, { entity_id: entity });
   }
@@ -837,9 +837,10 @@ class SpatialLightColorCard extends HTMLElement {
 
       .controls-below {
         padding: 20px; border-top: 1px solid var(--border-subtle); background: var(--surface-secondary);
-        display: ${this._config.always_show_controls || this._selectedLights.size > 0 || this._config.default_entity ? 'flex' : 'none'};
+        display: none;
         gap: 24px; align-items: center; justify-content: center;
       }
+      .controls-below.visible { display: flex; }
 
       .color-wheel-mini {
         width: 128px; height: 128px; border-radius: 9999px; cursor: pointer;
@@ -1017,8 +1018,8 @@ class SpatialLightColorCard extends HTMLElement {
     if (isOn) {
       const ov = getOverride('on');
       if (ov) return ov;
-      
-      if (domain === 'switch') return this._config.switch_on_color;
+
+      if (domain === 'switch' || domain === 'input_boolean') return this._config.switch_on_color;
       
       if (attributes && attributes.rgb_color) {
         const [r, g, b] = attributes.rgb_color;
@@ -1028,8 +1029,8 @@ class SpatialLightColorCard extends HTMLElement {
     } else {
       const ov = getOverride('off');
       if (ov) return ov;
-      
-      if (domain === 'switch') return this._config.switch_off_color;
+
+      if (domain === 'switch' || domain === 'input_boolean') return this._config.switch_off_color;
       return 'transparent';
     }
   }
@@ -1724,7 +1725,7 @@ class SpatialLightColorCard extends HTMLElement {
       const pointerType = e.pointerType || 'mouse';
       const [domain] = entity.split('.');
       // Check if this entity type is configured to toggle on single tap
-      const toggleOnSingleTap = this._config.switch_single_tap && (domain === 'switch' || domain === 'scene');
+      const toggleOnSingleTap = this._config.switch_single_tap && (domain === 'switch' || domain === 'input_boolean' || domain === 'scene');
       
       if (this._lockPositions) {
         const additive = e.shiftKey || e.ctrlKey || e.metaKey;
@@ -1956,7 +1957,7 @@ class SpatialLightColorCard extends HTMLElement {
     const entity = targetLight.dataset.entity;
     if (!entity) return;
     const [domain] = entity.split('.');
-    if (this._config.switch_single_tap && (domain === 'switch' || domain === 'scene')) {
+    if (this._config.switch_single_tap && (domain === 'switch' || domain === 'input_boolean' || domain === 'scene')) {
       return;
     }
     e.preventDefault();
@@ -2134,13 +2135,28 @@ class SpatialLightColorCard extends HTMLElement {
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
+    // Skip drawing if canvas is not visible (e.g., display: none)
     const rect = canvas.getBoundingClientRect();
+    if (rect.width === 0 && rect.height === 0) {
+      return;
+    }
+
     const dpr = (typeof window !== 'undefined' && window.devicePixelRatio) ? window.devicePixelRatio : 1;
     const fallbackSize = Number(canvas.getAttribute('width')) || 256;
     const cssSize = Math.max(rect.width, rect.height) > 0
       ? Math.min(rect.width || fallbackSize, rect.height || fallbackSize)
       : fallbackSize;
-    const pixelSize = Math.max(1, Math.round(cssSize * dpr));
+
+    // Ensure pixelSize is within safe bounds to prevent OOM
+    // Max dimension: 4096px (reasonable for canvas operations)
+    const MAX_CANVAS_SIZE = 4096;
+    let pixelSize = Math.max(1, Math.round(cssSize * dpr));
+
+    // Validate pixelSize is finite and within safe range
+    if (!Number.isFinite(pixelSize) || pixelSize > MAX_CANVAS_SIZE || pixelSize < 1) {
+      console.warn(`Invalid canvas dimensions calculated: ${pixelSize}. Using fallback.`);
+      pixelSize = Math.min(fallbackSize, MAX_CANVAS_SIZE);
+    }
 
     if (canvas.width !== pixelSize || canvas.height !== pixelSize) {
       canvas.width = pixelSize;
@@ -2243,14 +2259,18 @@ class SpatialLightColorCard extends HTMLElement {
     });
 
     // Update controls to reflect averaged state
-    if (this._config.always_show_controls || this._selectedLights.size > 0 || this._config.default_entity) {
+    const shouldShowControls = this._config.always_show_controls || this._selectedLights.size > 0 || this._config.default_entity;
+    if (shouldShowControls) {
       const controlContext = this._getControlContext();
       this._updateControlValues(controlContext);
-      // Show/hide floating controls if used
-      if (this._els.controlsFloating) {
-        const visible = this._config.always_show_controls || this._selectedLights.size > 0 || this._config.default_entity;
-        this._els.controlsFloating.classList.toggle('visible', visible);
-      }
+    }
+    // Show/hide floating controls if used
+    if (this._els.controlsFloating) {
+      this._els.controlsFloating.classList.toggle('visible', shouldShowControls);
+    }
+    // Show/hide below controls if used
+    if (this._els.controlsBelow) {
+      this._els.controlsBelow.classList.toggle('visible', shouldShowControls);
     }
     if ((this._config.always_show_controls || this._selectedLights.size > 0 || this._config.default_entity) && this._els.colorWheel) {
       this._requestColorWheelDraw();

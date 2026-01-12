@@ -128,7 +128,7 @@ class SpatialLightColorCard extends HTMLElement {
       label_mode: config.label_mode || 'smart',
       label_overrides: config.label_overrides || {},
       show_settings_button: config.show_settings_button !== false,
-      always_show_controls: config.always_show_controls || false,
+      always_show_controls: config.always_show_controls !== false,
       default_entity: config.default_entity || null,
       controls_below: config.controls_below !== false,
       show_entity_icons: config.show_entity_icons || false,
@@ -2242,7 +2242,7 @@ class SpatialLightColorCard extends HTMLElement {
     return {
       entities: [], positions: {}, title: '',
       canvas_height: 450, grid_size: 25, label_mode: 'smart',
-      show_settings_button: true, always_show_controls: false, controls_below: true,
+      show_settings_button: true, always_show_controls: true, controls_below: true,
       default_entity: null, show_entity_icons: false, icon_style: 'mdi',
       switch_on_color: '#ffa500', switch_off_color: '#2a2a2a', scene_color: '#6366f1'
     };

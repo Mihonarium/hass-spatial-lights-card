@@ -130,7 +130,7 @@ class SpatialLightColorCard extends HTMLElement {
       show_settings_button: config.show_settings_button !== false,
       always_show_controls: config.always_show_controls || false,
       default_entity: config.default_entity || null,
-      controls_below: config.controls_below !== false,
+      controls_below: config.controls_below ?? true,
       show_entity_icons: config.show_entity_icons || false,
       switch_single_tap: config.switch_single_tap || false,
       icon_style: config.icon_style || 'mdi', // 'mdi' or 'emoji' (emoji kept as fallback only)

@@ -245,20 +245,20 @@ background_image:
 
 ## 🎨 Visual Options
 
-### Floating Controls (Default)
-```yaml
-controls_below: false
-```
-- Controls appear over the canvas when lights are selected.
-- Minimal overlay that hides automatically when nothing is selected.
-
-### Controls Below the Canvas
+### Controls Below the Canvas (Default)
 ```yaml
 controls_below: true
 always_show_controls: true
 ```
 - Controls remain visible below the layout for quick access.
 - Ideal when you never want controls to cover the floor plan.
+
+### Floating Controls
+```yaml
+controls_below: false
+```
+- Controls appear over the canvas when lights are selected.
+- Minimal overlay that hides automatically when nothing is selected.
 
 ---
 

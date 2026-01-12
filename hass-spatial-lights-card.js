@@ -366,7 +366,7 @@ class SpatialLightColorCard extends HTMLElement {
       return;
     }
 
-    if (domain !== 'light' && domain !== 'switch' && domain !== 'input_boolean') return;
+    if (domain !== 'light' && domain !== 'switch') return;
     const service = stateObj.state === 'on' ? 'turn_off' : 'turn_on';
     this._hass.callService(domain, service, { entity_id: entity });
   }
@@ -984,8 +984,8 @@ class SpatialLightColorCard extends HTMLElement {
     if (isOn) {
       const ov = getOverride('on');
       if (ov) return ov;
-
-      if (domain === 'switch' || domain === 'input_boolean') return this._config.switch_on_color;
+      
+      if (domain === 'switch') return this._config.switch_on_color;
       
       if (attributes && attributes.rgb_color) {
         const [r, g, b] = attributes.rgb_color;
@@ -995,8 +995,8 @@ class SpatialLightColorCard extends HTMLElement {
     } else {
       const ov = getOverride('off');
       if (ov) return ov;
-
-      if (domain === 'switch' || domain === 'input_boolean') return this._config.switch_off_color;
+      
+      if (domain === 'switch') return this._config.switch_off_color;
       return 'transparent';
     }
   }
@@ -1637,7 +1637,7 @@ class SpatialLightColorCard extends HTMLElement {
       const pointerType = e.pointerType || 'mouse';
       const [domain] = entity.split('.');
       // Check if this entity type is configured to toggle on single tap
-      const toggleOnSingleTap = this._config.switch_single_tap && (domain === 'switch' || domain === 'input_boolean' || domain === 'scene');
+      const toggleOnSingleTap = this._config.switch_single_tap && (domain === 'switch' || domain === 'scene');
       
       if (this._lockPositions) {
         const additive = e.shiftKey || e.ctrlKey || e.metaKey;
@@ -1869,7 +1869,7 @@ class SpatialLightColorCard extends HTMLElement {
     const entity = targetLight.dataset.entity;
     if (!entity) return;
     const [domain] = entity.split('.');
-    if (this._config.switch_single_tap && (domain === 'switch' || domain === 'input_boolean' || domain === 'scene')) {
+    if (this._config.switch_single_tap && (domain === 'switch' || domain === 'scene')) {
       return;
     }
     e.preventDefault();

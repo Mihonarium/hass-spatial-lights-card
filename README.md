@@ -34,7 +34,7 @@ Very useful when you have a lot of lights, and searching for the one you need by
 
 - Interactive 2D layout to position lights exactly where they are in a room.
 - Multi-select and batch control color, brightness, and temperature.
-- Support for Scenes and Switches, customizable display colors for scenes and switches.
+- Support for Scenes, Switches, and Input Booleans, customizable display colors for switches and scenes.
 - Background image support (URL, size, blend modes).
 - Optional default entity for whole-room adjustments.
 - Toggleable floating/below controls to match your dashboard style.
@@ -131,7 +131,7 @@ positions:
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
 | `title` | string | `"Lights"` | Card title. |
-| `entities` | list | **required** | Entities (lights, switches, scenes) to display. |
+| `entities` | list | **required** | Entities (lights, switches, input_booleans, scenes) to display. |
 | `positions` | map | `{}` | Per-entity x/y positions from 0–100 (percentage). |
 | `canvas_height` | number | `450` | Canvas height in pixels. |
 | `grid_size` | number | `25` | Grid spacing in pixels when snapping. |

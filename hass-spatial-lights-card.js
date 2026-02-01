@@ -843,12 +843,11 @@ class SpatialLightColorCard extends HTMLElement {
       /* Selection indicator for icon-only mode */
       .light.icon-only.selected::before {
         border-color: var(--accent-primary);
-        border-width: 3px;
-        box-shadow: 0 0 0 3px rgba(99,102,241,0.3), 0 0 12px var(--accent-primary);
+        border-width: 2px;
       }
       .light.icon-only.selected.on::before {
         border-color: var(--accent-primary);
-        box-shadow: 0 0 0 3px rgba(99,102,241,0.3), 0 0 12px var(--accent-primary), 0 0 8px var(--light-color, #ffa500);
+        box-shadow: 0 0 8px var(--light-color, #ffa500);
       }
 
       /* Minimal UI mode - hides circles completely, shows only icons */
@@ -879,10 +878,9 @@ class SpatialLightColorCard extends HTMLElement {
       /* Show circle border only when selected in minimal mode */
       .light.minimal-ui.selected::before {
         border: 2px solid var(--accent-primary);
-        box-shadow: 0 0 0 3px rgba(99,102,241,0.25), 0 0 10px rgba(99,102,241,0.4);
       }
       .light.minimal-ui.selected.on::before {
-        box-shadow: 0 0 0 3px rgba(99,102,241,0.25), 0 0 10px rgba(99,102,241,0.4), 0 0 6px var(--light-color, #ffa500);
+        box-shadow: 0 0 6px var(--light-color, #ffa500);
       }
 
       .light-icon-emoji { font-size: calc(32px * var(--icon-scale, 1)); line-height: 1; filter: drop-shadow(0 1px 2px rgba(0,0,0,0.6)); }
@@ -898,7 +896,7 @@ class SpatialLightColorCard extends HTMLElement {
 
       .light.selected { z-index: 3; }
       .light.selected::before {
-        box-shadow: 0 0 0 2px var(--surface-primary), 0 0 0 4px rgba(99,102,241,0.5), var(--shadow-md);
+        box-shadow: 0 0 0 2px rgba(99,102,241,0.6);
       }
       .light.dragging { cursor: grabbing; z-index: 6; transform: translate(-50%,-50%) scale(1.04); }
 

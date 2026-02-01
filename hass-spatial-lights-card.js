@@ -172,9 +172,12 @@ class SpatialLightColorCard extends HTMLElement {
       icon_only_mode: config.icon_only_mode || false,
       icon_only_overrides: iconOnlyOverrides,
 
+      // Minimal UI mode (hides circles completely except when selected)
+      minimal_ui: config.minimal_ui || false,
+
       // Color customization
       switch_on_color: config.switch_on_color || '#ffa500',
-      switch_off_color: config.switch_off_color || '#2a2a2a',
+      switch_off_color: config.switch_off_color || '#3a3a3a',
       scene_color: config.scene_color || '#6366f1',
       color_overrides: config.color_overrides || {},
     };
@@ -805,8 +808,8 @@ class SpatialLightColorCard extends HTMLElement {
         opacity: 0.22; z-index: -1;
       }
       /* Remove forced gradient, allow JS to override background if needed */
-      .light.off { opacity: 0.45; }
-      .light.off:not([style*="background"]) { background: linear-gradient(135deg,#2a2a2a 0%, #1a1a1a 100%); }
+      .light.off { opacity: 0.55; }
+      .light.off:not([style*="background"]) { background: linear-gradient(135deg,#3a3a3a 0%, #2a2a2a 100%); }
       .light.off::after { display:none; }
 
       /* Icon-only mode styles */
@@ -823,7 +826,7 @@ class SpatialLightColorCard extends HTMLElement {
         box-shadow: 0 0 8px var(--light-color, #ffa500);
       }
       .light.icon-only.off::before {
-        border-color: rgba(255,255,255,0.2);
+        border-color: rgba(255,255,255,0.25);
         box-shadow: none;
       }
       .light.icon-only::after {
@@ -834,12 +837,56 @@ class SpatialLightColorCard extends HTMLElement {
         filter: drop-shadow(0 1px 3px rgba(0,0,0,0.8));
       }
       .light.icon-only.off .light-icon-mdi {
-        color: rgba(255,255,255,0.5);
+        color: rgba(255,255,255,0.6);
       }
-      .light.icon-only.off { opacity: 0.7; }
+      .light.icon-only.off { opacity: 0.8; }
+      /* Selection indicator for icon-only mode */
+      .light.icon-only.selected::before {
+        border-color: var(--accent-primary);
+        border-width: 3px;
+        box-shadow: 0 0 0 3px rgba(99,102,241,0.3), 0 0 12px var(--accent-primary);
+      }
+      .light.icon-only.selected.on::before {
+        border-color: var(--accent-primary);
+        box-shadow: 0 0 0 3px rgba(99,102,241,0.3), 0 0 12px var(--accent-primary), 0 0 8px var(--light-color, #ffa500);
+      }
 
-      .light-icon-emoji { font-size: calc(22px * var(--icon-scale, 1)); line-height: 1; filter: drop-shadow(0 1px 2px rgba(0,0,0,0.6)); }
-      .light-icon-mdi { --mdc-icon-size: calc(22px * var(--icon-scale, 1)); color: rgba(255,255,255,0.92); filter: drop-shadow(0 1px 2px rgba(0,0,0,0.6)); }
+      /* Minimal UI mode - hides circles completely, shows only icons */
+      .light.minimal-ui {
+        background: transparent !important;
+      }
+      .light.minimal-ui::before {
+        background: transparent;
+        box-shadow: none;
+        border: none;
+      }
+      .light.minimal-ui::after {
+        display: none;
+      }
+      .light.minimal-ui .light-icon-mdi {
+        color: var(--light-color, rgba(255,255,255,0.85));
+        filter: drop-shadow(0 1px 4px rgba(0,0,0,0.9)) drop-shadow(0 0 2px rgba(0,0,0,0.5));
+      }
+      .light.minimal-ui.on .light-icon-mdi {
+        filter: drop-shadow(0 0 6px var(--light-color, #ffa500)) drop-shadow(0 1px 3px rgba(0,0,0,0.8));
+      }
+      .light.minimal-ui.off .light-icon-mdi {
+        color: rgba(255,255,255,0.55);
+      }
+      .light.minimal-ui.off {
+        opacity: 1;
+      }
+      /* Show circle border only when selected in minimal mode */
+      .light.minimal-ui.selected::before {
+        border: 2px solid var(--accent-primary);
+        box-shadow: 0 0 0 3px rgba(99,102,241,0.25), 0 0 10px rgba(99,102,241,0.4);
+      }
+      .light.minimal-ui.selected.on::before {
+        box-shadow: 0 0 0 3px rgba(99,102,241,0.25), 0 0 10px rgba(99,102,241,0.4), 0 0 6px var(--light-color, #ffa500);
+      }
+
+      .light-icon-emoji { font-size: calc(32px * var(--icon-scale, 1)); line-height: 1; filter: drop-shadow(0 1px 2px rgba(0,0,0,0.6)); }
+      .light-icon-mdi { --mdc-icon-size: calc(32px * var(--icon-scale, 1)); color: rgba(255,255,255,0.92); filter: drop-shadow(0 1px 2px rgba(0,0,0,0.6)); }
 
       .light-label {
         position: absolute; top: calc(100% + 8px); left: 50%; transform: translateX(-50%);
@@ -1105,10 +1152,13 @@ class SpatialLightColorCard extends HTMLElement {
         ? this._config.icon_only_overrides[entity_id]
         : this._config.icon_only_mode;
 
-      // Icon-only mode always shows icons; otherwise respect show_entity_icons
-      const iconData = (isIconOnly || this._config.show_entity_icons) ? this._getEntityIconData(entity_id) : null;
+      // Minimal UI mode (no circles except when selected)
+      const isMinimalUI = this._config.minimal_ui;
+
+      // Icon-only or minimal-ui mode always shows icons; otherwise respect show_entity_icons
+      const iconData = (isIconOnly || isMinimalUI || this._config.show_entity_icons) ? this._getEntityIconData(entity_id) : null;
       const stateClass = (domain === 'scene' || isOn) ? 'on' : 'off';
-      const iconOnlyClass = isIconOnly ? 'icon-only' : '';
+      const iconOnlyClass = isMinimalUI ? 'minimal-ui' : (isIconOnly ? 'icon-only' : '');
 
       // Build inline styles
       let style = `left:${pos.x}%; top:${pos.y}%;`;
@@ -1125,10 +1175,10 @@ class SpatialLightColorCard extends HTMLElement {
         style += `--icon-scale:${iconScale.toFixed(2)};`;
       }
 
-      // Set light color CSS variable for icon-only mode
-      if (isIconOnly && color !== 'transparent') {
+      // Set light color CSS variable for icon-only/minimal-ui modes
+      if ((isIconOnly || isMinimalUI) && color !== 'transparent') {
         style += `--light-color:${color};`;
-      } else if (!isIconOnly) {
+      } else if (!isIconOnly && !isMinimalUI) {
         if (color !== 'transparent') {
           style += `background:${color};`;
         } else {

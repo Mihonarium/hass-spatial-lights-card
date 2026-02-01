@@ -845,11 +845,11 @@ class SpatialLightColorCard extends HTMLElement {
       .light.icon-only.selected::before {
         border-color: var(--accent-primary);
         border-width: 2px;
-        box-shadow: 0 0 0 2px rgba(99,102,241,0.3);
+        box-shadow: 0 0 8px rgba(99,102,241,0.5);
       }
       .light.icon-only.selected.on::before {
         border-color: var(--accent-primary);
-        box-shadow: 0 0 0 2px rgba(99,102,241,0.3), 0 0 8px var(--light-color, #ffa500);
+        box-shadow: 0 0 8px rgba(99,102,241,0.5), 0 0 8px var(--light-color, #ffa500);
       }
 
       /* Minimal UI mode - hides circles completely, shows only icons */
@@ -898,7 +898,7 @@ class SpatialLightColorCard extends HTMLElement {
 
       .light.selected { z-index: 3; }
       .light.selected::before {
-        box-shadow: 0 0 0 2px var(--surface-primary), 0 0 0 4px rgba(99,102,241,0.5);
+        box-shadow: 0 0 0 2px rgba(99,102,241,0.6), 0 0 10px rgba(99,102,241,0.4);
       }
       .light.dragging { cursor: grabbing; z-index: 6; transform: translate(-50%,-50%) scale(1.04); }
 

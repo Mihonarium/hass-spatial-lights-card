@@ -19,10 +19,9 @@ Very useful when you have a lot of lights, and searching for the one you need by
 1. [Features](#features)
 2. [Installation](#installation)
 3. [Quick Start](#-quick-start)
-4. [Configuration Reference](#-all-configuration-options)
-5. [Usage Tips](#-usage)
-6. [Custom Colors & Backgrounds](#-custom-colors--backgrounds)
-7. [Common Workflows](#-common-workflows)
+6. [Usage Tips](#-usage)
+5. [Configuration Reference](#-all-configuration-options)
+7. [Custom Colors & Backgrounds](#-custom-colors--backgrounds)
 8. [Visual Layout Options](#-visual-options)
 9. [Troubleshooting](#troubleshooting)
 
@@ -36,7 +35,6 @@ Very useful when you have a lot of lights, and searching for the one you need by
 - Background image support (URL, size, blend modes).
 - Optional default entity for whole-room adjustments.
 - Toggleable floating/below controls to match your dashboard style.
-- Built-in position locking and export tools for hassle-free editing.
 
 ---
 
@@ -52,12 +50,10 @@ Very useful when you have a lot of lights, and searching for the one you need by
 # Copy file
 cp hass-spatial-lights-card.js /config/www/
 
-# Add to resources. configuration.yaml:
+# Add to resources: open Settings → Dashboards → (three dots) → Resources to add via UI. Alternatively, add the following to configuration.yaml:
 resources:
   - url: /local/hass-spatial-lights-card.js
     type: module
-
-Alternatively, open Settings → Dashboards → (three dots) → Resources to add via UI.
 
 ```
 
@@ -69,6 +65,41 @@ Alternatively, open Settings → Dashboards → (three dots) → Resources to ad
 2. Edit a dashboard.
 3. Choose **Add card → Spatial Lights Color Card**.
 
+---
+
+## 🎨 Usage
+
+### Desktop
+- **Click** to select a light.
+- **Double-click** a light, switch, or scene to toggle/activate it.
+- **Shift+Click** to add to the current selection.
+- **Drag** to create a marquee selection (when nothing is selected).
+- **Unlock** in settings to drag lights around the canvas. **Alt+Drag** a light to snap its position to the grid size.
+- **Long click** to open the details.
+
+### Mobile
+- **Tap** to select a light.
+- **Double-tap** a light, switch, or scene to toggle/activate it.
+- **Drag** with an empty selection to select an area.
+- **Long tap** to open the details.
+
+> **Note:** If `switch_single_tap` is enabled, switches and scenes activate immediately on a single tap/click. To move them in this mode, you must unlock positions in settings first.
+
+### Controls
+- **Color wheel** — tap anywhere to set hue and saturation.
+- **Brightness slider** — drag horizontally to set brightness. Tap to jump to value.
+- **Temperature slider** — adjust white-temperature capable lights.
+- **Default entity** — when configured, controls this entity if no light is selected.
+
+---
+
+### 💡 Tips
+
+1. Click/tap away to deselect.
+4. Add a Default Entity with all of a room's lights to control the whole room.
+6. Add color presets to quickly turn the lights a favorite color.
+7. Use live colors to easily set lights to colors already present in the room.
+8. To see what lights are of a color among live colors/presets, hover mouse over it (or tap and hold that color on mobile).
 
 ---
 
@@ -88,7 +119,7 @@ Alternatively, open Settings → Dashboards → (three dots) → Resources to ad
 | `switch_off_color` | string | `"#2a2a2a"` | Default color for inactive switches. |
 | `scene_color` | string | `"#6366f1"` | Default color for scenes. |
 | `show_settings_button` | boolean | `true` | Display settings gear in card header. |
-| `always_show_controls` | boolean | `false` | Always show color controls even when nothing selected. |
+| `always_show_controls` | boolean | `false` | Always show color controls even when nothing selected. Use if you prefer persistent sliders that are always there even if nothing is selected and there's no default_entity. |
 | `controls_below` | boolean | `true` | Render controls below (`true`) or floating over (`false`). |
 | `default_entity` | string | `null` | Entity to control when nothing is selected. |
 | `switch_single_tap` | boolean | `false` | Toggle switches/scenes with a single tap instead of selecting them. |
@@ -105,33 +136,6 @@ Alternatively, open Settings → Dashboards → (three dots) → Resources to ad
 | `temperature_max` | number | `null` | Override maximum Kelvin for temperature slider. |
 
 > ℹ️ **Label modes:** `smart` uses friendly names when available, falling back to entity IDs. Override individual entities with `label_overrides`.
-
----
-
-## 🎨 Usage
-
-### Desktop
-- **Click** to select a light.
-- **Double-click** a light, switch, or scene to toggle/activate it.
-- **Shift+Click** to add to the current selection.
-- **Drag** to create a marquee selection (when nothing is selected).
-- **Unlock** in settings to drag lights around the canvas.
-- **Alt+Drag** a light to snap its position to the grid size.
-
-### Mobile
-- **Tap** to select a light.
-- **Double-tap** a light, switch, or scene to toggle/activate it.
-- **Long press** (~500 ms) to add to the selection.
-- **Drag** with an empty selection to select an area.
-- **Unlock** in settings to drag lights.
-
-> **Note:** If `switch_single_tap` is enabled, switches and scenes activate immediately on a single tap/click. To move them in this mode, you must unlock positions in settings first.
-
-### Controls
-- **Color wheel** — tap anywhere to set hue and saturation.
-- **Brightness slider** — drag horizontally to set brightness. Tap to jump to value.
-- **Temperature slider** — adjust white-temperature capable lights.
-- **Default entity** — when configured, controls this entity if no light is selected.
 
 ---
 
@@ -220,29 +224,6 @@ color_presets:
   - "#00ff00"
 show_live_colors: true
 ```
-
----
-
-## 💡 Common Workflows
-
-### Designing a Layout
-1. Add all relevant light entities to the card.
-2. Click the **⚙** icon and disable **Lock positions**.
-3. Drag each light to match its real-world location.
-4. Optional: Enable **Snap to grid** (Alt/Option while dragging) for perfect alignment.
-5. Click **Export configuration** to capture current positions into YAML.
-6. Paste the exported YAML into your dashboard configuration.
-7. Re-enable **Lock positions** for everyday use.
-
-### Daily Use
-1. Select the light(s) you want to control.
-2. Adjust color, brightness, and temperature from the controls.
-3. Click/tap away to deselect, or rely on `default_entity` to control the whole room.
-
-### Mobile Tips
-1. Tap to select, long-press to extend the selection.
-2. Drag the selection rectangle for quick grouping.
-3. Use `always_show_controls: true` if you prefer persistent sliders on small screens.
 
 ---
 

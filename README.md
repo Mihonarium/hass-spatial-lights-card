@@ -91,8 +91,6 @@ resources:
 - **Temperature slider** — adjust white-temperature capable lights.
 - **Default entity** — when configured, controls this entity if no light is selected.
 
----
-
 ### 💡 Tips
 
 1. Click/tap away to deselect.

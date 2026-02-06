@@ -2837,6 +2837,7 @@ class SpatialLightColorCardEditor extends HTMLElement {
     this._boundPositionHandler = null;
     this._haElementsLoaded = false;
     this._positionHistory = [];
+    this._positionRedoStack = [];
     this._boundEditorKeyDown = null;
   }
 
@@ -2857,6 +2858,12 @@ class SpatialLightColorCardEditor extends HTMLElement {
           e.preventDefault();
           e.stopPropagation();
           this._undoPositions();
+        }
+      } else if ((e.ctrlKey || e.metaKey) && (e.key === 'y' || (e.key === 'Z' && e.shiftKey) || (e.key === 'z' && e.shiftKey))) {
+        if (this._positionRedoStack.length > 0) {
+          e.preventDefault();
+          e.stopPropagation();
+          this._redoPositions();
         }
       }
     };
@@ -2915,6 +2922,7 @@ class SpatialLightColorCardEditor extends HTMLElement {
       this._boundEditorKeyDown = null;
     }
     this._positionHistory = [];
+    this._positionRedoStack = [];
     if (this._config._edit_positions) {
       delete this._config._edit_positions;
       delete this._config._editor_id;
@@ -2953,14 +2961,37 @@ class SpatialLightColorCardEditor extends HTMLElement {
     const last = this._positionHistory[this._positionHistory.length - 1];
     if (last && JSON.stringify(last) === JSON.stringify(snapshot)) return;
     this._positionHistory.push(snapshot);
+    // New action clears redo stack
+    this._positionRedoStack = [];
     // Cap history at 50 entries
     if (this._positionHistory.length > 50) this._positionHistory.shift();
+    this._updateUndoRedoButtons();
   }
 
   _undoPositions() {
     if (this._positionHistory.length === 0) return;
+    // Push current state to redo stack
+    this._positionRedoStack.push(JSON.parse(JSON.stringify(this._config.positions || {})));
     this._config.positions = this._positionHistory.pop();
     this._fireConfigChanged();
+    this._updateUndoRedoButtons();
+  }
+
+  _redoPositions() {
+    if (this._positionRedoStack.length === 0) return;
+    // Push current state to undo stack
+    this._positionHistory.push(JSON.parse(JSON.stringify(this._config.positions || {})));
+    this._config.positions = this._positionRedoStack.pop();
+    this._fireConfigChanged();
+    this._updateUndoRedoButtons();
+  }
+
+  _updateUndoRedoButtons() {
+    if (!this.shadowRoot) return;
+    const undoBtn = this.shadowRoot.getElementById('undoPositionsBtn');
+    const redoBtn = this.shadowRoot.getElementById('redoPositionsBtn');
+    if (undoBtn) undoBtn.disabled = this._positionHistory.length === 0;
+    if (redoBtn) redoBtn.disabled = this._positionRedoStack.length === 0;
   }
 
   _setupEntityPickers() {
@@ -3150,6 +3181,10 @@ class SpatialLightColorCardEditor extends HTMLElement {
         transition: background 150ms ease;
       }
       .action-btn:hover { background: var(--divider-color, rgba(0,0,0,0.06)); }
+      .action-btn:disabled { opacity: 0.4; cursor: default; pointer-events: none; }
+
+      .undo-redo-row { display: flex; gap: 8px; }
+      .undo-redo-row .action-btn { flex: 1; text-align: center; }
 
       .color-input-row {
         display: flex; align-items: center; gap: 8px;
@@ -3285,7 +3320,13 @@ class SpatialLightColorCardEditor extends HTMLElement {
               </div>
               <ha-switch id="cfgEditPositions"></ha-switch>
             </div>
-            ${editPositions ? '<div class="edit-positions-banner">Position editing is active. Drag lights on the card preview above to reposition them. Changes are saved automatically.</div>' : ''}
+            ${editPositions ? `
+              <div class="edit-positions-banner">Position editing is active. Drag lights on the card preview above to reposition them. Changes are saved automatically.</div>
+              <div class="undo-redo-row">
+                <button class="action-btn" id="undoPositionsBtn" disabled title="Undo (Ctrl+Z)">&#8592; Undo</button>
+                <button class="action-btn" id="redoPositionsBtn" disabled title="Redo (Ctrl+Shift+Z)">Redo &#8594;</button>
+              </div>
+            ` : ''}
             <button class="action-btn" id="rearrangeBtn">Rearrange All in Grid</button>
             <button class="action-btn" id="snapToGridBtn">Snap All to Grid</button>
           </div>
@@ -3560,6 +3601,16 @@ class SpatialLightColorCardEditor extends HTMLElement {
         this._fireConfigChanged();
         this._render();
       });
+    }
+
+    // --- Undo/Redo buttons ---
+    const undoBtn = root.getElementById('undoPositionsBtn');
+    const redoBtn = root.getElementById('redoPositionsBtn');
+    if (undoBtn) {
+      undoBtn.addEventListener('click', () => this._undoPositions());
+    }
+    if (redoBtn) {
+      redoBtn.addEventListener('click', () => this._redoPositions());
     }
 
     // --- Rearrange button ---

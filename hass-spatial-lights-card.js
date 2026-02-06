@@ -16,7 +16,6 @@ class SpatialLightColorCard extends HTMLElement {
     this._selectionBase = null;
 
     /** UI state */
-    this._settingsOpen = false;
     this._yamlModalOpen = false;
 
     /** History (positions undo/redo) */
@@ -54,23 +53,12 @@ class SpatialLightColorCard extends HTMLElement {
       temperatureSlider: null,
       temperatureValue: null,
       colorWheel: null,
-      settingsBtn: null,
-      settingsPanel: null,
-      lockToggle: null,
-      iconToggle: null,
-      iconOnlyToggle: null,
-      lightSizeSlider: null,
-      lightSizeValue: null,
-      switchTapToggle: null,
-      rearrangeBtn: null,
-      exportBtn: null,
       yamlModal: null,
       yamlOutput: null,
     };
 
     /** Global bindings */
     this._boundKeyDown = null;
-    this._boundCloseSettings = null;
     this._boundIconsetAdded = null;
     this._boundMoreInfo = null;
 
@@ -153,11 +141,10 @@ class SpatialLightColorCard extends HTMLElement {
       grid_size: config.grid_size || 25,
       label_mode: config.label_mode || 'smart',
       label_overrides: config.label_overrides || {},
-      show_settings_button: config.show_settings_button !== false,
       always_show_controls: config.always_show_controls || false,
       default_entity: config.default_entity || null,
       controls_below: config.controls_below !== false,
-      show_entity_icons: config.show_entity_icons || false,
+      show_entity_icons: config.show_entity_icons !== false,
       switch_single_tap: config.switch_single_tap || false,
       icon_style: config.icon_style || 'mdi', // 'mdi' or 'emoji' (emoji kept as fallback only)
       temperature_min: Number.isFinite(tempMin) ? tempMin : null,
@@ -190,7 +177,17 @@ class SpatialLightColorCard extends HTMLElement {
     };
 
     this._gridSize = this._config.grid_size;
+
+    // Editor-driven position editing mode
+    this._editPositionsMode = !!config._edit_positions;
+    this._editorId = config._editor_id || null;
+
     this._initializePositions();
+
+    // Re-render if hass is already available (config changed after first render)
+    if (this._hass) {
+      this._renderAll();
+    }
   }
 
   _normalizeBackgroundImage(value) {
@@ -660,7 +657,7 @@ class SpatialLightColorCard extends HTMLElement {
     const avgState = controlContext.avgState;
     const showControls = this._config.always_show_controls || this._selectedLights.size > 0 || this._config.default_entity;
     const controlsPosition = this._config.controls_below ? 'below' : 'floating';
-    const showHeader = this._config.title || this._config.show_settings_button;
+    const showHeader = !!this._config.title;
 
     this.shadowRoot.innerHTML = `
       <style>
@@ -671,9 +668,8 @@ class SpatialLightColorCard extends HTMLElement {
         <div class="canvas-wrapper">
           <div class="canvas" id="canvas" role="application" aria-label="Spatial light control area" style="${this._canvasBackgroundStyle()}">
             <div class="grid"></div>
-            ${this._renderLightsHTML()}
+            ${this._config.entities.length === 0 ? this._renderEmptyState() : this._renderLightsHTML()}
             ${controlsPosition === 'floating' ? this._renderControlsFloating(showControls, controlContext) : ''}
-            ${this._renderSettings()}
           </div>
           ${controlsPosition === 'below' ? this._renderControlsBelow(controlContext) : ''}
         </div>
@@ -690,16 +686,6 @@ class SpatialLightColorCard extends HTMLElement {
     this._els.temperatureSlider = this.shadowRoot.getElementById('temperatureSlider');
     this._els.temperatureValue = this.shadowRoot.getElementById('temperatureValue');
     this._els.colorWheel = this.shadowRoot.getElementById('colorWheelMini');
-    this._els.settingsBtn = this.shadowRoot.getElementById('settingsBtn');
-    this._els.settingsPanel = this.shadowRoot.getElementById('settingsPanel');
-    this._els.lockToggle = this.shadowRoot.getElementById('lockToggle');
-    this._els.iconToggle = this.shadowRoot.getElementById('iconToggle');
-    this._els.iconOnlyToggle = this.shadowRoot.getElementById('iconOnlyToggle');
-    this._els.lightSizeSlider = this.shadowRoot.getElementById('lightSizeSlider');
-    this._els.lightSizeValue = this.shadowRoot.getElementById('lightSizeValue');
-    this._els.switchTapToggle = this.shadowRoot.getElementById('switchTapToggle');
-    this._els.rearrangeBtn = this.shadowRoot.getElementById('rearrangeBtn');
-    this._els.exportBtn = this.shadowRoot.getElementById('exportBtn');
     this._els.yamlModal = this.shadowRoot.getElementById('yamlModal');
     this._els.yamlOutput = this.shadowRoot.getElementById('yamlOutput');
 
@@ -776,14 +762,6 @@ class SpatialLightColorCard extends HTMLElement {
         border-bottom: 1px solid var(--border-subtle); background: var(--surface-secondary);
       }
       .title { font-size: 14px; font-weight: 600; color: var(--text-secondary); letter-spacing: -0.01em; }
-      .settings-btn {
-        width: 32px; height: 32px; border: none; background: transparent; color: var(--text-tertiary);
-        border-radius: var(--radius-sm); cursor: pointer; font-size: 18px; display: flex; align-items: center; justify-content: center;
-        transition: transform var(--transition-fast), background var(--transition-fast), color var(--transition-fast);
-      }
-      .settings-btn:hover { background: var(--surface-tertiary); color: var(--text-secondary); transform: rotate(24deg); }
-      .settings-btn:active { transform: rotate(24deg) scale(0.96); }
-      .settings-btn:focus-visible { outline: 2px solid var(--accent-primary); outline-offset: 2px; }
 
       .canvas-wrapper { position: relative; }
       .canvas {
@@ -805,7 +783,7 @@ class SpatialLightColorCard extends HTMLElement {
         --light-size: ${this._config.light_size}px;
         --icon-scale: 1;
         position: absolute; width: var(--light-size); height: var(--light-size); border-radius: var(--radius-full);
-        transform: translate(-50%,-50%); cursor: ${this._lockPositions ? 'pointer' : 'grab'};
+        transform: translate(-50%,-50%); cursor: ${(this._lockPositions && !this._editPositionsMode) ? 'pointer' : 'grab'};
         display:flex; align-items:center; justify-content:center; flex-direction:column;
         will-change: transform, left, top, background; z-index: 1;
         transition: opacity 200ms ease, filter 200ms ease;
@@ -1070,56 +1048,6 @@ class SpatialLightColorCard extends HTMLElement {
       }
       .slider-value { font-size: 13px; color: var(--text-secondary); min-width: 56px; text-align:right; font-weight: 700; letter-spacing: 0.01em; align-self:center; }
 
-      .settings-panel {
-        position: absolute; top: 16px; right: 16px;
-        background: rgba(20,20,20,0.98); backdrop-filter: blur(16px) saturate(160%);
-        border:1px solid var(--border-medium); border-radius:12px; padding:16px; min-width: 260px;
-        box-shadow: var(--shadow-md); opacity:0; pointer-events:none; transform: translateY(-6px);
-        transition: opacity var(--transition-base), transform var(--transition-base); z-index:100;
-      }
-      .settings-panel.visible { opacity:1; pointer-events:auto; transform: translateY(0); }
-      .settings-section { margin-bottom: 12px; }
-      .settings-section:last-child { margin-bottom: 0; }
-      .settings-label { font-size:11px; color: var(--text-tertiary); text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 6px; font-weight: 700; }
-      .settings-option { display:flex; align-items:center; justify-content:space-between; padding: 6px 0; color: var(--text-secondary); font-size:14px; }
-
-      .toggle {
-        width: 44px; height:24px; background: var(--surface-tertiary); border:1px solid var(--border-subtle);
-        border-radius: 9999px; position:relative; cursor:pointer; transition: all var(--transition-base);
-      }
-      .toggle.on { background: var(--accent-primary); border-color: var(--accent-primary); }
-      .toggle::after {
-        content:''; position:absolute; width:18px; height:18px; background: var(--text-primary); border-radius: 9999px; top:2px; left:2px;
-        transition: left 220ms cubic-bezier(0.34,1.56,0.64,1);
-      }
-      .toggle.on::after { left: calc(100% - 20px); }
-
-      .settings-button {
-        width:100%; padding: 8px 10px; background: var(--surface-tertiary); border:1px solid var(--border-subtle);
-        color: var(--text-secondary); border-radius: 8px; cursor:pointer; font-size:13px; font-weight:600;
-        transition: background var(--transition-fast), border-color var(--transition-fast), transform var(--transition-fast);
-      }
-      .settings-button:hover { background: var(--surface-elevated); border-color: var(--border-medium); color: var(--text-primary); }
-      .settings-button:active { transform: scale(0.98); }
-
-      .settings-size-row { flex-wrap: wrap; }
-      .settings-size-control { display: flex; align-items: center; gap: 8px; width: 100%; margin-top: 6px; }
-      .settings-slider {
-        flex: 1; -webkit-appearance: none; appearance: none;
-        height: 6px; background: var(--surface-tertiary); border-radius: 3px; cursor: pointer;
-      }
-      .settings-slider::-webkit-slider-thumb {
-        -webkit-appearance: none; width: 16px; height: 16px; border-radius: 50%;
-        background: var(--accent-primary); border: 2px solid var(--surface-primary);
-        cursor: pointer; transition: transform var(--transition-fast);
-      }
-      .settings-slider::-webkit-slider-thumb:hover { transform: scale(1.1); }
-      .settings-slider::-moz-range-thumb {
-        width: 16px; height: 16px; border-radius: 50%; background: var(--accent-primary);
-        border: 2px solid var(--surface-primary); cursor: pointer;
-      }
-      .settings-size-value { font-size: 12px; color: var(--text-tertiary); min-width: 40px; text-align: right; }
-
       .modal-overlay {
         position: fixed; inset: 0; background: rgba(0,0,0,0.8); backdrop-filter: blur(8px);
         display:none; align-items:center; justify-content:center; z-index:1000; padding:16px;
@@ -1152,7 +1080,15 @@ class SpatialLightColorCard extends HTMLElement {
         .color-presets { flex-direction: row; flex-wrap: wrap; max-width: none; }
       }
 
-      .settings-btn:focus-visible, .modal-close:focus-visible, .settings-button:focus-visible { outline: 2px solid var(--accent-primary); outline-offset: 2px; }
+      .empty-state {
+        position: absolute; inset: 0; display: flex; flex-direction: column;
+        align-items: center; justify-content: center; gap: 12px; pointer-events: none;
+      }
+      .empty-state-icon { color: var(--text-tertiary); opacity: 0.5; }
+      .empty-state-title { font-size: 16px; font-weight: 600; color: var(--text-secondary); }
+      .empty-state-text { font-size: 13px; color: var(--text-tertiary); text-align: center; max-width: 280px; line-height: 1.5; }
+
+      .modal-close:focus-visible { outline: 2px solid var(--accent-primary); outline-offset: 2px; }
 
       :host(.overlay-active) .light,
       :host(.overlay-active) .light.selected,
@@ -1167,9 +1103,6 @@ class SpatialLightColorCard extends HTMLElement {
     return `
       <div class="header">
         <div class="title">${this._config.title}</div>
-        ${this._config.show_settings_button ? `
-          <button class="settings-btn" id="settingsBtn" aria-label="Settings" aria-expanded="${this._settingsOpen}">⚙</button>
-        ` : ''}
       </div>
     `;
   }
@@ -1209,6 +1142,22 @@ class SpatialLightColorCard extends HTMLElement {
       if (domain === 'switch' || domain === 'input_boolean') return this._config.switch_off_color;
       return 'transparent';
     }
+  }
+
+  _renderEmptyState() {
+    return `
+      <div class="empty-state">
+        <div class="empty-state-icon">
+          <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M9 18h6"/>
+            <path d="M10 22h4"/>
+            <path d="M12 2a7 7 0 0 0-4 12.7V17h8v-2.3A7 7 0 0 0 12 2z"/>
+          </svg>
+        </div>
+        <div class="empty-state-title">No entities configured</div>
+        <div class="empty-state-text">Edit this card to add light entities and start building your spatial layout.</div>
+      </div>
+    `;
   }
 
   _renderLightsHTML() {
@@ -1331,60 +1280,6 @@ class SpatialLightColorCard extends HTMLElement {
             <span class="slider-value" id="temperatureValue">${clampedTemp}K</span>
           </div>
           ${this._renderTemperaturePresets()}
-        </div>
-      </div>
-    `;
-  }
-
-  _renderSettings() {
-    return `
-      <div class="settings-panel ${this._settingsOpen ? 'visible' : ''}" id="settingsPanel" role="dialog" aria-label="Settings">
-        <div class="settings-section">
-          <div class="settings-label">Positioning</div>
-          <div class="settings-option">
-            <span>Lock Positions</span>
-            <button class="toggle ${this._lockPositions ? 'on' : ''}" id="lockToggle" role="switch" aria-checked="${this._lockPositions}" aria-label="Lock positions"></button>
-          </div>
-        </div>
-        <div class="settings-section">
-          <div class="settings-label">Display</div>
-          <div class="settings-option">
-            <span>Show Entity Icons</span>
-            <button class="toggle ${this._config.show_entity_icons ? 'on' : ''}" id="iconToggle" role="switch" aria-checked="${this._config.show_entity_icons}" aria-label="Show entity icons"></button>
-          </div>
-          <div class="settings-option">
-            <span>Icon-Only Mode</span>
-            <button class="toggle ${this._config.icon_only_mode ? 'on' : ''}" id="iconOnlyToggle" role="switch" aria-checked="${this._config.icon_only_mode}" aria-label="Show icons only without filled circles"></button>
-          </div>
-          <div class="settings-option">
-            <span>Show Live Colors</span>
-            <button class="toggle ${this._config.show_live_colors ? 'on' : ''}" id="liveColorsToggle" role="switch" aria-checked="${this._config.show_live_colors}" aria-label="Show live colors as presets"></button>
-          </div>
-          <div class="settings-option settings-size-row">
-            <span>Light Size</span>
-            <div class="settings-size-control">
-              <input type="range" class="settings-slider" id="lightSizeSlider" min="24" max="96" value="${this._config.light_size}" aria-label="Light size">
-              <span class="settings-size-value" id="lightSizeValue">${this._config.light_size}px</span>
-            </div>
-          </div>
-        </div>
-        <div class="settings-section">
-          <div class="settings-label">Interaction</div>
-          <div class="settings-option">
-            <span>Single-Tap Switch/Scene</span>
-            <button class="toggle ${this._config.switch_single_tap ? 'on' : ''}" id="switchTapToggle" role="switch" aria-checked="${this._config.switch_single_tap}" aria-label="Toggle switches with a single tap"></button>
-          </div>
-        </div>
-        <div class="settings-section">
-          <div class="settings-label">Layout</div>
-          <button class="settings-button" id="rearrangeBtn">Rearrange All Lights</button>
-        </div>
-        <div class="settings-section">
-          <div class="settings-label">Grid</div>
-          <div class="settings-option"><span>Size: ${this._gridSize}px</span></div>
-        </div>
-        <div class="settings-section">
-          <button class="settings-button" id="exportBtn">Export Configuration</button>
         </div>
       </div>
     `;
@@ -1588,10 +1483,6 @@ class SpatialLightColorCard extends HTMLElement {
       this._boundKeyDown = null;
     }
     if (this._raf) cancelAnimationFrame(this._raf);
-    if (this._boundCloseSettings) {
-      document.removeEventListener('click', this._boundCloseSettings);
-      this._boundCloseSettings = null;
-    }
     if (this._boundIconsetAdded && typeof window !== 'undefined') {
       window.removeEventListener('iron-iconset-added', this._boundIconsetAdded);
       this._boundIconsetAdded = null;
@@ -1636,113 +1527,6 @@ class SpatialLightColorCard extends HTMLElement {
       this._els.canvas.addEventListener('pointercancel', (e) => this._onPointerCancel(e));
       this._els.canvas.addEventListener('dblclick', (e) => this._handleCanvasDoubleClick(e));
       this._els.canvas.addEventListener('contextmenu', (e) => this._handleCanvasContextMenu(e));
-    }
-
-    // Settings button (no full re-render)
-    if (this._els.settingsBtn) {
-      this._els.settingsBtn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        this._settingsOpen = !this._settingsOpen;
-        if (this._els.settingsPanel) this._els.settingsPanel.classList.toggle('visible', this._settingsOpen);
-        this._els.settingsBtn.setAttribute('aria-expanded', String(this._settingsOpen));
-        this._syncOverlayState();
-      });
-    }
-
-    // Close settings when clicking outside (delegate to document)
-    if (this._boundCloseSettings) {
-      document.removeEventListener('click', this._boundCloseSettings);
-      this._boundCloseSettings = null;
-    }
-    this._boundCloseSettings = (e) => {
-      if (this._settingsOpen &&
-        !e.target.closest('.settings-panel') &&
-        !e.target.closest('.settings-btn')) {
-        this._settingsOpen = false;
-        if (this._els.settingsPanel) this._els.settingsPanel.classList.remove('visible');
-        if (this._els.settingsBtn) this._els.settingsBtn.setAttribute('aria-expanded', 'false');
-        this._syncOverlayState();
-      }
-    };
-    document.addEventListener('click', this._boundCloseSettings);
-
-    if (this._els.lockToggle) {
-      this._els.lockToggle.addEventListener('click', () => {
-        this._lockPositions = !this._lockPositions;
-        this._els.lockToggle.classList.toggle('on', this._lockPositions);
-        this._els.lockToggle.setAttribute('aria-checked', String(this._lockPositions));
-        // Update cursor affordance without re-render:
-        this.shadowRoot.querySelectorAll('.light').forEach(l => {
-          l.style.cursor = this._lockPositions ? 'pointer' : 'grab';
-        });
-      });
-    }
-
-    if (this._els.iconToggle) {
-      this._els.iconToggle.addEventListener('click', () => {
-        this._config.show_entity_icons = !this._config.show_entity_icons;
-        this._els.iconToggle.classList.toggle('on', this._config.show_entity_icons);
-        this._els.iconToggle.setAttribute('aria-checked', String(this._config.show_entity_icons));
-        // Update light contents
-        this._rerenderLightIconsOnly();
-      });
-    }
-
-    if (this._els.iconOnlyToggle) {
-      this._els.iconOnlyToggle.addEventListener('click', () => {
-        this._config.icon_only_mode = !this._config.icon_only_mode;
-        this._els.iconOnlyToggle.classList.toggle('on', this._config.icon_only_mode);
-        this._els.iconOnlyToggle.setAttribute('aria-checked', String(this._config.icon_only_mode));
-        // Re-render lights with icon-only mode
-        this._rerenderLightsForDisplayMode();
-      });
-    }
-
-    const liveColorsToggle = this.shadowRoot.getElementById('liveColorsToggle');
-    if (liveColorsToggle) {
-      liveColorsToggle.addEventListener('click', () => {
-        this._config.show_live_colors = !this._config.show_live_colors;
-        liveColorsToggle.classList.toggle('on', this._config.show_live_colors);
-        liveColorsToggle.setAttribute('aria-checked', String(this._config.show_live_colors));
-        this._refreshColorPresets();
-      });
-    }
-
-    if (this._els.lightSizeSlider) {
-      this._els.lightSizeSlider.addEventListener('input', (e) => {
-        const newSize = parseInt(e.target.value, 10);
-        if (Number.isFinite(newSize) && newSize > 0) {
-          this._config.light_size = newSize;
-          if (this._els.lightSizeValue) {
-            this._els.lightSizeValue.textContent = `${newSize}px`;
-          }
-          // Update all lights with new size
-          this._updateLightSizes();
-        }
-      });
-    }
-
-    if (this._els.switchTapToggle) {
-      this._els.switchTapToggle.addEventListener('click', () => {
-        this._config.switch_single_tap = !this._config.switch_single_tap;
-        this._els.switchTapToggle.classList.toggle('on', this._config.switch_single_tap);
-        this._els.switchTapToggle.setAttribute('aria-checked', String(this._config.switch_single_tap));
-      });
-    }
-
-    if (this._els.rearrangeBtn) {
-      this._els.rearrangeBtn.addEventListener('click', () => {
-        this._rearrangeAllLights();
-      });
-    }
-
-    if (this._els.exportBtn) {
-      this._els.exportBtn.addEventListener('click', () => {
-        this._yamlModalOpen = true;
-        if (this._els.yamlModal) this._els.yamlModal.classList.add('visible');
-        if (this._els.yamlOutput) this._els.yamlOutput.textContent = this._generateYAML();
-        this._syncOverlayState();
-      });
     }
 
     // Modal close
@@ -1942,9 +1726,7 @@ class SpatialLightColorCard extends HTMLElement {
     // Escape → deselect and close panels
     if (e.key === 'Escape') {
       this._selectedLights.clear();
-      if (this._settingsOpen) this._settingsOpen = false;
       if (this._yamlModalOpen) this._yamlModalOpen = false;
-      if (this._els.settingsPanel) this._els.settingsPanel.classList.remove('visible');
       if (this._els.yamlModal) this._els.yamlModal.classList.remove('visible');
       if (this._moreInfoOpen) {
         this.dispatchEvent(new CustomEvent('hass-more-info', {
@@ -1966,7 +1748,7 @@ class SpatialLightColorCard extends HTMLElement {
       if (this._els.colorWheel) this._requestColorWheelDraw();
     }
     // Optional: movement with arrows if unlocked
-    if (!this._lockPositions && this._selectedLights.size > 0) {
+    if ((!this._lockPositions || this._editPositionsMode) && this._selectedLights.size > 0) {
       const step = e.altKey ? 1 : 0.5; // fine control with Alt
       let moved = false;
       const delta = { x: 0, y: 0 };
@@ -1984,6 +1766,14 @@ class SpatialLightColorCard extends HTMLElement {
         });
         this._smoothApplyPositions();
         this._saveHistory();
+        if (this._editPositionsMode && this._editorId) {
+          window.dispatchEvent(new CustomEvent('spatial-card-positions-changed', {
+            detail: {
+              editorId: this._editorId,
+              positions: JSON.parse(JSON.stringify(this._config.positions)),
+            },
+          }));
+        }
       }
     }
   }
@@ -2001,7 +1791,7 @@ class SpatialLightColorCard extends HTMLElement {
       // Check if this entity type is configured to toggle on single tap
       const toggleOnSingleTap = this._config.switch_single_tap && (domain === 'switch' || domain === 'input_boolean' || domain === 'scene');
       
-      if (this._lockPositions) {
+      if (this._lockPositions && !this._editPositionsMode) {
         const additive = e.shiftKey || e.ctrlKey || e.metaKey;
         if (this._longPressTimer) {
           clearTimeout(this._longPressTimer);
@@ -2168,6 +1958,15 @@ class SpatialLightColorCard extends HTMLElement {
       }
       if (moved) {
         this._saveHistory();
+        // Notify editor of position changes when in edit mode
+        if (this._editPositionsMode && this._editorId) {
+          window.dispatchEvent(new CustomEvent('spatial-card-positions-changed', {
+            detail: {
+              editorId: this._editorId,
+              positions: JSON.parse(JSON.stringify(this._config.positions)),
+            },
+          }));
+        }
       }
       this._dragState = null;
     }
@@ -2288,7 +2087,7 @@ class SpatialLightColorCard extends HTMLElement {
   }
 
   _syncOverlayState() {
-    const overlayActive = this._settingsOpen || this._yamlModalOpen || this._moreInfoOpen;
+    const overlayActive = this._yamlModalOpen || this._moreInfoOpen;
     this.classList.toggle('overlay-active', overlayActive);
   }
 
@@ -2918,7 +2717,6 @@ class SpatialLightColorCard extends HTMLElement {
     yamlLines.push(`canvas_height: ${this._config.canvas_height}`);
     yamlLines.push(`grid_size: ${this._config.grid_size}`);
     if (this._config.label_mode) yamlLines.push(`label_mode: ${this._config.label_mode}`);
-    yamlLines.push(`show_settings_button: ${this._config.show_settings_button !== false}`);
     yamlLines.push(`always_show_controls: ${!!this._config.always_show_controls}`);
     yamlLines.push(`controls_below: ${!!this._config.controls_below}`);
     yamlLines.push(`show_entity_icons: ${!!this._config.show_entity_icons}`);
@@ -3009,12 +2807,15 @@ class SpatialLightColorCard extends HTMLElement {
   }
 
   getCardSize() { return 8; }
+  static getConfigElement() {
+    return document.createElement('spatial-light-color-card-editor');
+  }
   static getStubConfig() {
     return {
       entities: [], positions: {}, title: '',
       canvas_height: 450, grid_size: 25, label_mode: 'smart',
-      show_settings_button: true, always_show_controls: false, controls_below: true,
-      default_entity: null, show_entity_icons: false, icon_style: 'mdi',
+      always_show_controls: false, controls_below: true,
+      default_entity: null, show_entity_icons: true, icon_style: 'mdi',
       light_size: 56, icon_only_mode: false, size_overrides: {}, icon_only_overrides: {},
       switch_on_color: '#ffa500', switch_off_color: '#2a2a2a', scene_color: '#6366f1',
       color_presets: [],
@@ -3023,6 +2824,1130 @@ class SpatialLightColorCard extends HTMLElement {
   }
 }
 
+/** ---------- Visual Card Editor ---------- */
+class SpatialLightColorCardEditor extends HTMLElement {
+  constructor() {
+    super();
+    this.attachShadow({ mode: 'open' });
+    this._config = {};
+    this._hass = null;
+    this._configFromEditor = false;
+    this._editorId = Math.random().toString(36).substr(2, 9);
+    this._expandedEntity = null;
+    this._boundPositionHandler = null;
+    this._haElementsLoaded = false;
+    this._positionHistory = [];
+    this._positionRedoStack = [];
+    this._boundEditorKeyDown = null;
+  }
+
+  async connectedCallback() {
+    this._boundPositionHandler = (e) => {
+      if (e.detail && e.detail.editorId === this._editorId && e.detail.positions) {
+        this._pushPositionHistory();
+        if (!this._config.positions) this._config.positions = {};
+        this._config.positions = e.detail.positions;
+        this._fireConfigChanged();
+      }
+    };
+    window.addEventListener('spatial-card-positions-changed', this._boundPositionHandler);
+
+    this._boundEditorKeyDown = (e) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === 'z' && !e.shiftKey) {
+        if (this._positionHistory.length > 0) {
+          e.preventDefault();
+          e.stopPropagation();
+          this._undoPositions();
+        }
+      } else if ((e.ctrlKey || e.metaKey) && (e.key === 'y' || (e.key === 'Z' && e.shiftKey) || (e.key === 'z' && e.shiftKey))) {
+        if (this._positionRedoStack.length > 0) {
+          e.preventDefault();
+          e.stopPropagation();
+          this._redoPositions();
+        }
+      }
+    };
+    // Use capture so we intercept before the card's own handler
+    window.addEventListener('keydown', this._boundEditorKeyDown, true);
+
+    // Force HA to load lazy custom elements (ha-entity-picker, ha-switch, etc.)
+    if (!this._haElementsLoaded) {
+      await this._loadHAElements();
+      this._haElementsLoaded = true;
+      // Re-render now that elements are available
+      if (this._config.entities) {
+        this._render();
+      }
+    }
+  }
+
+  async _loadHAElements() {
+    // ha-entity-picker and ha-switch are lazy-loaded by HA.
+    // We must trigger their loading before we can use them.
+    if (customElements.get('ha-entity-picker')) return;
+
+    // Method 1: loadCardHelpers (most reliable)
+    try {
+      if (window.loadCardHelpers) {
+        const helpers = await window.loadCardHelpers();
+        if (helpers) {
+          // Creating an entities card element forces HA to load ha-entity-picker
+          const card = await helpers.createCardElement({ type: 'entities', entities: [] });
+          if (card) {
+            // Trigger the card to load its editor elements
+            await card.constructor?.getConfigElement?.();
+          }
+        }
+      }
+    } catch (_) { /* ignore */ }
+
+    // Method 2: Wait for custom element to be defined (with timeout)
+    if (!customElements.get('ha-entity-picker')) {
+      try {
+        await Promise.race([
+          customElements.whenDefined('ha-entity-picker'),
+          new Promise(resolve => setTimeout(resolve, 3000)),
+        ]);
+      } catch (_) { /* ignore */ }
+    }
+  }
+
+  disconnectedCallback() {
+    if (this._boundPositionHandler) {
+      window.removeEventListener('spatial-card-positions-changed', this._boundPositionHandler);
+      this._boundPositionHandler = null;
+    }
+    if (this._boundEditorKeyDown) {
+      window.removeEventListener('keydown', this._boundEditorKeyDown, true);
+      this._boundEditorKeyDown = null;
+    }
+    this._positionHistory = [];
+    this._positionRedoStack = [];
+    if (this._config._edit_positions) {
+      delete this._config._edit_positions;
+      delete this._config._editor_id;
+      this._fireConfigChanged();
+    }
+  }
+
+  set hass(hass) {
+    this._hass = hass;
+    this._setupEntityPickers();
+  }
+
+  setConfig(config) {
+    this._config = JSON.parse(JSON.stringify(config));
+    if (this._configFromEditor) {
+      this._configFromEditor = false;
+      return;
+    }
+    this._render();
+  }
+
+  _fireConfigChanged() {
+    this._configFromEditor = true;
+    const config = JSON.parse(JSON.stringify(this._config));
+    this.dispatchEvent(new CustomEvent('config-changed', {
+      detail: { config },
+      bubbles: true,
+      composed: true,
+    }));
+    requestAnimationFrame(() => { this._configFromEditor = false; });
+  }
+
+  _pushPositionHistory() {
+    const snapshot = JSON.parse(JSON.stringify(this._config.positions || {}));
+    // Avoid duplicate consecutive snapshots
+    const last = this._positionHistory[this._positionHistory.length - 1];
+    if (last && JSON.stringify(last) === JSON.stringify(snapshot)) return;
+    this._positionHistory.push(snapshot);
+    // New action clears redo stack
+    this._positionRedoStack = [];
+    // Cap history at 50 entries
+    if (this._positionHistory.length > 50) this._positionHistory.shift();
+    this._updateUndoRedoButtons();
+  }
+
+  _undoPositions() {
+    if (this._positionHistory.length === 0) return;
+    // Push current state to redo stack
+    this._positionRedoStack.push(JSON.parse(JSON.stringify(this._config.positions || {})));
+    this._config.positions = this._positionHistory.pop();
+    this._fireConfigChanged();
+    this._updateUndoRedoButtons();
+  }
+
+  _redoPositions() {
+    if (this._positionRedoStack.length === 0) return;
+    // Push current state to undo stack
+    this._positionHistory.push(JSON.parse(JSON.stringify(this._config.positions || {})));
+    this._config.positions = this._positionRedoStack.pop();
+    this._fireConfigChanged();
+    this._updateUndoRedoButtons();
+  }
+
+  _updateUndoRedoButtons() {
+    if (!this.shadowRoot) return;
+    const undoBtn = this.shadowRoot.getElementById('undoPositionsBtn');
+    const redoBtn = this.shadowRoot.getElementById('redoPositionsBtn');
+    if (undoBtn) undoBtn.disabled = this._positionHistory.length === 0;
+    if (redoBtn) redoBtn.disabled = this._positionRedoStack.length === 0;
+  }
+
+  _setupEntityPickers() {
+    if (!this._hass || !this.shadowRoot) return;
+    this.shadowRoot.querySelectorAll('ha-entity-picker').forEach(picker => {
+      picker.hass = this._hass;
+      if (!picker.includeDomains || picker.includeDomains.length === 0) {
+        picker.includeDomains = ['light', 'switch', 'scene', 'input_boolean'];
+      }
+    });
+    // Set default entity picker value
+    const defPicker = this.shadowRoot.getElementById('cfgDefaultEntity');
+    if (defPicker) {
+      defPicker.value = this._config.default_entity || '';
+    }
+  }
+
+  _getEntityName(entityId) {
+    if (this._hass && this._hass.states[entityId]) {
+      return this._hass.states[entityId].attributes.friendly_name || entityId;
+    }
+    return entityId;
+  }
+
+  _getDomainIcon(entityId) {
+    const domain = entityId.split('.')[0];
+    const map = { light: 'mdi:lightbulb', switch: 'mdi:toggle-switch', scene: 'mdi:palette', input_boolean: 'mdi:toggle-switch-outline' };
+    return map[domain] || 'mdi:help-circle';
+  }
+
+  _esc(str) {
+    return String(str).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  }
+
+  _editorStyles() {
+    return `
+      :host { display: block; }
+      .card-config { display: flex; flex-direction: column; gap: 16px; }
+      .section {
+        border: 1px solid var(--divider-color, rgba(0,0,0,0.12));
+        border-radius: 8px; overflow: hidden;
+      }
+      .section-header {
+        padding: 12px 16px; background: var(--secondary-background-color, #fafafa);
+        cursor: pointer; display: flex; align-items: center;
+        justify-content: space-between; user-select: none;
+      }
+      .section-header h3 { margin: 0; font-size: 14px; font-weight: 600; color: var(--primary-text-color, #212121); }
+      .section-header .chevron {
+        transition: transform 200ms ease; color: var(--secondary-text-color, #727272); font-size: 12px;
+      }
+      .section.collapsed .section-header .chevron { transform: rotate(-90deg); }
+      .section.collapsed .section-body { display: none; }
+      .section-body { padding: 12px 16px; display: flex; flex-direction: column; gap: 12px; }
+
+      .entity-list { display: flex; flex-direction: column; gap: 4px; }
+      .entity-item {
+        border: 1px solid var(--divider-color, rgba(0,0,0,0.08));
+        border-radius: 8px; overflow: hidden;
+      }
+      .entity-item.expanded { border-color: var(--primary-color, #03a9f4); }
+      .entity-main {
+        display: flex; align-items: center; gap: 8px; padding: 6px 8px 6px 12px;
+        background: var(--secondary-background-color, #f5f5f5);
+      }
+      .entity-main ha-icon {
+        color: var(--secondary-text-color, #727272); --mdc-icon-size: 20px; flex-shrink: 0;
+      }
+      .entity-main .entity-info { flex: 1; min-width: 0; }
+      .entity-main .entity-name {
+        font-size: 13px; color: var(--primary-text-color, #212121);
+        white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: block;
+      }
+      .entity-main .entity-id {
+        font-size: 10px; color: var(--secondary-text-color, #727272);
+        font-family: monospace; white-space: nowrap; overflow: hidden;
+        text-overflow: ellipsis; display: block;
+      }
+      .entity-btn {
+        color: var(--secondary-text-color, #727272); cursor: pointer;
+        border: none; background: none; padding: 4px; border-radius: 50%;
+        display: flex; align-items: center; justify-content: center;
+        min-width: 28px; min-height: 28px; font-size: 14px; flex-shrink: 0;
+      }
+      .entity-btn:hover { background: rgba(0,0,0,0.06); }
+      .entity-btn.remove:hover { color: var(--error-color, #db4437); background: rgba(219,68,55,0.1); }
+      .entity-btn.expand { font-size: 10px; transition: transform 200ms; }
+      .entity-item.expanded .entity-btn.expand { transform: rotate(180deg); }
+
+      .entity-overrides {
+        padding: 10px 12px; display: none; flex-direction: column; gap: 10px;
+        border-top: 1px solid var(--divider-color, rgba(0,0,0,0.08));
+        background: var(--card-background-color, #fff);
+      }
+      .entity-item.expanded .entity-overrides { display: flex; }
+      .entity-overrides .override-row {
+        display: flex; align-items: center; gap: 8px;
+      }
+      .entity-overrides .override-row label {
+        font-size: 12px; color: var(--secondary-text-color, #727272);
+        min-width: 70px; flex-shrink: 0;
+      }
+      .entity-overrides .override-row input {
+        flex: 1; padding: 5px 8px; border: 1px solid var(--divider-color, rgba(0,0,0,0.12));
+        border-radius: 4px; font-size: 13px; color: var(--primary-text-color, #212121);
+        background: var(--card-background-color, #fff); box-sizing: border-box; outline: none;
+        min-width: 0;
+      }
+      .entity-overrides .override-row input:focus { border-color: var(--primary-color, #03a9f4); }
+      .entity-overrides .override-switch {
+        display: flex; align-items: center; justify-content: space-between; gap: 8px;
+      }
+      .entity-overrides .override-switch label { min-width: unset; flex: 1; }
+      .color-preview {
+        width: 24px; height: 24px; border-radius: 4px; flex-shrink: 0;
+        border: 1px solid var(--divider-color, rgba(0,0,0,0.12));
+      }
+
+      .add-entity-row { padding-top: 4px; }
+      .add-entity-row ha-entity-picker {
+        width: 100%; display: block;
+      }
+      .empty-entities {
+        text-align: center; padding: 20px 16px;
+        color: var(--secondary-text-color, #727272); font-size: 13px; line-height: 1.5;
+      }
+
+      .option-row {
+        display: flex; align-items: center; justify-content: space-between;
+        min-height: 40px; gap: 16px;
+      }
+      .option-row .label { font-size: 14px; color: var(--primary-text-color, #212121); flex: 1; }
+      .option-row .sublabel { font-size: 12px; color: var(--secondary-text-color, #727272); margin-top: 2px; }
+      .input-row { display: flex; flex-direction: column; gap: 4px; }
+      .input-row label { font-size: 12px; font-weight: 500; color: var(--secondary-text-color, #727272); }
+      .input-row input[type="number"],
+      .input-row input[type="text"],
+      .input-row input[type="url"],
+      .input-row input[type="color"] {
+        width: 100%; padding: 8px 12px;
+        border: 1px solid var(--divider-color, rgba(0,0,0,0.12));
+        border-radius: 6px; font-size: 14px; color: var(--primary-text-color, #212121);
+        background: var(--card-background-color, #fff); box-sizing: border-box;
+        outline: none; transition: border-color 150ms ease;
+      }
+      .input-row input:focus { border-color: var(--primary-color, #03a9f4); }
+      .input-row select {
+        width: 100%; padding: 8px 12px;
+        border: 1px solid var(--divider-color, rgba(0,0,0,0.12));
+        border-radius: 6px; font-size: 14px; color: var(--primary-text-color, #212121);
+        background: var(--card-background-color, #fff); box-sizing: border-box;
+        outline: none; cursor: pointer;
+      }
+      .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+      .three-col { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; }
+      .slider-row { display: flex; align-items: center; gap: 12px; }
+      .slider-row input[type="range"] {
+        flex: 1; -webkit-appearance: none; appearance: none; height: 6px;
+        background: var(--divider-color, rgba(0,0,0,0.12)); border-radius: 3px; cursor: pointer;
+      }
+      .slider-row input[type="range"]::-webkit-slider-thumb {
+        -webkit-appearance: none; width: 18px; height: 18px; border-radius: 50%;
+        background: var(--primary-color, #03a9f4); cursor: pointer;
+      }
+      .slider-row input[type="range"]::-moz-range-thumb {
+        width: 18px; height: 18px; border-radius: 50%;
+        background: var(--primary-color, #03a9f4); cursor: pointer; border: none;
+      }
+      .slider-value {
+        font-size: 13px; color: var(--secondary-text-color, #727272);
+        min-width: 44px; text-align: right; font-variant-numeric: tabular-nums;
+      }
+      ha-switch { --mdc-theme-secondary: var(--primary-color, #03a9f4); }
+
+      .edit-positions-banner {
+        padding: 10px 14px; border-radius: 8px;
+        background: color-mix(in srgb, var(--primary-color, #03a9f4) 12%, transparent);
+        border: 1px solid color-mix(in srgb, var(--primary-color, #03a9f4) 30%, transparent);
+        font-size: 12px; color: var(--primary-text-color, #212121); line-height: 1.5;
+      }
+
+      .action-btn {
+        padding: 8px 14px; border-radius: 6px; cursor: pointer; font-size: 13px; font-weight: 500;
+        border: 1px solid var(--divider-color, rgba(0,0,0,0.12));
+        background: var(--secondary-background-color, #fafafa);
+        color: var(--primary-text-color, #212121);
+        transition: background 150ms ease;
+      }
+      .action-btn:hover { background: var(--divider-color, rgba(0,0,0,0.06)); }
+      .action-btn:disabled { opacity: 0.4; cursor: default; pointer-events: none; }
+
+      .undo-redo-row { display: flex; gap: 8px; }
+      .undo-redo-row .action-btn { flex: 1; text-align: center; }
+
+      .color-input-row {
+        display: flex; align-items: center; gap: 8px;
+      }
+      .color-input-row input[type="color"] {
+        width: 36px; height: 36px; padding: 2px; border-radius: 6px; cursor: pointer;
+        flex-shrink: 0;
+      }
+      .color-input-row input[type="text"] {
+        flex: 1; padding: 8px 12px;
+        border: 1px solid var(--divider-color, rgba(0,0,0,0.12));
+        border-radius: 6px; font-size: 14px; color: var(--primary-text-color, #212121);
+        background: var(--card-background-color, #fff); box-sizing: border-box;
+        outline: none; font-family: monospace;
+      }
+
+      .color-presets-list {
+        display: flex; flex-wrap: wrap; gap: 6px; align-items: center;
+      }
+      .color-preset-chip {
+        width: 28px; height: 28px; border-radius: 6px; cursor: pointer;
+        border: 1px solid var(--divider-color, rgba(0,0,0,0.12));
+        position: relative; display: flex; align-items: center; justify-content: center;
+      }
+      .color-preset-chip:hover { opacity: 0.8; }
+      .color-preset-chip .remove-preset {
+        display: none; position: absolute; inset: 0; background: rgba(0,0,0,0.5);
+        border-radius: 6px; color: white; font-size: 14px;
+        align-items: center; justify-content: center;
+      }
+      .color-preset-chip:hover .remove-preset { display: flex; }
+      .add-preset-btn {
+        width: 28px; height: 28px; border-radius: 6px; cursor: pointer;
+        border: 1px dashed var(--divider-color, rgba(0,0,0,0.3));
+        background: transparent; color: var(--secondary-text-color, #727272);
+        display: flex; align-items: center; justify-content: center; font-size: 16px;
+      }
+      .add-preset-btn:hover { border-color: var(--primary-color, #03a9f4); color: var(--primary-color, #03a9f4); }
+    `;
+  }
+
+  _renderEntityItem(entity, index) {
+    const isExpanded = this._expandedEntity === entity;
+    const name = this._getEntityName(entity);
+    const icon = this._getDomainIcon(entity);
+
+    const labelOverride = (this._config.label_overrides && this._config.label_overrides[entity]) || '';
+    const sizeOverride = (this._config.size_overrides && this._config.size_overrides[entity]) || '';
+    const colorOverride = this._config.color_overrides && this._config.color_overrides[entity];
+    const colorOn = typeof colorOverride === 'string' ? colorOverride : (colorOverride && (colorOverride.state_on || colorOverride.on) ? (colorOverride.state_on || colorOverride.on) : '');
+    const colorOff = typeof colorOverride === 'object' && colorOverride ? (colorOverride.state_off || colorOverride.off || '') : '';
+    const iconOnlyOverride = this._config.icon_only_overrides && this._config.icon_only_overrides[entity];
+    const iconOnlyChecked = iconOnlyOverride !== undefined ? iconOnlyOverride : false;
+    const hasIconOnlyOverride = iconOnlyOverride !== undefined;
+
+    return `
+      <div class="entity-item ${isExpanded ? 'expanded' : ''}" data-entity="${entity}" data-index="${index}">
+        <div class="entity-main">
+          <ha-icon icon="${icon}"></ha-icon>
+          <div class="entity-info">
+            <span class="entity-name" data-entity="${entity}">${this._esc(name)}</span>
+            <span class="entity-id">${entity}</span>
+          </div>
+          <button class="entity-btn expand" data-index="${index}" title="Entity settings">&#9660;</button>
+          <button class="entity-btn remove" data-index="${index}" title="Remove">&times;</button>
+        </div>
+        <div class="entity-overrides">
+          <div class="override-row">
+            <label>Label</label>
+            <input type="text" data-entity="${entity}" data-key="label" value="${this._esc(labelOverride)}" placeholder="Auto">
+          </div>
+          <div class="override-row">
+            <label>Size (px)</label>
+            <input type="number" data-entity="${entity}" data-key="size" value="${sizeOverride}" placeholder="${this._config.light_size || 56}" min="16" max="200">
+          </div>
+          <div class="override-row">
+            <label>Color (on)</label>
+            <input type="text" data-entity="${entity}" data-key="color_on" value="${this._esc(colorOn)}" placeholder="#hex or empty">
+            <div class="color-preview" data-entity="${entity}" data-state="on" style="background:${colorOn || 'transparent'};"></div>
+          </div>
+          <div class="override-row">
+            <label>Color (off)</label>
+            <input type="text" data-entity="${entity}" data-key="color_off" value="${this._esc(colorOff)}" placeholder="#hex or empty">
+            <div class="color-preview" data-entity="${entity}" data-state="off" style="background:${colorOff || 'transparent'};"></div>
+          </div>
+          <div class="override-switch">
+            <label>Icon-only override</label>
+            <ha-switch data-entity="${entity}" data-key="iconOnly" ${hasIconOnlyOverride && iconOnlyChecked ? 'checked' : ''}></ha-switch>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  _render() {
+    const config = this._config;
+    const entities = config.entities || [];
+    const editPositions = !!config._edit_positions;
+    const presets = Array.isArray(config.color_presets) ? config.color_presets : [];
+
+    this.shadowRoot.innerHTML = `
+      <style>${this._editorStyles()}</style>
+      <div class="card-config">
+
+        <!-- Entities Section -->
+        <div class="section" id="section-entities">
+          <div class="section-header" data-section="entities">
+            <h3>Entities</h3>
+            <span class="chevron">&#9660;</span>
+          </div>
+          <div class="section-body">
+            ${entities.length === 0
+              ? '<div class="empty-entities">No entities added yet.<br>Use the picker below to add lights, switches, or scenes.</div>'
+              : `<div class="entity-list">${entities.map((e, i) => this._renderEntityItem(e, i)).join('')}</div>`
+            }
+            <div class="add-entity-row">
+              <ha-entity-picker id="addEntityPicker" label="Add entity..."></ha-entity-picker>
+            </div>
+          </div>
+        </div>
+
+        <!-- Positions Section -->
+        <div class="section" id="section-positions">
+          <div class="section-header" data-section="positions">
+            <h3>Positions</h3>
+            <span class="chevron">&#9660;</span>
+          </div>
+          <div class="section-body">
+            <div class="option-row">
+              <div>
+                <div class="label">Edit Positions</div>
+                <div class="sublabel">Drag entities on the card preview to reposition</div>
+              </div>
+              <ha-switch id="cfgEditPositions"></ha-switch>
+            </div>
+            ${editPositions ? `
+              <div class="edit-positions-banner">Position editing is active. Drag lights on the card preview above to reposition them. Changes are saved automatically.</div>
+              <div class="undo-redo-row">
+                <button class="action-btn" id="undoPositionsBtn" disabled title="Undo (Ctrl+Z)">&#8592; Undo</button>
+                <button class="action-btn" id="redoPositionsBtn" disabled title="Redo (Ctrl+Shift+Z)">Redo &#8594;</button>
+              </div>
+            ` : ''}
+            <button class="action-btn" id="rearrangeBtn">Rearrange All in Grid</button>
+            <button class="action-btn" id="snapToGridBtn">Snap All to Grid</button>
+          </div>
+        </div>
+
+        <!-- General Section -->
+        <div class="section" id="section-general">
+          <div class="section-header" data-section="general">
+            <h3>General</h3>
+            <span class="chevron">&#9660;</span>
+          </div>
+          <div class="section-body">
+            <div class="input-row">
+              <label for="cfgTitle">Title</label>
+              <input type="text" id="cfgTitle" placeholder="Optional card title">
+            </div>
+            <div class="two-col">
+              <div class="input-row">
+                <label for="cfgCanvasHeight">Canvas Height (px)</label>
+                <input type="number" id="cfgCanvasHeight" min="100" max="2000" step="10">
+              </div>
+              <div class="input-row">
+                <label for="cfgGridSize">Grid Size (px)</label>
+                <input type="number" id="cfgGridSize" min="5" max="100" step="5">
+              </div>
+            </div>
+            <div class="input-row">
+              <label for="cfgBgImage">Background Image URL</label>
+              <input type="url" id="cfgBgImage" placeholder="/local/floorplan.png or https://...">
+            </div>
+            <div class="two-col">
+              <div class="input-row">
+                <label for="cfgLabelMode">Label Mode</label>
+                <select id="cfgLabelMode">
+                  <option value="smart">Smart</option>
+                  <option value="full">Full Name</option>
+                  <option value="initials">Initials</option>
+                  <option value="none">None</option>
+                </select>
+              </div>
+              <div class="input-row">
+                <label>Default Entity</label>
+                <ha-entity-picker id="cfgDefaultEntity" allow-custom-entity></ha-entity-picker>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Display Section -->
+        <div class="section" id="section-display">
+          <div class="section-header" data-section="display">
+            <h3>Display</h3>
+            <span class="chevron">&#9660;</span>
+          </div>
+          <div class="section-body">
+            <div class="option-row">
+              <div><div class="label">Minimal UI</div><div class="sublabel">Hide circles, show only icons</div></div>
+              <ha-switch id="cfgMinimalUI"></ha-switch>
+            </div>
+            <div class="option-row">
+              <div><div class="label">Show Entity Icons</div><div class="sublabel">Display MDI icons on light circles</div></div>
+              <ha-switch id="cfgShowIcons"></ha-switch>
+            </div>
+            <div class="option-row">
+              <div><div class="label">Icon-Only Mode</div><div class="sublabel">Show icons without filled circles</div></div>
+              <ha-switch id="cfgIconOnly"></ha-switch>
+            </div>
+            <div class="option-row">
+              <div><div class="label">Show Live Colors</div><div class="sublabel">Display current light colors as presets</div></div>
+              <ha-switch id="cfgLiveColors"></ha-switch>
+            </div>
+            <div class="option-row">
+              <div><div class="label">Always Show Controls</div><div class="sublabel">Keep brightness/color controls visible</div></div>
+              <ha-switch id="cfgAlwaysControls"></ha-switch>
+            </div>
+            <div class="option-row">
+              <div class="label">Light Size</div>
+              <div class="slider-row" style="flex:0 0 auto;">
+                <input type="range" id="cfgLightSize" min="24" max="96" style="width:120px;">
+                <span class="slider-value" id="cfgLightSizeValue">56px</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Colors Section -->
+        <div class="section collapsed" id="section-colors">
+          <div class="section-header" data-section="colors">
+            <h3>Colors</h3>
+            <span class="chevron">&#9660;</span>
+          </div>
+          <div class="section-body">
+            <div class="input-row">
+              <label>Switch On Color</label>
+              <div class="color-input-row">
+                <input type="color" id="cfgSwitchOnColorPicker" value="${this._esc(config.switch_on_color || '#ffa500')}">
+                <input type="text" id="cfgSwitchOnColor" placeholder="#ffa500">
+              </div>
+            </div>
+            <div class="input-row">
+              <label>Switch Off Color</label>
+              <div class="color-input-row">
+                <input type="color" id="cfgSwitchOffColorPicker" value="${this._esc(config.switch_off_color || '#3a3a3a')}">
+                <input type="text" id="cfgSwitchOffColor" placeholder="#3a3a3a">
+              </div>
+            </div>
+            <div class="input-row">
+              <label>Scene Color</label>
+              <div class="color-input-row">
+                <input type="color" id="cfgSceneColorPicker" value="${this._esc(config.scene_color || '#6366f1')}">
+                <input type="text" id="cfgSceneColor" placeholder="#6366f1">
+              </div>
+            </div>
+            <div class="input-row">
+              <label>Color Presets</label>
+              <div class="color-presets-list" id="colorPresetsList">
+                ${presets.map((c, i) => `
+                  <div class="color-preset-chip" data-index="${i}" style="background:${this._esc(c)};" title="${this._esc(c)}">
+                    <span class="remove-preset" data-index="${i}">&times;</span>
+                  </div>
+                `).join('')}
+                <button class="add-preset-btn" id="addPresetBtn" title="Add color preset">+</button>
+              </div>
+              <input type="color" id="presetColorPicker" style="display:none;">
+            </div>
+          </div>
+        </div>
+
+        <!-- Temperature Section -->
+        <div class="section collapsed" id="section-temperature">
+          <div class="section-header" data-section="temperature">
+            <h3>Temperature Range</h3>
+            <span class="chevron">&#9660;</span>
+          </div>
+          <div class="section-body">
+            <div class="two-col">
+              <div class="input-row">
+                <label for="cfgTempMin">Min Temperature (K)</label>
+                <input type="number" id="cfgTempMin" min="1000" max="10000" step="100" placeholder="Auto">
+              </div>
+              <div class="input-row">
+                <label for="cfgTempMax">Max Temperature (K)</label>
+                <input type="number" id="cfgTempMax" min="1000" max="10000" step="100" placeholder="Auto">
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Layout Section -->
+        <div class="section collapsed" id="section-layout">
+          <div class="section-header" data-section="layout">
+            <h3>Layout</h3>
+            <span class="chevron">&#9660;</span>
+          </div>
+          <div class="section-body">
+            <div class="option-row">
+              <div><div class="label">Controls Below Canvas</div><div class="sublabel">Place controls below instead of floating overlay</div></div>
+              <ha-switch id="cfgControlsBelow"></ha-switch>
+            </div>
+          </div>
+        </div>
+
+        <!-- Interaction Section -->
+        <div class="section collapsed" id="section-interaction">
+          <div class="section-header" data-section="interaction">
+            <h3>Interaction</h3>
+            <span class="chevron">&#9660;</span>
+          </div>
+          <div class="section-body">
+            <div class="option-row">
+              <div><div class="label">Single-Tap for Switches &amp; Scenes</div><div class="sublabel">Toggle switches and activate scenes with one tap</div></div>
+              <ha-switch id="cfgSwitchTap"></ha-switch>
+            </div>
+          </div>
+        </div>
+
+      </div>
+    `;
+
+    this._setDOMValues();
+    this._attachEditorListeners();
+    // Setup entity pickers after DOM is ready
+    requestAnimationFrame(() => {
+      this._setupEntityPickers();
+      // Double-ensure in case custom element wasn't upgraded yet
+      setTimeout(() => this._setupEntityPickers(), 100);
+    });
+  }
+
+  _setDOMValues() {
+    const root = this.shadowRoot;
+    const c = this._config;
+
+    const setVal = (id, val) => { const el = root.getElementById(id); if (el) el.value = val; };
+    setVal('cfgTitle', c.title || '');
+    setVal('cfgCanvasHeight', c.canvas_height || 450);
+    setVal('cfgGridSize', c.grid_size || 25);
+    setVal('cfgLabelMode', c.label_mode || 'smart');
+    setVal('cfgLightSize', c.light_size || 56);
+
+    const lsv = root.getElementById('cfgLightSizeValue');
+    if (lsv) lsv.textContent = `${c.light_size || 56}px`;
+
+    // Background image
+    let bgUrl = '';
+    if (c.background_image) {
+      bgUrl = typeof c.background_image === 'string' ? c.background_image : (c.background_image.url || '');
+    }
+    setVal('cfgBgImage', bgUrl);
+
+    // Colors
+    setVal('cfgSwitchOnColor', c.switch_on_color || '#ffa500');
+    setVal('cfgSwitchOnColorPicker', c.switch_on_color || '#ffa500');
+    setVal('cfgSwitchOffColor', c.switch_off_color || '#3a3a3a');
+    setVal('cfgSwitchOffColorPicker', c.switch_off_color || '#3a3a3a');
+    setVal('cfgSceneColor', c.scene_color || '#6366f1');
+    setVal('cfgSceneColorPicker', c.scene_color || '#6366f1');
+
+    // Temperature
+    setVal('cfgTempMin', c.temperature_min != null ? c.temperature_min : '');
+    setVal('cfgTempMax', c.temperature_max != null ? c.temperature_max : '');
+
+    // Switches
+    const switches = {
+      cfgEditPositions: !!c._edit_positions,
+      cfgMinimalUI: c.minimal_ui || false,
+      cfgShowIcons: c.show_entity_icons !== false,
+      cfgIconOnly: c.icon_only_mode || false,
+      cfgLiveColors: c.show_live_colors || false,
+      cfgAlwaysControls: c.always_show_controls || false,
+      cfgControlsBelow: c.controls_below !== false,
+      cfgSwitchTap: c.switch_single_tap || false,
+    };
+    const setChecked = () => {
+      Object.entries(switches).forEach(([id, val]) => {
+        const el = root.getElementById(id);
+        if (el) el.checked = val;
+      });
+    };
+    setChecked();
+    requestAnimationFrame(() => setChecked());
+
+    // Per-entity icon-only switches
+    requestAnimationFrame(() => {
+      root.querySelectorAll('.entity-overrides ha-switch[data-key="iconOnly"]').forEach(sw => {
+        const entity = sw.dataset.entity;
+        const override = c.icon_only_overrides && c.icon_only_overrides[entity];
+        sw.checked = override !== undefined ? override : false;
+      });
+    });
+  }
+
+  _attachEditorListeners() {
+    const root = this.shadowRoot;
+
+    // Section collapse
+    root.querySelectorAll('.section-header').forEach(h => {
+      h.addEventListener('click', () => h.closest('.section').classList.toggle('collapsed'));
+    });
+
+    // --- Edit Positions toggle ---
+    const editPosSwitch = root.getElementById('cfgEditPositions');
+    if (editPosSwitch) {
+      editPosSwitch.addEventListener('change', () => {
+        if (editPosSwitch.checked) {
+          this._config._edit_positions = true;
+          this._config._editor_id = this._editorId;
+        } else {
+          delete this._config._edit_positions;
+          delete this._config._editor_id;
+        }
+        this._fireConfigChanged();
+        this._render();
+      });
+    }
+
+    // --- Undo/Redo buttons ---
+    const undoBtn = root.getElementById('undoPositionsBtn');
+    const redoBtn = root.getElementById('redoPositionsBtn');
+    if (undoBtn) {
+      undoBtn.addEventListener('click', () => this._undoPositions());
+    }
+    if (redoBtn) {
+      redoBtn.addEventListener('click', () => this._redoPositions());
+    }
+
+    // --- Rearrange button ---
+    const rearrangeBtn = root.getElementById('rearrangeBtn');
+    if (rearrangeBtn) {
+      rearrangeBtn.addEventListener('click', () => {
+        const entities = this._config.entities || [];
+        if (entities.length === 0) return;
+        this._pushPositionHistory();
+        const cols = Math.ceil(Math.sqrt(entities.length * 1.5));
+        const rows = Math.ceil(entities.length / cols);
+        const spacing = 100 / (cols + 1);
+        const newPositions = {};
+        entities.forEach((entity, idx) => {
+          const col = idx % cols;
+          const row = Math.floor(idx / cols);
+          newPositions[entity] = {
+            x: spacing * (col + 1),
+            y: (100 / (rows + 1)) * (row + 1),
+          };
+        });
+        this._config.positions = newPositions;
+        this._fireConfigChanged();
+      });
+    }
+
+    // --- Snap to grid ---
+    const snapBtn = root.getElementById('snapToGridBtn');
+    if (snapBtn) {
+      snapBtn.addEventListener('click', () => {
+        const entities = this._config.entities || [];
+        if (entities.length === 0) return;
+        this._pushPositionHistory();
+        const positions = this._config.positions || {};
+        const gridSize = this._config.grid_size || 25;
+        const canvasHeight = this._config.canvas_height || 450;
+        // Assume a roughly square-ish canvas; use height for both axes as an approximation.
+        // Grid snapping works in pixel space, so we convert % -> px, snap, convert back.
+        // We don't have the actual canvas width, so estimate from a typical card (~450px wide).
+        const canvasWidth = canvasHeight; // reasonable default; grid is square anyway
+        const newPositions = {};
+        entities.forEach((entity) => {
+          const pos = positions[entity];
+          if (!pos) {
+            newPositions[entity] = { x: 50, y: 50 };
+            return;
+          }
+          const px = (pos.x / 100) * canvasWidth;
+          const py = (pos.y / 100) * canvasHeight;
+          const sx = Math.round(px / gridSize) * gridSize;
+          const sy = Math.round(py / gridSize) * gridSize;
+          newPositions[entity] = {
+            x: Math.max(0, Math.min(100, (sx / canvasWidth) * 100)),
+            y: Math.max(0, Math.min(100, (sy / canvasHeight) * 100)),
+          };
+        });
+        this._config.positions = newPositions;
+        this._fireConfigChanged();
+      });
+    }
+
+    // --- Entity expand/collapse ---
+    root.querySelectorAll('.entity-btn.expand').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const entity = btn.closest('.entity-item').dataset.entity;
+        this._expandedEntity = (this._expandedEntity === entity) ? null : entity;
+        root.querySelectorAll('.entity-item').forEach(item => {
+          item.classList.toggle('expanded', item.dataset.entity === this._expandedEntity);
+        });
+      });
+    });
+
+    // --- Entity remove ---
+    root.querySelectorAll('.entity-btn.remove').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const idx = parseInt(btn.dataset.index, 10);
+        const entity = this._config.entities[idx];
+        this._config.entities.splice(idx, 1);
+        if (this._config.positions) delete this._config.positions[entity];
+        if (this._config.size_overrides) delete this._config.size_overrides[entity];
+        if (this._config.icon_only_overrides) delete this._config.icon_only_overrides[entity];
+        if (this._config.label_overrides) delete this._config.label_overrides[entity];
+        if (this._config.color_overrides) delete this._config.color_overrides[entity];
+        if (this._expandedEntity === entity) this._expandedEntity = null;
+        this._fireConfigChanged();
+        this._render();
+      });
+    });
+
+    // --- Add entity picker ---
+    const addPicker = root.getElementById('addEntityPicker');
+    if (addPicker) {
+      // Listen on both the picker and via event delegation for value-changed
+      const handleAdd = (val) => {
+        if (val && !(this._config.entities || []).includes(val)) {
+          if (!this._config.entities) this._config.entities = [];
+          this._config.entities.push(val);
+          this._fireConfigChanged();
+          this._render();
+        }
+      };
+      addPicker.addEventListener('value-changed', (ev) => {
+        handleAdd(ev.detail && ev.detail.value);
+      });
+      addPicker.addEventListener('change', () => {
+        handleAdd(addPicker.value);
+      });
+    }
+
+    // --- Per-entity overrides ---
+    root.querySelectorAll('.entity-overrides input[data-key="label"]').forEach(inp => {
+      this._bindEntityOverride(inp, (entity, val) => {
+        if (!this._config.label_overrides) this._config.label_overrides = {};
+        if (val) { this._config.label_overrides[entity] = val; }
+        else { delete this._config.label_overrides[entity]; }
+      });
+    });
+
+    root.querySelectorAll('.entity-overrides input[data-key="size"]').forEach(inp => {
+      this._bindEntityOverride(inp, (entity, val) => {
+        if (!this._config.size_overrides) this._config.size_overrides = {};
+        const num = parseInt(val, 10);
+        if (Number.isFinite(num) && num > 0) { this._config.size_overrides[entity] = num; }
+        else { delete this._config.size_overrides[entity]; }
+      });
+    });
+
+    root.querySelectorAll('.entity-overrides input[data-key="color_on"]').forEach(inp => {
+      this._bindEntityOverride(inp, (entity, val) => {
+        if (!this._config.color_overrides) this._config.color_overrides = {};
+        const existing = this._config.color_overrides[entity];
+        const cur = (existing && typeof existing === 'object') ? existing : {};
+        if (val) { cur.state_on = val; } else { delete cur.state_on; }
+        if (cur.state_on || cur.state_off) { this._config.color_overrides[entity] = cur; }
+        else { delete this._config.color_overrides[entity]; }
+        const preview = root.querySelector(`.color-preview[data-entity="${entity}"][data-state="on"]`);
+        if (preview) preview.style.background = val || 'transparent';
+      });
+    });
+
+    root.querySelectorAll('.entity-overrides input[data-key="color_off"]').forEach(inp => {
+      this._bindEntityOverride(inp, (entity, val) => {
+        if (!this._config.color_overrides) this._config.color_overrides = {};
+        const existing = this._config.color_overrides[entity];
+        const cur = (existing && typeof existing === 'object') ? existing : {};
+        if (val) { cur.state_off = val; } else { delete cur.state_off; }
+        if (cur.state_on || cur.state_off) { this._config.color_overrides[entity] = cur; }
+        else { delete this._config.color_overrides[entity]; }
+        const preview = root.querySelector(`.color-preview[data-entity="${entity}"][data-state="off"]`);
+        if (preview) preview.style.background = val || 'transparent';
+      });
+    });
+
+    // Per-entity icon-only switch
+    requestAnimationFrame(() => {
+      root.querySelectorAll('.entity-overrides ha-switch[data-key="iconOnly"]').forEach(sw => {
+        sw.addEventListener('change', () => {
+          const entity = sw.dataset.entity;
+          if (!this._config.icon_only_overrides) this._config.icon_only_overrides = {};
+          if (sw.checked) { this._config.icon_only_overrides[entity] = true; }
+          else { delete this._config.icon_only_overrides[entity]; }
+          this._fireConfigChanged();
+        });
+      });
+    });
+
+    // --- General inputs ---
+    this._bindTextInput('cfgTitle', (val) => { this._config.title = val; });
+    this._bindNumberInput('cfgCanvasHeight', (val) => { if (val >= 100 && val <= 2000) this._config.canvas_height = val; });
+    this._bindNumberInput('cfgGridSize', (val) => { if (val >= 5 && val <= 100) this._config.grid_size = val; });
+    // Default entity picker
+    const defEntityPicker = root.getElementById('cfgDefaultEntity');
+    if (defEntityPicker) {
+      defEntityPicker.addEventListener('value-changed', (ev) => {
+        this._config.default_entity = ev.detail.value || null;
+        this._fireConfigChanged();
+      });
+      defEntityPicker.addEventListener('change', () => {
+        this._config.default_entity = defEntityPicker.value || null;
+        this._fireConfigChanged();
+      });
+    }
+
+    const labelModeEl = root.getElementById('cfgLabelMode');
+    if (labelModeEl) {
+      labelModeEl.addEventListener('change', () => {
+        this._config.label_mode = labelModeEl.value;
+        this._fireConfigChanged();
+      });
+    }
+
+    this._bindTextInput('cfgBgImage', (val) => {
+      if (val) {
+        if (this._config.background_image && typeof this._config.background_image === 'object') {
+          this._config.background_image.url = val;
+        } else {
+          this._config.background_image = val;
+        }
+      } else { this._config.background_image = null; }
+    });
+
+    // --- Display/Layout/Interaction toggles ---
+    this._bindSwitch('cfgMinimalUI', 'minimal_ui');
+    this._bindSwitch('cfgShowIcons', 'show_entity_icons');
+    this._bindSwitch('cfgIconOnly', 'icon_only_mode');
+    this._bindSwitch('cfgLiveColors', 'show_live_colors');
+    this._bindSwitch('cfgAlwaysControls', 'always_show_controls');
+    this._bindSwitch('cfgControlsBelow', 'controls_below');
+    this._bindSwitch('cfgSwitchTap', 'switch_single_tap');
+
+    // Light size slider
+    const lsSlider = root.getElementById('cfgLightSize');
+    const lsVal = root.getElementById('cfgLightSizeValue');
+    if (lsSlider) {
+      lsSlider.addEventListener('input', () => { if (lsVal) lsVal.textContent = `${lsSlider.value}px`; });
+      lsSlider.addEventListener('change', () => {
+        const v = parseInt(lsSlider.value, 10);
+        if (Number.isFinite(v) && v > 0) { this._config.light_size = v; this._fireConfigChanged(); }
+      });
+    }
+
+    // --- Color inputs (synced picker + text) ---
+    this._bindColorPair('cfgSwitchOnColor', 'cfgSwitchOnColorPicker', 'switch_on_color', '#ffa500');
+    this._bindColorPair('cfgSwitchOffColor', 'cfgSwitchOffColorPicker', 'switch_off_color', '#3a3a3a');
+    this._bindColorPair('cfgSceneColor', 'cfgSceneColorPicker', 'scene_color', '#6366f1');
+
+    // --- Color presets ---
+    root.querySelectorAll('.color-preset-chip .remove-preset').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const idx = parseInt(btn.dataset.index, 10);
+        if (!Array.isArray(this._config.color_presets)) return;
+        this._config.color_presets.splice(idx, 1);
+        this._fireConfigChanged();
+        this._render();
+      });
+    });
+
+    const addPresetBtn = root.getElementById('addPresetBtn');
+    const presetPicker = root.getElementById('presetColorPicker');
+    if (addPresetBtn && presetPicker) {
+      addPresetBtn.addEventListener('click', () => presetPicker.click());
+      presetPicker.addEventListener('input', (e) => {
+        const color = e.target.value;
+        if (!Array.isArray(this._config.color_presets)) this._config.color_presets = [];
+        this._config.color_presets.push(color);
+        this._fireConfigChanged();
+        this._render();
+      });
+    }
+
+    // --- Temperature inputs ---
+    this._bindNumberInput('cfgTempMin', (val) => {
+      this._config.temperature_min = (val >= 1000 && val <= 10000) ? val : null;
+    });
+    this._bindNumberInput('cfgTempMax', (val) => {
+      this._config.temperature_max = (val >= 1000 && val <= 10000) ? val : null;
+    });
+  }
+
+  _bindColorPair(textId, pickerId, configKey, fallback) {
+    const root = this.shadowRoot;
+    const textEl = root.getElementById(textId);
+    const pickerEl = root.getElementById(pickerId);
+    if (!textEl || !pickerEl) return;
+
+    let timer = null;
+    textEl.addEventListener('input', () => {
+      clearTimeout(timer);
+      timer = setTimeout(() => {
+        const val = textEl.value.trim();
+        if (val) {
+          this._config[configKey] = val;
+          // Try to sync picker (only valid 6-digit hex)
+          if (/^#[0-9a-fA-F]{6}$/.test(val)) pickerEl.value = val;
+        } else {
+          this._config[configKey] = fallback;
+          pickerEl.value = fallback;
+        }
+        this._fireConfigChanged();
+      }, 400);
+    });
+    textEl.addEventListener('change', () => {
+      clearTimeout(timer);
+      const val = textEl.value.trim() || fallback;
+      this._config[configKey] = val;
+      if (/^#[0-9a-fA-F]{6}$/.test(val)) pickerEl.value = val;
+      this._fireConfigChanged();
+    });
+
+    pickerEl.addEventListener('input', () => {
+      textEl.value = pickerEl.value;
+      this._config[configKey] = pickerEl.value;
+      this._fireConfigChanged();
+    });
+  }
+
+  _bindEntityOverride(inputEl, setter) {
+    let timer = null;
+    const apply = () => {
+      clearTimeout(timer);
+      setter(inputEl.dataset.entity, inputEl.value);
+      this._fireConfigChanged();
+    };
+    inputEl.addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(apply, 400); });
+    inputEl.addEventListener('change', apply);
+  }
+
+  _bindTextInput(id, setter) {
+    const el = this.shadowRoot.getElementById(id);
+    if (!el) return;
+    let t = null;
+    el.addEventListener('input', () => { clearTimeout(t); t = setTimeout(() => { setter(el.value); this._fireConfigChanged(); }, 300); });
+    el.addEventListener('change', () => { clearTimeout(t); setter(el.value); this._fireConfigChanged(); });
+  }
+
+  _bindNumberInput(id, setter) {
+    const el = this.shadowRoot.getElementById(id);
+    if (!el) return;
+    el.addEventListener('change', () => {
+      const raw = el.value.trim();
+      if (raw === '') { setter(null); this._fireConfigChanged(); return; }
+      const v = parseInt(raw, 10);
+      if (Number.isFinite(v)) { setter(v); this._fireConfigChanged(); }
+    });
+  }
+
+  _bindSwitch(id, key) {
+    const el = this.shadowRoot.getElementById(id);
+    if (!el) return;
+    el.addEventListener('change', () => { this._config[key] = el.checked; this._fireConfigChanged(); });
+  }
+}
+
+customElements.define('spatial-light-color-card-editor', SpatialLightColorCardEditor);
 customElements.define('spatial-light-color-card', SpatialLightColorCard);
 
 window.customCards = window.customCards || [];

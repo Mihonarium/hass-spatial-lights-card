@@ -140,17 +140,47 @@ resources:
 ## 🖌 Custom Colors & Backgrounds
 
 ### Global Colors
-Customize the default appearance of non-light entities:
-```yaml
+Customize the default appearance of non-light entities by setting the Switch On Color, Switch Off Color, and Scene Color.
+<!--```yaml
 switch_on_color: "#00ff00"
 switch_off_color: "#ff0000"
 scene_color: "#55aaff"
-```
+```-->
+
+
+### Color Presets
+
+Add quick-select color circles next to the color wheel so you can apply frequently used colors with a single tap.
+<!--```yaml
+color_presets:
+  - "#ff0000"
+  - "#00ff00"
+  - "#0000ff"
+  - "#ff8800"
+  - "#e040fb"
+```-->
+<img height="171" alt="image" src="https://github.com/user-attachments/assets/e045c141-7206-4d0d-a8ad-af676cd2b2aa" />
+
+<br/><br/>
+
+Enable **Show Live Colors** to also display the current colors of your lights as preset circles. When hovering a preset (or long-pressing on mobile), the lights that currently have that color are highlighted on the canvas. If all controlled lights share the same color, the matching preset shows a subtle ring indicator.
+
+<!--```yaml
+color_presets:
+  - "#ff0000"
+  - "#00ff00"
+show_live_colors: true
+```-->
 
 ### Individual Overrides
-Target specific entities with `color_overrides`. You can provide a single color (applied when "on") or specific colors for both states.
 
-```yaml
+Have a switch or some other entity that you want to have a specific color when it's on/off?
+
+<img width="41" height="40" alt="image" src="https://github.com/user-attachments/assets/19080d4d-49a9-4f0a-9ead-47c25f61027b" />
+
+Use Color Overrides. You can provide a single color (applied when "on") or specific colors for both states. (Above is the override with #02fae9 for state_on.)
+
+<!--```yaml
 color_overrides:
   # Simple string = On color
   scene.movie_night: "#a855f7"
@@ -160,7 +190,7 @@ color_overrides:
   switch.hallway:
     state_on: "#ffffff"
     state_off: "#444444"
-```
+```-->
 
 ### Background Image
 Add a floorplan or texture behind your lights.
@@ -173,8 +203,9 @@ background_image:
 ```
 
 ### Light Size
-Customize the size of light circles globally or per-entity:
-```yaml
+Customize the size of light circles globally or per-entity.
+
+<!--```yaml
 # Global size (default is 56px)
 light_size: 40
 
@@ -182,11 +213,15 @@ light_size: 40
 size_overrides:
   light.ceiling: 70    # Make ceiling light larger
   light.accent: 30     # Make accent light smaller
-```
+```-->
 
 ### Icon-Only Mode
-Display lights as icons without the filled circle background. Icons show the light's color when on and remain visible (dimmed) when off:
-```yaml
+
+Display lights as icons without the filled circle background. Icons show the light's color when on and remain visible (dimmed) when off.
+
+Also experiment with Minimal UI.
+
+<!--```yaml
 # Enable for all lights
 icon_only_mode: true
 
@@ -195,7 +230,7 @@ icon_only_overrides:
   light.ceiling: true      # Icon-only for ceiling
   switch.fan: true         # Icon-only for fan switch
   light.floor_lamp: false  # Keep filled circle for floor lamp
-```
+```-->
 
 When icon-only mode is enabled:
 - Icons are colored based on the light's state
@@ -203,42 +238,22 @@ When icon-only mode is enabled:
 - Off lights remain visible with a dimmed appearance
 - Great for cleaner layouts or when using background images
 
-### Color Presets
-Add quick-select color circles next to the color wheel so you can apply frequently used colors with a single tap:
-```yaml
-color_presets:
-  - "#ff0000"
-  - "#00ff00"
-  - "#0000ff"
-  - "#ff8800"
-  - "#e040fb"
-```
-
-Enable `show_live_colors: true` to also display the current colors of your lights as preset circles. When hovering a preset (or long-pressing on mobile), the lights that currently have that color are highlighted on the canvas. If all controlled lights share the same color, the matching preset shows a subtle ring indicator.
-
-```yaml
-color_presets:
-  - "#ff0000"
-  - "#00ff00"
-show_live_colors: true
-```
-
 ---
 
 ## 🎨 Visual Options
 
 ### Floating Controls (Default)
-```yaml
+<!--```yaml
 controls_below: false
-```
+```-->
 - Controls appear over the canvas when lights are selected.
 - Minimal overlay that hides automatically when nothing is selected.
 
 ### Controls Below the Canvas
-```yaml
+<!--```yaml
 controls_below: true
 always_show_controls: true
-```
+```-->
 - Controls remain visible below the layout for quick access.
 - Ideal when you never want controls to cover the floor plan.
 

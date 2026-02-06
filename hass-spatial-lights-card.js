@@ -3291,7 +3291,6 @@ class SpatialLightColorCardEditor extends HTMLElement {
                 </select>
               </div>
               <div class="input-row">
-                <label>Default Entity</label>
                 <ha-entity-picker id="cfgDefaultEntity" label="Default entity" allow-custom-entity></ha-entity-picker>
               </div>
             </div>

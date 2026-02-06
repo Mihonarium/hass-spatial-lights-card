@@ -43,6 +43,13 @@ class SpatialLightColorCard extends HTMLElement {
     this._colorWheelCancel = null;
     this._colorWheelGesture = null;    // { pointerId, isTouch, startScroll: {x,y}, scrolled, pendingColor }
 
+    /** Large color wheel (long-press) */
+    this._largeColorWheelOpen = false;
+    this._colorWheelLongPressTimer = null;
+    this._colorWheelLongPressStart = null;
+    this._colorWheelLongPressed = false;
+    this._largeWheelGesture = null;
+
     /** Cached DOM refs (stable after first render) */
     this._els = {
       canvas: null,
@@ -55,6 +62,11 @@ class SpatialLightColorCard extends HTMLElement {
       colorWheel: null,
       yamlModal: null,
       yamlOutput: null,
+      colorWheelOverlay: null,
+      colorWheelLarge: null,
+      colorWheelMagnifier: null,
+      colorWheelMagnifierCanvas: null,
+      colorWheelPreviewSwatch: null,
     };
 
     /** Global bindings */
@@ -674,6 +686,7 @@ class SpatialLightColorCard extends HTMLElement {
           ${controlsPosition === 'below' ? this._renderControlsBelow(controlContext) : ''}
         </div>
         ${this._renderYamlModal()}
+        ${this._renderLargeColorWheel()}
       </ha-card>
     `;
 
@@ -688,6 +701,11 @@ class SpatialLightColorCard extends HTMLElement {
     this._els.colorWheel = this.shadowRoot.getElementById('colorWheelMini');
     this._els.yamlModal = this.shadowRoot.getElementById('yamlModal');
     this._els.yamlOutput = this.shadowRoot.getElementById('yamlOutput');
+    this._els.colorWheelOverlay = this.shadowRoot.getElementById('colorWheelOverlay');
+    this._els.colorWheelLarge = this.shadowRoot.getElementById('colorWheelLarge');
+    this._els.colorWheelMagnifier = this.shadowRoot.getElementById('colorWheelMagnifier');
+    this._els.colorWheelMagnifierCanvas = this.shadowRoot.getElementById('colorWheelMagnifierCanvas');
+    this._els.colorWheelPreviewSwatch = this.shadowRoot.getElementById('colorWheelPreviewSwatch');
 
     if (this._colorWheelObserver) {
       this._colorWheelObserver.disconnect();
@@ -1090,6 +1108,60 @@ class SpatialLightColorCard extends HTMLElement {
 
       .modal-close:focus-visible { outline: 2px solid var(--accent-primary); outline-offset: 2px; }
 
+      /* Large color wheel overlay */
+      .color-wheel-overlay {
+        position: fixed; inset: 0; background: rgba(0,0,0,0.88); backdrop-filter: blur(12px);
+        display: none; flex-direction: column; align-items: center; justify-content: center;
+        z-index: 1000; padding: 24px; gap: 20px;
+      }
+      .color-wheel-overlay.visible { display: flex; }
+      .color-wheel-large-wrap {
+        position: relative; display: flex; align-items: center; justify-content: center;
+      }
+      .color-wheel-large {
+        width: min(75vmin, 380px); height: min(75vmin, 380px);
+        border-radius: 9999px; cursor: crosshair;
+        border: 3px solid rgba(255,255,255,0.15);
+        box-shadow: 0 0 60px rgba(0,0,0,0.4), 0 0 0 1px rgba(255,255,255,0.05);
+        touch-action: none;
+      }
+      .color-wheel-footer {
+        display: flex; align-items: center; gap: 16px;
+      }
+      .color-wheel-preview-swatch {
+        width: 44px; height: 44px; border-radius: 9999px;
+        border: 2.5px solid rgba(255,255,255,0.25);
+        box-shadow: var(--shadow-md); transition: background-color 60ms ease, border-color 200ms ease;
+        background: var(--surface-tertiary);
+      }
+      .color-wheel-done-btn {
+        padding: 10px 32px; border: 1px solid rgba(255,255,255,0.12);
+        background: var(--surface-elevated); color: var(--text-primary);
+        font-size: 14px; font-weight: 600; font-family: var(--font-sans);
+        border-radius: var(--radius-lg); cursor: pointer;
+        transition: background var(--transition-fast), transform var(--transition-fast);
+      }
+      .color-wheel-done-btn:hover { background: var(--surface-tertiary); }
+      .color-wheel-done-btn:active { transform: scale(0.96); }
+      .color-wheel-hint {
+        font-size: 12px; color: var(--text-tertiary); text-align: center;
+        pointer-events: none; margin-top: -8px;
+      }
+      /* Magnifier loupe */
+      .color-wheel-magnifier {
+        position: fixed; width: 110px; height: 110px; border-radius: 9999px;
+        border: 3px solid #fff; box-shadow: 0 4px 24px rgba(0,0,0,0.7), 0 0 0 1px rgba(255,255,255,0.1);
+        pointer-events: none; display: none; overflow: hidden; z-index: 1010;
+        transition: border-color 60ms ease;
+      }
+      .color-wheel-magnifier.visible { display: block; }
+      .color-wheel-magnifier canvas {
+        width: 100%; height: 100%; border-radius: 9999px; display: block;
+      }
+      .color-wheel-magnifier-crosshair {
+        position: absolute; inset: 0; pointer-events: none;
+      }
+
       :host(.overlay-active) .light,
       :host(.overlay-active) .light.selected,
       :host(.overlay-active) .light.dragging,
@@ -1295,6 +1367,24 @@ class SpatialLightColorCard extends HTMLElement {
           </div>
           <div class="yaml-output" id="yamlOutput" role="textbox" aria-multiline="true" aria-readonly="true">${this._generateYAML()}</div>
           <div class="modal-hint">Select all (Cmd/Ctrl+A) and copy (Cmd/Ctrl+C)</div>
+        </div>
+      </div>
+    `;
+  }
+
+  _renderLargeColorWheel() {
+    return `
+      <div class="color-wheel-overlay" id="colorWheelOverlay">
+        <div class="color-wheel-large-wrap">
+          <canvas class="color-wheel-large" id="colorWheelLarge" width="512" height="512"></canvas>
+        </div>
+        <div class="color-wheel-footer">
+          <div class="color-wheel-preview-swatch" id="colorWheelPreviewSwatch"></div>
+          <button class="color-wheel-done-btn" id="colorWheelDoneBtn">Done</button>
+        </div>
+        <div class="color-wheel-hint">Drag to pick a color</div>
+        <div class="color-wheel-magnifier" id="colorWheelMagnifier">
+          <canvas id="colorWheelMagnifierCanvas" width="220" height="220"></canvas>
         </div>
       </div>
     `;
@@ -1515,6 +1605,13 @@ class SpatialLightColorCard extends HTMLElement {
     this._pendingTap = null;
     this._longPressTriggered = false;
     this._moreInfoOpen = false;
+    this._largeColorWheelOpen = false;
+    if (this._colorWheelLongPressTimer) {
+      clearTimeout(this._colorWheelLongPressTimer);
+      this._colorWheelLongPressTimer = null;
+    }
+    this._colorWheelLongPressed = false;
+    this._largeWheelGesture = null;
     this.classList.remove('overlay-active');
   }
 
@@ -1553,6 +1650,7 @@ class SpatialLightColorCard extends HTMLElement {
       this._els.colorWheel.addEventListener('pointerdown', (e) => {
         const isTouchLike = e.pointerType === 'touch' || e.pointerType === 'pen' || !e.pointerType;
         this._colorWheelActive = true;
+        this._colorWheelLongPressed = false;
         this._colorWheelGesture = {
           pointerId: e.pointerId,
           isTouch: isTouchLike,
@@ -1562,6 +1660,19 @@ class SpatialLightColorCard extends HTMLElement {
         };
         e.preventDefault();
         e.target.setPointerCapture?.(e.pointerId);
+
+        // Long-press detection for large color wheel
+        if (this._colorWheelLongPressTimer) clearTimeout(this._colorWheelLongPressTimer);
+        this._colorWheelLongPressStart = { x: e.clientX, y: e.clientY };
+        const longPressDelay = isTouchLike ? 400 : 600;
+        this._colorWheelLongPressTimer = setTimeout(() => {
+          this._colorWheelLongPressTimer = null;
+          this._colorWheelLongPressed = true;
+          this._colorWheelActive = false;
+          e.target.releasePointerCapture?.(e.pointerId);
+          if (navigator.vibrate) navigator.vibrate(30);
+          this._openLargeColorWheel();
+        }, longPressDelay);
 
         const color = this._getColorWheelColorAtEvent(e);
         if (!color) return;
@@ -1576,9 +1687,20 @@ class SpatialLightColorCard extends HTMLElement {
           const gesture = this._colorWheelGesture;
           if (!gesture || (gesture.pointerId !== undefined && gesture.pointerId !== e.pointerId)) return;
 
+          // Cancel long-press if finger/pointer moved too far
+          if (this._colorWheelLongPressTimer && this._colorWheelLongPressStart) {
+            const dx = e.clientX - this._colorWheelLongPressStart.x;
+            const dy = e.clientY - this._colorWheelLongPressStart.y;
+            if (Math.sqrt(dx * dx + dy * dy) > 8) {
+              clearTimeout(this._colorWheelLongPressTimer);
+              this._colorWheelLongPressTimer = null;
+            }
+          }
+
           const scrollPos = this._getScrollPosition();
           if (scrollPos.x !== gesture.startScroll.x || scrollPos.y !== gesture.startScroll.y) {
             gesture.scrolled = true;
+            if (this._colorWheelLongPressTimer) { clearTimeout(this._colorWheelLongPressTimer); this._colorWheelLongPressTimer = null; }
             return;
           }
 
@@ -1594,8 +1716,18 @@ class SpatialLightColorCard extends HTMLElement {
         }
       });
       this._els.colorWheel.addEventListener('pointerup', (e) => {
+        // Cancel any pending long-press timer
+        if (this._colorWheelLongPressTimer) { clearTimeout(this._colorWheelLongPressTimer); this._colorWheelLongPressTimer = null; }
+
         this._colorWheelActive = false;
         e.target.releasePointerCapture?.(e.pointerId);
+
+        // If long press triggered, don't apply color from mini wheel
+        if (this._colorWheelLongPressed) {
+          this._colorWheelLongPressed = false;
+          this._colorWheelGesture = null;
+          return;
+        }
 
         const gesture = this._colorWheelGesture;
         this._colorWheelGesture = null;
@@ -1607,7 +1739,9 @@ class SpatialLightColorCard extends HTMLElement {
         }
       });
       this._els.colorWheel.addEventListener('pointercancel', (e) => {
+        if (this._colorWheelLongPressTimer) { clearTimeout(this._colorWheelLongPressTimer); this._colorWheelLongPressTimer = null; }
         this._colorWheelActive = false;
+        this._colorWheelLongPressed = false;
         e.target.releasePointerCapture?.(e.pointerId);
         this._colorWheelGesture = null;
       });
@@ -1725,6 +1859,11 @@ class SpatialLightColorCard extends HTMLElement {
     if ((e.ctrlKey || e.metaKey) && (e.key === 'y' || (e.key === 'Z' && e.shiftKey))) { e.preventDefault(); this._redo(); }
     // Escape → deselect and close panels
     if (e.key === 'Escape') {
+      // Close large color wheel first if open
+      if (this._largeColorWheelOpen) {
+        this._closeLargeColorWheel();
+        return;
+      }
       this._selectedLights.clear();
       if (this._yamlModalOpen) this._yamlModalOpen = false;
       if (this._els.yamlModal) this._els.yamlModal.classList.remove('visible');
@@ -2087,7 +2226,7 @@ class SpatialLightColorCard extends HTMLElement {
   }
 
   _syncOverlayState() {
-    const overlayActive = this._yamlModalOpen || this._moreInfoOpen;
+    const overlayActive = this._yamlModalOpen || this._moreInfoOpen || this._largeColorWheelOpen;
     this.classList.toggle('overlay-active', overlayActive);
   }
 
@@ -2446,6 +2585,295 @@ class SpatialLightColorCard extends HTMLElement {
       });
     });
     this._pendingColor = null;
+  }
+
+  /** ---------- Large color wheel (long-press) ---------- */
+  _openLargeColorWheel() {
+    this._largeColorWheelOpen = true;
+    const overlay = this._els.colorWheelOverlay;
+    if (!overlay) return;
+
+    overlay.classList.add('visible');
+    this._syncOverlayState();
+
+    // Set initial swatch color from current light state
+    const swatch = this._els.colorWheelPreviewSwatch;
+    if (swatch) {
+      const controlled = this._getControlledEntities();
+      let initColor = null;
+      for (const id of controlled) {
+        const st = this._hass?.states?.[id];
+        if (st && st.state === 'on' && Array.isArray(st.attributes.rgb_color)) {
+          initColor = st.attributes.rgb_color;
+          break;
+        }
+      }
+      if (initColor) {
+        swatch.style.background = `rgb(${initColor[0]},${initColor[1]},${initColor[2]})`;
+      }
+    }
+
+    // Draw the large color wheel
+    const canvas = this._els.colorWheelLarge;
+    if (canvas) {
+      const raf = typeof requestAnimationFrame === 'function' ? requestAnimationFrame : (cb) => setTimeout(cb, 16);
+      raf(() => this._drawLargeColorWheel(canvas));
+    }
+
+    this._bindLargeColorWheelEvents();
+  }
+
+  _closeLargeColorWheel() {
+    this._largeColorWheelOpen = false;
+    const overlay = this._els.colorWheelOverlay;
+    if (!overlay) return;
+
+    overlay.classList.remove('visible');
+    this._syncOverlayState();
+
+    // Hide magnifier
+    const mag = this._els.colorWheelMagnifier;
+    if (mag) mag.classList.remove('visible');
+    this._largeWheelGesture = null;
+  }
+
+  _drawLargeColorWheel(canvas) {
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    const rect = canvas.getBoundingClientRect();
+    const dpr = (typeof window !== 'undefined' && window.devicePixelRatio) ? window.devicePixelRatio : 1;
+    const fallbackSize = 512;
+    const cssSize = Math.max(rect.width, rect.height) > 0
+      ? Math.min(rect.width || fallbackSize, rect.height || fallbackSize)
+      : fallbackSize;
+
+    const MAX_CANVAS_SIZE = 4096;
+    let pixelSize = Math.max(1, Math.round(cssSize * dpr));
+    if (!Number.isFinite(pixelSize) || pixelSize > MAX_CANVAS_SIZE || pixelSize < 1) {
+      pixelSize = Math.min(fallbackSize, MAX_CANVAS_SIZE);
+    }
+
+    canvas.width = pixelSize;
+    canvas.height = pixelSize;
+    ctx.clearRect(0, 0, pixelSize, pixelSize);
+
+    const radius = pixelSize / 2;
+    const imageData = ctx.createImageData(pixelSize, pixelSize);
+    const data = imageData.data;
+
+    const hslToRgb = (h, s, l) => {
+      if (s === 0) { const val = Math.round(l * 255); return [val, val, val]; }
+      const hue2rgb = (p, q, t) => {
+        if (t < 0) t += 1; if (t > 1) t -= 1;
+        if (t < 1/6) return p + (q-p)*6*t;
+        if (t < 1/2) return q;
+        if (t < 2/3) return p + (q-p)*(2/3-t)*6;
+        return p;
+      };
+      const q = l < 0.5 ? l*(1+s) : l+s-l*s;
+      const p = 2*l-q;
+      return [Math.round(hue2rgb(p,q,h+1/3)*255), Math.round(hue2rgb(p,q,h)*255), Math.round(hue2rgb(p,q,h-1/3)*255)];
+    };
+
+    for (let y = 0; y < pixelSize; y++) {
+      for (let x = 0; x < pixelSize; x++) {
+        const dx = x + 0.5 - radius;
+        const dy = y + 0.5 - radius;
+        const dist = Math.sqrt(dx*dx + dy*dy);
+        if (dist > radius) continue;
+
+        const sat = Math.min(1, dist / radius);
+        const hue = (Math.atan2(dy, dx) * 180 / Math.PI + 360) % 360;
+        const lightness = 0.45 + (1-sat) * 0.35;
+        const [r, g, b] = hslToRgb(hue/360, sat, lightness);
+
+        const idx = (y * pixelSize + x) * 4;
+        data[idx] = r; data[idx+1] = g; data[idx+2] = b; data[idx+3] = 255;
+      }
+    }
+
+    ctx.putImageData(imageData, 0, 0);
+
+    ctx.save();
+    ctx.lineWidth = Math.max(1, 1.5 * dpr);
+    ctx.strokeStyle = 'rgba(255,255,255,0.2)';
+    ctx.beginPath();
+    ctx.arc(radius, radius, radius - ctx.lineWidth / 2, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  _getLargeWheelColorAtEvent(e) {
+    const canvas = this._els.colorWheelLarge;
+    if (!canvas) return null;
+    const rect = canvas.getBoundingClientRect();
+    const x = (e.clientX - rect.left) * (canvas.width / rect.width);
+    const y = (e.clientY - rect.top) * (canvas.height / rect.height);
+
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return null;
+    const imageData = ctx.getImageData(Math.floor(x), Math.floor(y), 1, 1);
+    const [r, g, b, a] = imageData.data;
+    if (a === 0) return null;
+    return [r, g, b];
+  }
+
+  _updateMagnifier(e) {
+    const canvas = this._els.colorWheelLarge;
+    const magnifier = this._els.colorWheelMagnifier;
+    const magCanvas = this._els.colorWheelMagnifierCanvas;
+    if (!canvas || !magnifier || !magCanvas) return;
+
+    const rect = canvas.getBoundingClientRect();
+    const canvasX = (e.clientX - rect.left) * (canvas.width / rect.width);
+    const canvasY = (e.clientY - rect.top) * (canvas.height / rect.height);
+
+    // Position magnifier above the touch/pointer point
+    const magSize = 110;
+    const offset = 80;
+    let magX = e.clientX - magSize / 2;
+    let magY = e.clientY - magSize - offset;
+
+    // Keep on screen - flip below if too high
+    if (magY < 8) magY = e.clientY + offset / 2;
+    if (magX < 8) magX = 8;
+    if (magX + magSize > window.innerWidth - 8) magX = window.innerWidth - magSize - 8;
+
+    magnifier.style.left = magX + 'px';
+    magnifier.style.top = magY + 'px';
+    magnifier.classList.add('visible');
+
+    // Draw zoomed view on magnifier canvas
+    const magCtx = magCanvas.getContext('2d');
+    if (!magCtx) return;
+
+    const zoom = 6;
+    const srcSize = magCanvas.width / zoom;
+    const sx = canvasX - srcSize / 2;
+    const sy = canvasY - srcSize / 2;
+
+    magCtx.clearRect(0, 0, magCanvas.width, magCanvas.height);
+    magCtx.imageSmoothingEnabled = false;
+
+    // Clip to circle
+    magCtx.save();
+    magCtx.beginPath();
+    magCtx.arc(magCanvas.width / 2, magCanvas.height / 2, magCanvas.width / 2, 0, Math.PI * 2);
+    magCtx.clip();
+
+    magCtx.drawImage(canvas, sx, sy, srcSize, srcSize, 0, 0, magCanvas.width, magCanvas.height);
+    magCtx.restore();
+
+    // Draw crosshair
+    const cx = magCanvas.width / 2;
+    const cy = magCanvas.height / 2;
+    magCtx.save();
+    magCtx.strokeStyle = 'rgba(255,255,255,0.85)';
+    magCtx.lineWidth = 1.5;
+
+    // Horizontal arms
+    magCtx.beginPath();
+    magCtx.moveTo(cx - 14, cy); magCtx.lineTo(cx - 5, cy);
+    magCtx.moveTo(cx + 5, cy); magCtx.lineTo(cx + 14, cy);
+    magCtx.stroke();
+
+    // Vertical arms
+    magCtx.beginPath();
+    magCtx.moveTo(cx, cy - 14); magCtx.lineTo(cx, cy - 5);
+    magCtx.moveTo(cx, cy + 5); magCtx.lineTo(cx, cy + 14);
+    magCtx.stroke();
+
+    // Center dot
+    magCtx.fillStyle = 'rgba(255,255,255,0.95)';
+    magCtx.beginPath();
+    magCtx.arc(cx, cy, 2, 0, Math.PI * 2);
+    magCtx.fill();
+
+    // Dark outline for visibility on bright colors
+    magCtx.strokeStyle = 'rgba(0,0,0,0.4)';
+    magCtx.lineWidth = 0.75;
+    magCtx.beginPath();
+    magCtx.moveTo(cx - 14, cy); magCtx.lineTo(cx - 5, cy);
+    magCtx.moveTo(cx + 5, cy); magCtx.lineTo(cx + 14, cy);
+    magCtx.moveTo(cx, cy - 14); magCtx.lineTo(cx, cy - 5);
+    magCtx.moveTo(cx, cy + 5); magCtx.lineTo(cx, cy + 14);
+    magCtx.stroke();
+
+    magCtx.restore();
+
+    // Update magnifier border color to match selected color
+    const color = this._getLargeWheelColorAtEvent(e);
+    if (color) {
+      magnifier.style.borderColor = `rgb(${color[0]},${color[1]},${color[2]})`;
+    }
+  }
+
+  _bindLargeColorWheelEvents() {
+    const canvas = this._els.colorWheelLarge;
+    const overlay = this._els.colorWheelOverlay;
+    const doneBtn = this.shadowRoot?.getElementById('colorWheelDoneBtn');
+    const swatch = this._els.colorWheelPreviewSwatch;
+
+    if (!canvas) return;
+
+    // Avoid double-binding
+    if (canvas._largeBound) return;
+    canvas._largeBound = true;
+
+    canvas.addEventListener('pointerdown', (e) => {
+      e.preventDefault();
+      e.target.setPointerCapture?.(e.pointerId);
+      this._largeWheelGesture = { pointerId: e.pointerId };
+
+      const color = this._getLargeWheelColorAtEvent(e);
+      if (color) {
+        this._applyColorWheelSelection(color);
+        if (swatch) swatch.style.background = `rgb(${color[0]},${color[1]},${color[2]})`;
+      }
+      this._updateMagnifier(e);
+    });
+
+    canvas.addEventListener('pointermove', (e) => {
+      if (!this._largeWheelGesture || this._largeWheelGesture.pointerId !== e.pointerId) return;
+      e.preventDefault();
+
+      const color = this._getLargeWheelColorAtEvent(e);
+      if (color) {
+        this._applyColorWheelSelection(color);
+        if (swatch) swatch.style.background = `rgb(${color[0]},${color[1]},${color[2]})`;
+      }
+      this._updateMagnifier(e);
+    });
+
+    canvas.addEventListener('pointerup', (e) => {
+      e.target.releasePointerCapture?.(e.pointerId);
+      this._largeWheelGesture = null;
+
+      // Hide magnifier
+      const mag = this._els.colorWheelMagnifier;
+      if (mag) mag.classList.remove('visible');
+    });
+
+    canvas.addEventListener('pointercancel', (e) => {
+      e.target.releasePointerCapture?.(e.pointerId);
+      this._largeWheelGesture = null;
+
+      const mag = this._els.colorWheelMagnifier;
+      if (mag) mag.classList.remove('visible');
+    });
+
+    // Close on backdrop click
+    if (overlay) {
+      overlay.addEventListener('click', (e) => {
+        if (e.target === overlay) this._closeLargeColorWheel();
+      });
+    }
+
+    // Done button
+    if (doneBtn) {
+      doneBtn.addEventListener('click', () => this._closeLargeColorWheel());
+    }
   }
 
   _applyTemperaturePreset(kelvin) {

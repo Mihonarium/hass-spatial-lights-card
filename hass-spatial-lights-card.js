@@ -2882,30 +2882,47 @@ class SpatialLightColorCardEditor extends HTMLElement {
   }
 
   async _loadHAElements() {
-    // ha-entity-picker and ha-switch are lazy-loaded by HA.
+    // ha-entity-picker, ha-switch, ha-picture-upload are lazy-loaded by HA.
     // We must trigger their loading before we can use them.
-    if (customElements.get('ha-entity-picker')) return;
+    const needEntityPicker = !customElements.get('ha-entity-picker');
+    const needPictureUpload = !customElements.get('ha-picture-upload');
+    if (!needEntityPicker && !needPictureUpload) return;
 
     // Method 1: loadCardHelpers (most reliable)
     try {
       if (window.loadCardHelpers) {
         const helpers = await window.loadCardHelpers();
         if (helpers) {
-          // Creating an entities card element forces HA to load ha-entity-picker
-          const card = await helpers.createCardElement({ type: 'entities', entities: [] });
-          if (card) {
-            // Trigger the card to load its editor elements
-            await card.constructor?.getConfigElement?.();
+          // Creating an entities card forces HA to load ha-entity-picker
+          if (needEntityPicker) {
+            const card = await helpers.createCardElement({ type: 'entities', entities: [] });
+            if (card) {
+              await card.constructor?.getConfigElement?.();
+            }
+          }
+          // Creating a picture card forces HA to load ha-picture-upload
+          if (needPictureUpload) {
+            const picCard = await helpers.createCardElement({ type: 'picture', image: '' });
+            if (picCard) {
+              await picCard.constructor?.getConfigElement?.();
+            }
           }
         }
       }
     } catch (_) { /* ignore */ }
 
-    // Method 2: Wait for custom element to be defined (with timeout)
+    // Method 2: Wait for custom elements to be defined (with timeout)
+    const waitFor = [];
     if (!customElements.get('ha-entity-picker')) {
+      waitFor.push(customElements.whenDefined('ha-entity-picker'));
+    }
+    if (!customElements.get('ha-picture-upload')) {
+      waitFor.push(customElements.whenDefined('ha-picture-upload'));
+    }
+    if (waitFor.length) {
       try {
         await Promise.race([
-          customElements.whenDefined('ha-entity-picker'),
+          Promise.all(waitFor),
           new Promise(resolve => setTimeout(resolve, 3000)),
         ]);
       } catch (_) { /* ignore */ }

@@ -57,6 +57,7 @@ class SpatialLightColorCard extends HTMLElement {
       settingsBtn: null,
       settingsPanel: null,
       lockToggle: null,
+      showLabelsToggle: null,
       iconToggle: null,
       iconOnlyToggle: null,
       lightSizeSlider: null,
@@ -159,6 +160,7 @@ class SpatialLightColorCard extends HTMLElement {
       controls_below: config.controls_below !== false,
       show_entity_icons: config.show_entity_icons || false,
       switch_single_tap: config.switch_single_tap || false,
+      always_show_labels: config.always_show_labels || false,
       icon_style: config.icon_style || 'mdi', // 'mdi' or 'emoji' (emoji kept as fallback only)
       temperature_min: Number.isFinite(tempMin) ? tempMin : null,
       temperature_max: Number.isFinite(tempMax) ? tempMax : null,
@@ -246,35 +248,41 @@ class SpatialLightColorCard extends HTMLElement {
 
     const name = st.attributes.friendly_name || entity_id;
     const allNames = this._config.entities.map(e => this._hass?.states[e]?.attributes.friendly_name || e);
+    const stop = ['the', 'a', 'an', 'light', 'lamp', 'bulb'];
+    const words = name.split(/\s+/);
+    const significant = words.filter(w => w && !stop.includes(w.toLowerCase()));
 
-    // 1) trailing numbers
+    if (significant.length === 0) return name.substring(0, 3);
+
+    // 1) trailing numbers: "Ceiling 1" → "Ceil 1", "Bedroom Light 2" → "Bedr 2"
     const m = name.match(/(\d+)$/);
     if (m) {
       const base = name.substring(0, name.length - m[0].length).trim();
       const n = m[0];
       const similar = allNames.filter(nm => nm.startsWith(base)).length;
       if (similar > 1) {
-        return this._getInitials(base) + n;
+        const baseWords = base.split(/\s+/).filter(w => w && !stop.includes(w.toLowerCase()));
+        const shortBase = baseWords.length > 0 ? baseWords[0].substring(0, 4) : base.substring(0, 4);
+        return shortBase + ' ' + n;
       }
     }
-    // 2) directional
-    const words = name.split(/\s+/);
-    const dirs = ['left', 'right', 'center', 'front', 'back', 'top', 'bottom', 'north', 'south', 'east', 'west'];
-    const dirWord = words.find(w => dirs.includes(w.toLowerCase()));
-    if (dirWord) {
-      const baseWords = words.filter(w => w !== dirWord);
-      const initials = baseWords.slice(0, 2).map(w => w[0]).join('');
-      return (initials + dirWord[0]).toUpperCase();
-    }
-    return this._getInitials(name);
-  }
 
-  _getInitials(text) {
-    const stop = ['the', 'a', 'an', 'light', 'lamp', 'bulb'];
-    const ws = text.split(/\s+/).filter(w => w && !stop.includes(w.toLowerCase()));
-    if (ws.length === 0) return text.substring(0, 2).toUpperCase();
-    if (ws.length === 1) return ws[0].substring(0, 2).toUpperCase();
-    return ws.slice(0, 3).map(w => w[0]).join('').toUpperCase();
+    // 2) directional: "Ceiling Left" → "Ceil L"
+    const dirs = ['left', 'right', 'center', 'front', 'back', 'top', 'bottom', 'north', 'south', 'east', 'west'];
+    const dirWord = significant.find(w => dirs.includes(w.toLowerCase()));
+    if (dirWord) {
+      const baseWords = significant.filter(w => w !== dirWord);
+      const shortBase = baseWords.length > 0 ? baseWords[0].substring(0, 4) : '';
+      return (shortBase + ' ' + dirWord[0].toUpperCase()).trim();
+    }
+
+    // 3) single meaningful word: use it in full
+    if (significant.length === 1) return significant[0];
+
+    // 4) multi-word: keep both if short, else abbreviate second word
+    const combined = significant.slice(0, 2).join(' ');
+    if (combined.length <= 10) return combined;
+    return significant[0] + ' ' + significant[1][0].toUpperCase();
   }
 
   /** ---------- Icon system (SVG via HA components) ---------- */
@@ -663,7 +671,7 @@ class SpatialLightColorCard extends HTMLElement {
       <ha-card>
         ${showHeader ? this._renderHeader() : ''}
         <div class="canvas-wrapper">
-          <div class="canvas" id="canvas" role="application" aria-label="Spatial light control area" style="${this._canvasBackgroundStyle()}">
+          <div class="canvas ${this._config.always_show_labels ? 'always-show-labels' : ''}" id="canvas" role="application" aria-label="Spatial light control area" style="${this._canvasBackgroundStyle()}">
             <div class="grid"></div>
             ${this._renderLightsHTML()}
             ${controlsPosition === 'floating' ? this._renderControlsFloating(showControls, controlContext) : ''}
@@ -687,6 +695,7 @@ class SpatialLightColorCard extends HTMLElement {
     this._els.settingsBtn = this.shadowRoot.getElementById('settingsBtn');
     this._els.settingsPanel = this.shadowRoot.getElementById('settingsPanel');
     this._els.lockToggle = this.shadowRoot.getElementById('lockToggle');
+    this._els.showLabelsToggle = this.shadowRoot.getElementById('showLabelsToggle');
     this._els.iconToggle = this.shadowRoot.getElementById('iconToggle');
     this._els.iconOnlyToggle = this.shadowRoot.getElementById('iconOnlyToggle');
     this._els.lightSizeSlider = this.shadowRoot.getElementById('lightSizeSlider');
@@ -902,6 +911,10 @@ class SpatialLightColorCard extends HTMLElement {
         opacity: 0; transition: opacity var(--transition-fast); z-index: 5; border: 1px solid var(--border-subtle);
       }
       .light:hover .light-label { opacity: 1; }
+      /* Flip label above when light is near the bottom of the canvas */
+      .light.label-above .light-label { top: auto; bottom: calc(100% + 8px); }
+      /* Always show labels mode */
+      .canvas.always-show-labels .light-label { opacity: 1; }
 
       .light.selected { z-index: 3; }
       .light.selected::before {
@@ -948,6 +961,7 @@ class SpatialLightColorCard extends HTMLElement {
 
       .slider-group { display:flex; flex-direction:column; gap:10px; min-width: 240px; flex:1; width:100%; }
       .slider-row { display:flex; align-items:center; gap:8px; width:100%; padding: 2px 0; }
+      .slider-label { font-size: 11px; color: var(--text-tertiary); min-width: 28px; font-weight: 600; letter-spacing: 0.02em; flex-shrink: 0; }
 
       .slider {
         flex:1; -webkit-appearance:none; appearance:none;
@@ -1011,6 +1025,11 @@ class SpatialLightColorCard extends HTMLElement {
         border: none;
       }
       .slider-value { font-size: 13px; color: var(--text-secondary); min-width: 56px; text-align:right; font-weight: 700; letter-spacing: 0.01em; align-self:center; }
+      .controls-selection-label {
+        font-size: 11px; color: var(--text-tertiary); font-weight: 600;
+        white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+        max-width: 100%; letter-spacing: 0.01em;
+      }
 
       .settings-panel {
         position: absolute; top: 16px; right: 16px;
@@ -1176,6 +1195,8 @@ class SpatialLightColorCard extends HTMLElement {
       const iconData = (isIconOnly || isMinimalUI || this._config.show_entity_icons) ? this._getEntityIconData(entity_id) : null;
       const stateClass = (domain === 'scene' || isOn) ? 'on' : 'off';
       const iconOnlyClass = isMinimalUI ? 'minimal-ui' : (isIconOnly ? 'icon-only' : '');
+      // Flip label above the light when near the bottom of the canvas
+      const labelAboveClass = pos.y > 85 ? 'label-above' : '';
 
       // Build inline styles
       let style = `left:${pos.x}%; top:${pos.y}%;`;
@@ -1204,7 +1225,7 @@ class SpatialLightColorCard extends HTMLElement {
       }
 
       return `
-        <div class="light ${stateClass} ${isSelected ? 'selected' : ''} ${iconOnlyClass}"
+        <div class="light ${stateClass} ${isSelected ? 'selected' : ''} ${iconOnlyClass} ${labelAboveClass}"
              style="${style}"
              data-entity="${entity_id}"
              tabindex="0"
@@ -1218,6 +1239,18 @@ class SpatialLightColorCard extends HTMLElement {
     }).join('');
   }
 
+  _getSelectionSummary() {
+    const controlled = this._getControlledEntities();
+    if (controlled.length === 0) return '';
+    const names = controlled.map(id => {
+      const st = this._hass?.states?.[id];
+      return st?.attributes?.friendly_name || id.split('.').pop().replace(/_/g, ' ');
+    });
+    if (names.length === 1) return names[0];
+    if (names.length <= 3) return names.join(', ');
+    return `${names.slice(0, 2).join(', ')} +${names.length - 2} more`;
+  }
+
   _renderControlsFloating(visible, controlContext) {
     const { avgState, tempRange } = controlContext;
     const clampedTemp = this._clampTemperature(avgState.temperature, tempRange);
@@ -1226,15 +1259,19 @@ class SpatialLightColorCard extends HTMLElement {
       ? Math.min(100, Math.max(0, ((clampedTemp - tempRange.min) / (tempRange.max - tempRange.min)) * 100))
       : 0;
     const brightnessColor = Array.isArray(avgState.color) ? `rgb(${avgState.color.join(',')})` : 'var(--accent-primary)';
+    const selectionSummary = this._getSelectionSummary();
     return `
       <div class="controls-floating ${visible ? 'visible' : ''}" id="controlsFloating" role="region" aria-label="Light controls" aria-live="polite">
         <canvas id="colorWheelMini" class="color-wheel-mini" width="256" height="256" role="img" aria-label="Color picker"></canvas>
         <div class="slider-group">
+          ${selectionSummary ? `<div class="controls-selection-label" id="controlsSelectionLabel">${selectionSummary}</div>` : ''}
           <div class="slider-row">
+            <span class="slider-label">Bri</span>
             <input type="range" class="slider" id="brightnessSlider" min="0" max="255" value="${avgState.brightness}" aria-label="Brightness" style="--slider-percent:${brightnessPercent}%;--slider-ratio:${brightnessPercent/100};--slider-fill:${brightnessColor};">
             <span class="slider-value" id="brightnessValue">${Math.round((avgState.brightness/255)*100)}%</span>
           </div>
           <div class="slider-row">
+            <span class="slider-label">Temp</span>
             <input type="range" class="slider temperature" id="temperatureSlider" min="${tempRange.min}" max="${tempRange.max}" value="${clampedTemp}" aria-label="Color temperature" style="--slider-percent:${tempPercent}%;--slider-ratio:${tempPercent/100};">
             <span class="slider-value" id="temperatureValue">${clampedTemp}K</span>
           </div>
@@ -1251,15 +1288,19 @@ class SpatialLightColorCard extends HTMLElement {
       ? Math.min(100, Math.max(0, ((clampedTemp - tempRange.min) / (tempRange.max - tempRange.min)) * 100))
       : 0;
     const brightnessColor = Array.isArray(avgState.color) ? `rgb(${avgState.color.join(',')})` : 'var(--accent-primary)';
+    const selectionSummary = this._getSelectionSummary();
     return `
       <div class="controls-below" id="controlsBelow" role="region" aria-label="Light controls" aria-live="polite">
         <canvas id="colorWheelMini" class="color-wheel-mini" width="256" height="256" role="img" aria-label="Color picker"></canvas>
         <div class="slider-group">
+          ${selectionSummary ? `<div class="controls-selection-label" id="controlsSelectionLabel">${selectionSummary}</div>` : ''}
           <div class="slider-row">
+            <span class="slider-label">Bri</span>
             <input type="range" class="slider" id="brightnessSlider" min="0" max="255" value="${avgState.brightness}" aria-label="Brightness" style="--slider-percent:${brightnessPercent}%;--slider-ratio:${brightnessPercent/100};--slider-fill:${brightnessColor};">
             <span class="slider-value" id="brightnessValue">${Math.round((avgState.brightness/255)*100)}%</span>
           </div>
           <div class="slider-row">
+            <span class="slider-label">Temp</span>
             <input type="range" class="slider temperature" id="temperatureSlider" min="${tempRange.min}" max="${tempRange.max}" value="${clampedTemp}" aria-label="Color temperature" style="--slider-percent:${tempPercent}%;--slider-ratio:${tempPercent/100};">
             <span class="slider-value" id="temperatureValue">${clampedTemp}K</span>
           </div>
@@ -1281,11 +1322,15 @@ class SpatialLightColorCard extends HTMLElement {
         <div class="settings-section">
           <div class="settings-label">Display</div>
           <div class="settings-option">
-            <span>Show Entity Icons</span>
-            <button class="toggle ${this._config.show_entity_icons ? 'on' : ''}" id="iconToggle" role="switch" aria-checked="${this._config.show_entity_icons}" aria-label="Show entity icons"></button>
+            <span>Always Show Labels</span>
+            <button class="toggle ${this._config.always_show_labels ? 'on' : ''}" id="showLabelsToggle" role="switch" aria-checked="${this._config.always_show_labels}" aria-label="Always show labels on lights"></button>
           </div>
           <div class="settings-option">
-            <span>Icon-Only Mode</span>
+            <span>Show Icons</span>
+            <button class="toggle ${this._config.show_entity_icons ? 'on' : ''}" id="iconToggle" role="switch" aria-checked="${this._config.show_entity_icons}" aria-label="Show entity icons inside light circles"></button>
+          </div>
+          <div class="settings-option">
+            <span>Icons Only</span>
             <button class="toggle ${this._config.icon_only_mode ? 'on' : ''}" id="iconOnlyToggle" role="switch" aria-checked="${this._config.icon_only_mode}" aria-label="Show icons only without filled circles"></button>
           </div>
           <div class="settings-option settings-size-row">
@@ -1299,8 +1344,8 @@ class SpatialLightColorCard extends HTMLElement {
         <div class="settings-section">
           <div class="settings-label">Interaction</div>
           <div class="settings-option">
-            <span>Single-Tap Switch/Scene</span>
-            <button class="toggle ${this._config.switch_single_tap ? 'on' : ''}" id="switchTapToggle" role="switch" aria-checked="${this._config.switch_single_tap}" aria-label="Toggle switches with a single tap"></button>
+            <span>Tap to Toggle</span>
+            <button class="toggle ${this._config.switch_single_tap ? 'on' : ''}" id="switchTapToggle" role="switch" aria-checked="${this._config.switch_single_tap}" aria-label="Toggle switches and scenes with a single tap instead of selecting them"></button>
           </div>
         </div>
         <div class="settings-section">
@@ -1603,6 +1648,17 @@ class SpatialLightColorCard extends HTMLElement {
         this.shadowRoot.querySelectorAll('.light').forEach(l => {
           l.style.cursor = this._lockPositions ? 'pointer' : 'grab';
         });
+      });
+    }
+
+    if (this._els.showLabelsToggle) {
+      this._els.showLabelsToggle.addEventListener('click', () => {
+        this._config.always_show_labels = !this._config.always_show_labels;
+        this._els.showLabelsToggle.classList.toggle('on', this._config.always_show_labels);
+        this._els.showLabelsToggle.setAttribute('aria-checked', String(this._config.always_show_labels));
+        if (this._els.canvas) {
+          this._els.canvas.classList.toggle('always-show-labels', this._config.always_show_labels);
+        }
       });
     }
 
@@ -2466,6 +2522,14 @@ class SpatialLightColorCard extends HTMLElement {
       this._els.canvas.classList.toggle('has-selection', this._selectedLights.size > 0);
     }
 
+    // Update selection summary label
+    const selectionLabel = this.shadowRoot.querySelector('.controls-selection-label');
+    if (selectionLabel) {
+      const summary = this._getSelectionSummary();
+      selectionLabel.textContent = summary;
+      selectionLabel.style.display = summary ? '' : 'none';
+    }
+
     // Update controls to reflect averaged state
     const shouldShowControls = this._config.always_show_controls || this._selectedLights.size > 0 || this._config.default_entity;
     if (shouldShowControls) {
@@ -2499,6 +2563,7 @@ class SpatialLightColorCard extends HTMLElement {
     yamlLines.push(`always_show_controls: ${!!this._config.always_show_controls}`);
     yamlLines.push(`controls_below: ${!!this._config.controls_below}`);
     yamlLines.push(`show_entity_icons: ${!!this._config.show_entity_icons}`);
+    yamlLines.push(`always_show_labels: ${!!this._config.always_show_labels}`);
     yamlLines.push(`switch_single_tap: ${!!this._config.switch_single_tap}`);
     yamlLines.push(`icon_style: ${this._config.icon_style}`);
     if (this._config.default_entity) yamlLines.push(`default_entity: ${this._config.default_entity}`);

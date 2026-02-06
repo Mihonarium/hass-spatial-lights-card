@@ -153,6 +153,8 @@ positions:
 | `size_overrides` | map | `{}` | Per-entity size overrides (e.g., `light.lamp: 40`). |
 | `icon_only_overrides` | map | `{}` | Per-entity icon-only mode overrides (e.g., `light.lamp: true`). |
 | `background_image` | string/map | `null` | URL string or object `{url, size, position, blend_mode}`. |
+| `color_presets` | list | `[]` | Hex color strings to show as quick-select circles (e.g., `["#ff0000", "#00ff00"]`). |
+| `show_live_colors` | boolean | `false` | Show the current colors of your lights as additional preset circles. |
 | `temperature_min` | number | `null` | Override minimum Kelvin for temperature slider. |
 | `temperature_max` | number | `null` | Override maximum Kelvin for temperature slider. |
 
@@ -252,6 +254,26 @@ When icon-only mode is enabled:
 - A subtle border ring shows the light's color when on
 - Off lights remain visible with a dimmed appearance
 - Great for cleaner layouts or when using background images
+
+### Color Presets
+Add quick-select color circles next to the color wheel so you can apply frequently used colors with a single tap:
+```yaml
+color_presets:
+  - "#ff0000"
+  - "#00ff00"
+  - "#0000ff"
+  - "#ff8800"
+  - "#e040fb"
+```
+
+Enable `show_live_colors: true` to also display the current colors of your lights as preset circles. When hovering a preset (or long-pressing on mobile), the lights that currently have that color are highlighted on the canvas. If all controlled lights share the same color, the matching preset shows a subtle ring indicator.
+
+```yaml
+color_presets:
+  - "#ff0000"
+  - "#00ff00"
+show_live_colors: true
+```
 
 ---
 

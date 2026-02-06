@@ -3822,8 +3822,11 @@ class SpatialLightColorCardEditor extends HTMLElement {
     const bgForm = root.getElementById('cfgBgImageForm');
     if (bgForm) {
       bgForm.addEventListener('value-changed', (ev) => {
+        const formData = ev.detail?.value;
+        // Only handle form-level events (with 'image' key), not inner selector events
+        if (!formData || typeof formData !== 'object' || !('image' in formData)) return;
         ev.stopPropagation();
-        const imageData = ev.detail.value?.image;
+        const imageData = formData.image;
         const url = (imageData && imageData.media_content_id) || '';
         if (url) {
           if (this._config.background_image && typeof this._config.background_image === 'object') {

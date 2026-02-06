@@ -686,8 +686,8 @@ class SpatialLightColorCard extends HTMLElement {
           ${controlsPosition === 'below' ? this._renderControlsBelow(controlContext) : ''}
         </div>
         ${this._renderYamlModal()}
-        ${this._renderLargeColorWheel()}
       </ha-card>
+      ${this._renderLargeColorWheel()}
     `;
 
     // Cache refs once
@@ -1657,6 +1657,7 @@ class SpatialLightColorCard extends HTMLElement {
           startScroll: this._getScrollPosition(),
           scrolled: false,
           pendingColor: null,
+          longPressActive: true,  // defer all color application while long-press might fire
         };
         e.preventDefault();
         e.target.setPointerCapture?.(e.pointerId);
@@ -1674,13 +1675,9 @@ class SpatialLightColorCard extends HTMLElement {
           this._openLargeColorWheel();
         }, longPressDelay);
 
+        // Always store as pending — never apply immediately during long-press window
         const color = this._getColorWheelColorAtEvent(e);
-        if (!color) return;
-        if (isTouchLike) {
-          this._colorWheelGesture.pendingColor = color;
-        } else {
-          this._applyColorWheelSelection(color);
-        }
+        if (color) this._colorWheelGesture.pendingColor = color;
       });
       this._els.colorWheel.addEventListener('pointermove', (e) => {
         if (this._colorWheelActive) {
@@ -1694,6 +1691,11 @@ class SpatialLightColorCard extends HTMLElement {
             if (Math.sqrt(dx * dx + dy * dy) > 8) {
               clearTimeout(this._colorWheelLongPressTimer);
               this._colorWheelLongPressTimer = null;
+              gesture.longPressActive = false;
+              // Now that long-press is cancelled, apply the deferred pending color (mouse only)
+              if (!gesture.isTouch && gesture.pendingColor) {
+                this._applyColorWheelSelection(gesture.pendingColor);
+              }
             }
           }
 
@@ -1709,9 +1711,12 @@ class SpatialLightColorCard extends HTMLElement {
 
           if (gesture.isTouch) {
             gesture.pendingColor = color;
-          } else {
+          } else if (!gesture.longPressActive) {
+            // Only apply immediately for mouse after long-press window has passed
             e.preventDefault();
             this._applyColorWheelSelection(color);
+          } else {
+            gesture.pendingColor = color;
           }
         }
       });
@@ -1733,7 +1738,8 @@ class SpatialLightColorCard extends HTMLElement {
         this._colorWheelGesture = null;
         if (!gesture || gesture.pointerId !== e.pointerId) return;
 
-        if (gesture.isTouch && !gesture.scrolled) {
+        // Apply pending color on release (for both touch and mouse with deferred long-press)
+        if (!gesture.scrolled) {
           const color = this._getColorWheelColorAtEvent(e) || gesture.pendingColor;
           if (color) this._applyColorWheelSelection(color);
         }
@@ -2824,12 +2830,14 @@ class SpatialLightColorCard extends HTMLElement {
     canvas.addEventListener('pointerdown', (e) => {
       e.preventDefault();
       e.target.setPointerCapture?.(e.pointerId);
-      this._largeWheelGesture = { pointerId: e.pointerId };
 
       const color = this._getLargeWheelColorAtEvent(e);
-      if (color) {
-        this._applyColorWheelSelection(color);
-        if (swatch) swatch.style.background = `rgb(${color[0]},${color[1]},${color[2]})`;
+      this._largeWheelGesture = { pointerId: e.pointerId, pendingColor: color };
+
+      // Only update swatch preview — don't send to lights yet
+      if (color && swatch) {
+        swatch.style.background = `rgb(${color[0]},${color[1]},${color[2]})`;
+        swatch.style.borderColor = `rgba(255,255,255,0.5)`;
       }
       this._updateMagnifier(e);
     });
@@ -2840,7 +2848,8 @@ class SpatialLightColorCard extends HTMLElement {
 
       const color = this._getLargeWheelColorAtEvent(e);
       if (color) {
-        this._applyColorWheelSelection(color);
+        this._largeWheelGesture.pendingColor = color;
+        // Only update swatch preview — don't send to lights during drag
         if (swatch) swatch.style.background = `rgb(${color[0]},${color[1]},${color[2]})`;
       }
       this._updateMagnifier(e);
@@ -2848,7 +2857,15 @@ class SpatialLightColorCard extends HTMLElement {
 
     canvas.addEventListener('pointerup', (e) => {
       e.target.releasePointerCapture?.(e.pointerId);
+
+      // Apply the final selected color to lights
+      const gesture = this._largeWheelGesture;
       this._largeWheelGesture = null;
+      if (gesture && gesture.pendingColor) {
+        const color = this._getLargeWheelColorAtEvent(e) || gesture.pendingColor;
+        this._applyColorWheelSelection(color);
+        if (swatch) swatch.style.background = `rgb(${color[0]},${color[1]},${color[2]})`;
+      }
 
       // Hide magnifier
       const mag = this._els.colorWheelMagnifier;

@@ -24,9 +24,7 @@ Very useful when you have a lot of lights, and searching for the one you need by
 6. [Custom Colors & Backgrounds](#-custom-colors--backgrounds)
 7. [Common Workflows](#-common-workflows)
 8. [Visual Layout Options](#-visual-options)
-9. [Locking & Positioning](#-lockunlock)
-10. [Example Setups](#-example-setups)
-11. [Troubleshooting](#troubleshooting)
+9. [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -68,61 +66,9 @@ Alternatively, open Settings → Dashboards → (three dots) → Resources to ad
 ## 🎯 Quick Start
 
 1. Install the resource using one of the methods above.
-2. Choose **Add card → Custom: Spatial Lights Card** (or **Manual** and paste YAML).
+2. Edit a dashboard.
+3. Choose **Add card → Spatial Lights Color Card**.
 
-
-### Minimal Setup
-```yaml
-type: custom:spatial-light-color-card
-title: Living Room
-entities:
-  - light.ceiling
-  - light.floor_lamp
-  - switch.fan
-  - scene.movie_night
-```
-
-### With Always-Visible Controls
-```yaml
-type: custom:spatial-light-color-card
-title: Living Room
-always_show_controls: true
-controls_below: true
-entities:
-  - light.ceiling
-  - light.floor_lamp
-```
-
-### With Default Entity (Control All)
-```yaml
-type: custom:spatial-light-color-card
-title: Living Room
-default_entity: light.living_room_all  # Controls this when nothing selected
-entities:
-  - light.ceiling_1
-  - light.ceiling_2
-  - light.floor_lamp
-```
-
-### Production Setup (Locked, No Settings)
-```yaml
-type: custom:spatial-light-color-card
-title: Living Room
-show_settings_button: false
-always_show_controls: true
-controls_below: true
-default_entity: light.living_room_all
-entities:
-  - light.ceiling_1
-  - light.ceiling_2
-positions:
-  light.ceiling_1:
-    x: 30.0
-    y: 25.0
-  light.ceiling_2:
-    x: 70.0
-    y: 25.0
-```
 
 ---
 
@@ -319,91 +265,18 @@ always_show_controls: true
 
 ---
 
-## 🔒 Lock/Unlock
-
-### Default: Locked ✅
-- Prevents accidental movement of light positions.
-- Safe for daily dashboards.
-- Full control access without editing the layout.
-
-### To Rearrange
-1. Click the **⚙** icon (settings).
-2. Toggle **Lock positions** off.
-3. Drag lights to new coordinates.
-4. Toggle **Lock positions** back on when finished.
-5. Export the updated YAML so the layout persists.
-
----
-
-## 🎯 Example Setups
-
-### Home Theater
-```yaml
-type: custom:spatial-light-color-card
-title: Theater
-canvas_height: 400
-show_settings_button: false
-always_show_controls: true
-controls_below: true
-default_entity: light.theater_all
-scene_color: "#ff00ff"
-entities:
-  - light.screen_backlight
-  - light.ceiling_cans
-  - scene.movie_mode
-  - scene.intermission
-```
-
-### Bedroom
-```yaml
-type: custom:spatial-light-color-card
-title: Bedroom
-canvas_height: 450
-always_show_controls: false
-controls_below: false
-background_image: "/local/bedroom_plan.png"
-entities:
-  - light.bedside_left
-  - light.bedside_right
-  - light.ceiling
-```
-
-### Office
-```yaml
-type: custom:spatial-light-color-card
-title: Office
-show_settings_button: false
-always_show_controls: true
-default_entity: light.office_all
-switch_single_tap: true
-entities:
-  - light.desk
-  - light.bookshelf
-  - switch.monitor_plug
-```
-
----
-
 ## Troubleshooting
-
-### Lights not visible on load?
-- Confirm Home Assistant reports the entities as available.
-- Check the browser console for JavaScript errors (Developer Tools → Console).
-- Reload the dashboard after updating the card.
-
-### Can't move lights?
-- Click the **⚙** icon and toggle **Lock positions** off.
-- Positions are locked by default to prevent accidental drags.
-
-### Multi-select not working on mobile?
-- Hold for ~500 ms (long press) to add lights to the selection.
-- Haptic feedback (if available) indicates selection.
-- Then tap additional lights.
 
 ### Controls not showing?
 - Select at least one light.
-- Or enable `always_show_controls: true`.
-- Or configure `default_entity` to control something when nothing is selected.
+- Or enable Always Show Controls.
+- Or configure the Default Entity to control something when nothing is selected.
+
+### Lights not visible on load?
+- Reload the dashboard after updating the card.
+
+### Other issues?
+- [Submit the issue on GitHub](https://github.com/Mihonarium/hass-spatial-lights-card/issues/new).
 
 ---
 

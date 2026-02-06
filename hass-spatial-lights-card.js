@@ -977,11 +977,8 @@ class SpatialLightColorCard extends HTMLElement {
       }
       .color-preset:hover::after { transform: scale(1.15); border-color: rgba(255,255,255,0.5); box-shadow: 0 0 8px rgba(255,255,255,0.2); }
       .color-preset:active::after { transform: scale(0.92); }
-      .color-preset.live-color::after { border-style: dashed; border-color: rgba(255,255,255,0.3); }
-      .color-preset.live-color:hover::after { border-color: rgba(255,255,255,0.6); }
-      .color-preset.active::after { box-shadow: 0 0 0 2.5px rgba(255,255,255,0.85); border-color: rgba(255,255,255,0.6); }
-      .color-preset.active:hover::after { box-shadow: 0 0 0 2.5px rgba(255,255,255,0.85), 0 0 8px rgba(255,255,255,0.2); }
-      .color-preset.active.live-color::after { border-style: dashed; }
+      .color-preset.active::after { box-shadow: 0 0 0 2px rgba(255,255,255,0.5); }
+      .color-preset.active:hover::after { box-shadow: 0 0 0 2px rgba(255,255,255,0.5), 0 0 8px rgba(255,255,255,0.2); }
 
       .temp-presets {
         display: flex; flex-wrap: wrap; gap: 2px; align-items: center;
@@ -992,14 +989,14 @@ class SpatialLightColorCard extends HTMLElement {
       }
       .temp-preset::after {
         content: ''; position: absolute; inset: 4px; border-radius: 9999px;
-        background: var(--preset-color); border: 2px dashed rgba(255,255,255,0.3);
+        background: var(--preset-color); border: 2px solid rgba(255,255,255,0.15);
         box-shadow: var(--shadow-sm);
         transition: transform var(--transition-fast), border-color var(--transition-fast), box-shadow var(--transition-fast);
       }
-      .temp-preset:hover::after { transform: scale(1.15); border-color: rgba(255,255,255,0.6); box-shadow: 0 0 8px rgba(255,255,255,0.2); }
+      .temp-preset:hover::after { transform: scale(1.15); border-color: rgba(255,255,255,0.5); box-shadow: 0 0 8px rgba(255,255,255,0.2); }
       .temp-preset:active::after { transform: scale(0.92); }
-      .temp-preset.active::after { box-shadow: 0 0 0 2.5px rgba(255,255,255,0.85); border-color: rgba(255,255,255,0.6); }
-      .temp-preset.active:hover::after { box-shadow: 0 0 0 2.5px rgba(255,255,255,0.85), 0 0 8px rgba(255,255,255,0.2); }
+      .temp-preset.active::after { box-shadow: 0 0 0 2px rgba(255,255,255,0.5); }
+      .temp-preset.active:hover::after { box-shadow: 0 0 0 2px rgba(255,255,255,0.5), 0 0 8px rgba(255,255,255,0.2); }
       .temp-preset .temp-label {
         position: absolute; top: calc(100% + 2px); left: 50%; transform: translateX(-50%);
         font-size: 9px; color: var(--text-tertiary); white-space: nowrap; pointer-events: none;
@@ -2410,18 +2407,26 @@ class SpatialLightColorCard extends HTMLElement {
   _refreshColorPresets() {
     if (!this.shadowRoot) return;
 
-    // Refresh color presets in .color-wheel-presets-wrap
-    const colorWraps = this.shadowRoot.querySelectorAll('.color-wheel-presets-wrap');
     const presetsHtml = this._renderColorPresets();
-    colorWraps.forEach(wrap => this._replaceOrInsert(wrap, '.color-presets', presetsHtml));
-
-    // Refresh temperature presets in .slider-group
-    const sliderGroups = this.shadowRoot.querySelectorAll('.slider-group');
     const tempHtml = this._renderTemperaturePresets();
-    sliderGroups.forEach(group => this._replaceOrInsert(group, '.temp-presets', tempHtml));
+    let replaced = false;
 
-    // Re-bind click handlers for new preset elements
-    this._bindPresetHandlers();
+    // Only replace DOM when content actually changed (prevents hover blink from DOM churn)
+    if (presetsHtml !== this._lastPresetsHtml) {
+      this._lastPresetsHtml = presetsHtml;
+      const colorWraps = this.shadowRoot.querySelectorAll('.color-wheel-presets-wrap');
+      colorWraps.forEach(wrap => this._replaceOrInsert(wrap, '.color-presets', presetsHtml));
+      replaced = true;
+    }
+
+    if (tempHtml !== this._lastTempHtml) {
+      this._lastTempHtml = tempHtml;
+      const sliderGroups = this.shadowRoot.querySelectorAll('.slider-group');
+      sliderGroups.forEach(group => this._replaceOrInsert(group, '.temp-presets', tempHtml));
+      replaced = true;
+    }
+
+    if (replaced) this._bindPresetHandlers();
   }
 
   _highlightEntities(entityList) {
@@ -2444,6 +2449,7 @@ class SpatialLightColorCard extends HTMLElement {
     el.addEventListener('mouseleave', () => this._highlightEntities(null));
 
     // Mobile: long-press (300ms) to highlight, release to clear
+    // Uses document-level listeners so highlight clears even if DOM is replaced mid-touch
     let holdTimer = null;
     el.addEventListener('pointerdown', (e) => {
       if (e.pointerType === 'mouse') return; // handled by mouseenter
@@ -2452,14 +2458,15 @@ class SpatialLightColorCard extends HTMLElement {
         this._highlightEntities(entities);
         if (typeof navigator !== 'undefined' && navigator.vibrate) navigator.vibrate(15);
       }, 300);
+      const clearHighlight = () => {
+        if (holdTimer) { clearTimeout(holdTimer); holdTimer = null; }
+        this._highlightEntities(null);
+        document.removeEventListener('pointerup', clearHighlight);
+        document.removeEventListener('pointercancel', clearHighlight);
+      };
+      document.addEventListener('pointerup', clearHighlight);
+      document.addEventListener('pointercancel', clearHighlight);
     });
-    const clearHold = () => {
-      if (holdTimer) { clearTimeout(holdTimer); holdTimer = null; }
-      this._highlightEntities(null);
-    };
-    el.addEventListener('pointerup', clearHold);
-    el.addEventListener('pointercancel', clearHold);
-    el.addEventListener('pointerleave', clearHold);
   }
 
   _bindPresetHandlers() {
@@ -2582,7 +2589,7 @@ class SpatialLightColorCard extends HTMLElement {
     });
     filteredLive.forEach(lc => {
       const isActive = activeRgb && this._rgbDistance(lc.rgb, activeRgb) < 30;
-      html += `<div class="color-preset live-color${isActive ? ' active' : ''}" data-preset-color="${lc.hex}" data-preset-rgb="${lc.rgb.join(',')}" data-preset-entities="${lc.entities.join(',')}" style="--preset-color:${lc.hex};" title="Current: ${lc.hex}"></div>`;
+      html += `<div class="color-preset${isActive ? ' active' : ''}" data-preset-color="${lc.hex}" data-preset-rgb="${lc.rgb.join(',')}" data-preset-entities="${lc.entities.join(',')}" style="--preset-color:${lc.hex};" title="${lc.hex}"></div>`;
     });
 
     if (!html) return '';

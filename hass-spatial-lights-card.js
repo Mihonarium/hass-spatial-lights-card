@@ -16,7 +16,6 @@ class SpatialLightColorCard extends HTMLElement {
     this._selectionBase = null;
 
     /** UI state */
-    this._settingsOpen = false;
     this._yamlModalOpen = false;
 
     /** History (positions undo/redo) */
@@ -54,18 +53,12 @@ class SpatialLightColorCard extends HTMLElement {
       temperatureSlider: null,
       temperatureValue: null,
       colorWheel: null,
-      settingsBtn: null,
-      settingsPanel: null,
-      lockToggle: null,
-      rearrangeBtn: null,
-      exportBtn: null,
       yamlModal: null,
       yamlOutput: null,
     };
 
     /** Global bindings */
     this._boundKeyDown = null;
-    this._boundCloseSettings = null;
     this._boundIconsetAdded = null;
     this._boundMoreInfo = null;
 
@@ -148,7 +141,6 @@ class SpatialLightColorCard extends HTMLElement {
       grid_size: config.grid_size || 25,
       label_mode: config.label_mode || 'smart',
       label_overrides: config.label_overrides || {},
-      show_settings_button: config.show_settings_button !== false,
       always_show_controls: config.always_show_controls || false,
       default_entity: config.default_entity || null,
       controls_below: config.controls_below !== false,
@@ -665,7 +657,7 @@ class SpatialLightColorCard extends HTMLElement {
     const avgState = controlContext.avgState;
     const showControls = this._config.always_show_controls || this._selectedLights.size > 0 || this._config.default_entity;
     const controlsPosition = this._config.controls_below ? 'below' : 'floating';
-    const showHeader = this._config.title || this._config.show_settings_button;
+    const showHeader = !!this._config.title;
 
     this.shadowRoot.innerHTML = `
       <style>
@@ -679,7 +671,6 @@ class SpatialLightColorCard extends HTMLElement {
             ${this._config.entities.length === 0 ? this._renderEmptyState() : this._renderLightsHTML()}
             ${controlsPosition === 'floating' ? this._renderControlsFloating(showControls, controlContext) : ''}
           </div>
-          ${this._renderSettings()}
           ${controlsPosition === 'below' ? this._renderControlsBelow(controlContext) : ''}
         </div>
         ${this._renderYamlModal()}
@@ -695,11 +686,6 @@ class SpatialLightColorCard extends HTMLElement {
     this._els.temperatureSlider = this.shadowRoot.getElementById('temperatureSlider');
     this._els.temperatureValue = this.shadowRoot.getElementById('temperatureValue');
     this._els.colorWheel = this.shadowRoot.getElementById('colorWheelMini');
-    this._els.settingsBtn = this.shadowRoot.getElementById('settingsBtn');
-    this._els.settingsPanel = this.shadowRoot.getElementById('settingsPanel');
-    this._els.lockToggle = this.shadowRoot.getElementById('lockToggle');
-    this._els.rearrangeBtn = this.shadowRoot.getElementById('rearrangeBtn');
-    this._els.exportBtn = this.shadowRoot.getElementById('exportBtn');
     this._els.yamlModal = this.shadowRoot.getElementById('yamlModal');
     this._els.yamlOutput = this.shadowRoot.getElementById('yamlOutput');
 
@@ -776,14 +762,6 @@ class SpatialLightColorCard extends HTMLElement {
         border-bottom: 1px solid var(--border-subtle); background: var(--surface-secondary);
       }
       .title { font-size: 14px; font-weight: 600; color: var(--text-secondary); letter-spacing: -0.01em; }
-      .settings-btn {
-        width: 32px; height: 32px; border: none; background: transparent; color: var(--text-tertiary);
-        border-radius: var(--radius-sm); cursor: pointer; font-size: 18px; display: flex; align-items: center; justify-content: center;
-        transition: transform var(--transition-fast), background var(--transition-fast), color var(--transition-fast);
-      }
-      .settings-btn:hover { background: var(--surface-tertiary); color: var(--text-secondary); transform: rotate(24deg); }
-      .settings-btn:active { transform: rotate(24deg) scale(0.96); }
-      .settings-btn:focus-visible { outline: 2px solid var(--accent-primary); outline-offset: 2px; }
 
       .canvas-wrapper { position: relative; }
       .canvas {
@@ -1070,39 +1048,6 @@ class SpatialLightColorCard extends HTMLElement {
       }
       .slider-value { font-size: 13px; color: var(--text-secondary); min-width: 56px; text-align:right; font-weight: 700; letter-spacing: 0.01em; align-self:center; }
 
-      .settings-panel {
-        position: absolute; top: 16px; right: 16px;
-        background: rgba(20,20,20,0.98); backdrop-filter: blur(16px) saturate(160%);
-        border:1px solid var(--border-medium); border-radius:12px; padding:16px; min-width: 220px;
-        box-shadow: var(--shadow-md); opacity:0; pointer-events:none; transform: translateY(-6px);
-        transition: opacity var(--transition-base), transform var(--transition-base); z-index:100;
-        max-height: calc(100% - 32px); overflow-y: auto;
-      }
-      .settings-panel.visible { opacity:1; pointer-events:auto; transform: translateY(0); }
-      .settings-section { margin-bottom: 12px; }
-      .settings-section:last-child { margin-bottom: 0; }
-      .settings-label { font-size:11px; color: var(--text-tertiary); text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 6px; font-weight: 700; }
-      .settings-option { display:flex; align-items:center; justify-content:space-between; padding: 6px 0; color: var(--text-secondary); font-size:14px; }
-
-      .toggle {
-        width: 44px; height:24px; background: var(--surface-tertiary); border:1px solid var(--border-subtle);
-        border-radius: 9999px; position:relative; cursor:pointer; transition: all var(--transition-base);
-      }
-      .toggle.on { background: var(--accent-primary); border-color: var(--accent-primary); }
-      .toggle::after {
-        content:''; position:absolute; width:18px; height:18px; background: var(--text-primary); border-radius: 9999px; top:2px; left:2px;
-        transition: left 220ms cubic-bezier(0.34,1.56,0.64,1);
-      }
-      .toggle.on::after { left: calc(100% - 20px); }
-
-      .settings-button {
-        width:100%; padding: 8px 10px; background: var(--surface-tertiary); border:1px solid var(--border-subtle);
-        color: var(--text-secondary); border-radius: 8px; cursor:pointer; font-size:13px; font-weight:600;
-        transition: background var(--transition-fast), border-color var(--transition-fast), transform var(--transition-fast);
-      }
-      .settings-button:hover { background: var(--surface-elevated); border-color: var(--border-medium); color: var(--text-primary); }
-      .settings-button:active { transform: scale(0.98); }
-
       .modal-overlay {
         position: fixed; inset: 0; background: rgba(0,0,0,0.8); backdrop-filter: blur(8px);
         display:none; align-items:center; justify-content:center; z-index:1000; padding:16px;
@@ -1143,7 +1088,7 @@ class SpatialLightColorCard extends HTMLElement {
       .empty-state-title { font-size: 16px; font-weight: 600; color: var(--text-secondary); }
       .empty-state-text { font-size: 13px; color: var(--text-tertiary); text-align: center; max-width: 280px; line-height: 1.5; }
 
-      .settings-btn:focus-visible, .modal-close:focus-visible, .settings-button:focus-visible { outline: 2px solid var(--accent-primary); outline-offset: 2px; }
+      .modal-close:focus-visible { outline: 2px solid var(--accent-primary); outline-offset: 2px; }
 
       :host(.overlay-active) .light,
       :host(.overlay-active) .light.selected,
@@ -1158,9 +1103,6 @@ class SpatialLightColorCard extends HTMLElement {
     return `
       <div class="header">
         <div class="title">${this._config.title}</div>
-        ${this._config.show_settings_button ? `
-          <button class="settings-btn" id="settingsBtn" aria-label="Settings" aria-expanded="${this._settingsOpen}">⚙</button>
-        ` : ''}
       </div>
     `;
   }
@@ -1338,27 +1280,6 @@ class SpatialLightColorCard extends HTMLElement {
             <span class="slider-value" id="temperatureValue">${clampedTemp}K</span>
           </div>
           ${this._renderTemperaturePresets()}
-        </div>
-      </div>
-    `;
-  }
-
-  _renderSettings() {
-    return `
-      <div class="settings-panel ${this._settingsOpen ? 'visible' : ''}" id="settingsPanel" role="dialog" aria-label="Settings">
-        <div class="settings-section">
-          <div class="settings-label">Positioning</div>
-          <div class="settings-option">
-            <span>Lock Positions</span>
-            <button class="toggle ${this._lockPositions ? 'on' : ''}" id="lockToggle" role="switch" aria-checked="${this._lockPositions}" aria-label="Lock positions"></button>
-          </div>
-        </div>
-        <div class="settings-section">
-          <div class="settings-label">Layout</div>
-          <button class="settings-button" id="rearrangeBtn">Rearrange All Lights</button>
-        </div>
-        <div class="settings-section">
-          <button class="settings-button" id="exportBtn">Export Configuration</button>
         </div>
       </div>
     `;
@@ -1562,10 +1483,6 @@ class SpatialLightColorCard extends HTMLElement {
       this._boundKeyDown = null;
     }
     if (this._raf) cancelAnimationFrame(this._raf);
-    if (this._boundCloseSettings) {
-      document.removeEventListener('click', this._boundCloseSettings);
-      this._boundCloseSettings = null;
-    }
     if (this._boundIconsetAdded && typeof window !== 'undefined') {
       window.removeEventListener('iron-iconset-added', this._boundIconsetAdded);
       this._boundIconsetAdded = null;
@@ -1610,68 +1527,6 @@ class SpatialLightColorCard extends HTMLElement {
       this._els.canvas.addEventListener('pointercancel', (e) => this._onPointerCancel(e));
       this._els.canvas.addEventListener('dblclick', (e) => this._handleCanvasDoubleClick(e));
       this._els.canvas.addEventListener('contextmenu', (e) => this._handleCanvasContextMenu(e));
-    }
-
-    // Settings button (no full re-render)
-    if (this._els.settingsBtn) {
-      this._els.settingsBtn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        this._settingsOpen = !this._settingsOpen;
-        if (this._els.settingsPanel) this._els.settingsPanel.classList.toggle('visible', this._settingsOpen);
-        this._els.settingsBtn.setAttribute('aria-expanded', String(this._settingsOpen));
-        this._syncOverlayState();
-      });
-    }
-
-    // Close settings when clicking outside (delegate to document)
-    if (this._boundCloseSettings) {
-      document.removeEventListener('click', this._boundCloseSettings);
-      this._boundCloseSettings = null;
-    }
-    this._boundCloseSettings = (e) => {
-      if (this._settingsOpen &&
-        !e.target.closest('.settings-panel') &&
-        !e.target.closest('.settings-btn')) {
-        this._settingsOpen = false;
-        if (this._els.settingsPanel) this._els.settingsPanel.classList.remove('visible');
-        if (this._els.settingsBtn) this._els.settingsBtn.setAttribute('aria-expanded', 'false');
-        this._syncOverlayState();
-      }
-    };
-    document.addEventListener('click', this._boundCloseSettings);
-
-    // Prevent settings panel clicks from propagating to the document close handler
-    if (this._els.settingsPanel) {
-      this._els.settingsPanel.addEventListener('click', (e) => {
-        e.stopPropagation();
-      });
-    }
-
-    if (this._els.lockToggle) {
-      this._els.lockToggle.addEventListener('click', () => {
-        this._lockPositions = !this._lockPositions;
-        this._els.lockToggle.classList.toggle('on', this._lockPositions);
-        this._els.lockToggle.setAttribute('aria-checked', String(this._lockPositions));
-        // Update cursor affordance without re-render:
-        this.shadowRoot.querySelectorAll('.light').forEach(l => {
-          l.style.cursor = this._lockPositions ? 'pointer' : 'grab';
-        });
-      });
-    }
-
-    if (this._els.rearrangeBtn) {
-      this._els.rearrangeBtn.addEventListener('click', () => {
-        this._rearrangeAllLights();
-      });
-    }
-
-    if (this._els.exportBtn) {
-      this._els.exportBtn.addEventListener('click', () => {
-        this._yamlModalOpen = true;
-        if (this._els.yamlModal) this._els.yamlModal.classList.add('visible');
-        if (this._els.yamlOutput) this._els.yamlOutput.textContent = this._generateYAML();
-        this._syncOverlayState();
-      });
     }
 
     // Modal close
@@ -1871,9 +1726,7 @@ class SpatialLightColorCard extends HTMLElement {
     // Escape → deselect and close panels
     if (e.key === 'Escape') {
       this._selectedLights.clear();
-      if (this._settingsOpen) this._settingsOpen = false;
       if (this._yamlModalOpen) this._yamlModalOpen = false;
-      if (this._els.settingsPanel) this._els.settingsPanel.classList.remove('visible');
       if (this._els.yamlModal) this._els.yamlModal.classList.remove('visible');
       if (this._moreInfoOpen) {
         this.dispatchEvent(new CustomEvent('hass-more-info', {
@@ -2234,7 +2087,7 @@ class SpatialLightColorCard extends HTMLElement {
   }
 
   _syncOverlayState() {
-    const overlayActive = this._settingsOpen || this._yamlModalOpen || this._moreInfoOpen;
+    const overlayActive = this._yamlModalOpen || this._moreInfoOpen;
     this.classList.toggle('overlay-active', overlayActive);
   }
 
@@ -2864,7 +2717,6 @@ class SpatialLightColorCard extends HTMLElement {
     yamlLines.push(`canvas_height: ${this._config.canvas_height}`);
     yamlLines.push(`grid_size: ${this._config.grid_size}`);
     if (this._config.label_mode) yamlLines.push(`label_mode: ${this._config.label_mode}`);
-    yamlLines.push(`show_settings_button: ${this._config.show_settings_button !== false}`);
     yamlLines.push(`always_show_controls: ${!!this._config.always_show_controls}`);
     yamlLines.push(`controls_below: ${!!this._config.controls_below}`);
     yamlLines.push(`show_entity_icons: ${!!this._config.show_entity_icons}`);
@@ -2962,7 +2814,7 @@ class SpatialLightColorCard extends HTMLElement {
     return {
       entities: [], positions: {}, title: '',
       canvas_height: 450, grid_size: 25, label_mode: 'smart',
-      show_settings_button: true, always_show_controls: false, controls_below: true,
+      always_show_controls: false, controls_below: true,
       default_entity: null, show_entity_icons: false, icon_style: 'mdi',
       light_size: 56, icon_only_mode: false, size_overrides: {}, icon_only_overrides: {},
       switch_on_color: '#ffa500', switch_off_color: '#2a2a2a', scene_color: '#6366f1',
@@ -2981,7 +2833,7 @@ class SpatialLightColorCardEditor extends HTMLElement {
     this._hass = null;
     this._configFromEditor = false;
     this._editorId = Math.random().toString(36).substr(2, 9);
-    this._expandedEntity = null; // which entity's per-entity settings are expanded
+    this._expandedEntity = null;
     this._boundPositionHandler = null;
   }
 
@@ -3001,7 +2853,6 @@ class SpatialLightColorCardEditor extends HTMLElement {
       window.removeEventListener('spatial-card-positions-changed', this._boundPositionHandler);
       this._boundPositionHandler = null;
     }
-    // Ensure edit positions is off when editor closes
     if (this._config._edit_positions) {
       delete this._config._edit_positions;
       delete this._config._editor_id;
@@ -3038,7 +2889,9 @@ class SpatialLightColorCardEditor extends HTMLElement {
     if (!this._hass || !this.shadowRoot) return;
     this.shadowRoot.querySelectorAll('ha-entity-picker').forEach(picker => {
       picker.hass = this._hass;
-      picker.includeDomains = ['light', 'switch', 'scene', 'input_boolean'];
+      if (!picker.includeDomains || picker.includeDomains.length === 0) {
+        picker.includeDomains = ['light', 'switch', 'scene', 'input_boolean'];
+      }
     });
   }
 
@@ -3080,7 +2933,6 @@ class SpatialLightColorCardEditor extends HTMLElement {
       .section.collapsed .section-body { display: none; }
       .section-body { padding: 12px 16px; display: flex; flex-direction: column; gap: 12px; }
 
-      /* Entity items */
       .entity-list { display: flex; flex-direction: column; gap: 4px; }
       .entity-item {
         border: 1px solid var(--divider-color, rgba(0,0,0,0.08));
@@ -3145,13 +2997,14 @@ class SpatialLightColorCardEditor extends HTMLElement {
       }
 
       .add-entity-row { padding-top: 4px; }
-      .add-entity-row ha-entity-picker { width: 100%; display: block; }
+      .add-entity-row ha-entity-picker {
+        width: 100%; display: block;
+      }
       .empty-entities {
         text-align: center; padding: 20px 16px;
         color: var(--secondary-text-color, #727272); font-size: 13px; line-height: 1.5;
       }
 
-      /* Form elements */
       .option-row {
         display: flex; align-items: center; justify-content: space-between;
         min-height: 40px; gap: 16px;
@@ -3162,7 +3015,8 @@ class SpatialLightColorCardEditor extends HTMLElement {
       .input-row label { font-size: 12px; font-weight: 500; color: var(--secondary-text-color, #727272); }
       .input-row input[type="number"],
       .input-row input[type="text"],
-      .input-row input[type="url"] {
+      .input-row input[type="url"],
+      .input-row input[type="color"] {
         width: 100%; padding: 8px 12px;
         border: 1px solid var(--divider-color, rgba(0,0,0,0.12));
         border-radius: 6px; font-size: 14px; color: var(--primary-text-color, #212121);
@@ -3178,6 +3032,7 @@ class SpatialLightColorCardEditor extends HTMLElement {
         outline: none; cursor: pointer;
       }
       .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+      .three-col { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; }
       .slider-row { display: flex; align-items: center; gap: 12px; }
       .slider-row input[type="range"] {
         flex: 1; -webkit-appearance: none; appearance: none; height: 6px;
@@ -3203,6 +3058,53 @@ class SpatialLightColorCardEditor extends HTMLElement {
         border: 1px solid color-mix(in srgb, var(--primary-color, #03a9f4) 30%, transparent);
         font-size: 12px; color: var(--primary-text-color, #212121); line-height: 1.5;
       }
+
+      .action-btn {
+        padding: 8px 14px; border-radius: 6px; cursor: pointer; font-size: 13px; font-weight: 500;
+        border: 1px solid var(--divider-color, rgba(0,0,0,0.12));
+        background: var(--secondary-background-color, #fafafa);
+        color: var(--primary-text-color, #212121);
+        transition: background 150ms ease;
+      }
+      .action-btn:hover { background: var(--divider-color, rgba(0,0,0,0.06)); }
+
+      .color-input-row {
+        display: flex; align-items: center; gap: 8px;
+      }
+      .color-input-row input[type="color"] {
+        width: 36px; height: 36px; padding: 2px; border-radius: 6px; cursor: pointer;
+        flex-shrink: 0;
+      }
+      .color-input-row input[type="text"] {
+        flex: 1; padding: 8px 12px;
+        border: 1px solid var(--divider-color, rgba(0,0,0,0.12));
+        border-radius: 6px; font-size: 14px; color: var(--primary-text-color, #212121);
+        background: var(--card-background-color, #fff); box-sizing: border-box;
+        outline: none; font-family: monospace;
+      }
+
+      .color-presets-list {
+        display: flex; flex-wrap: wrap; gap: 6px; align-items: center;
+      }
+      .color-preset-chip {
+        width: 28px; height: 28px; border-radius: 6px; cursor: pointer;
+        border: 1px solid var(--divider-color, rgba(0,0,0,0.12));
+        position: relative; display: flex; align-items: center; justify-content: center;
+      }
+      .color-preset-chip:hover { opacity: 0.8; }
+      .color-preset-chip .remove-preset {
+        display: none; position: absolute; inset: 0; background: rgba(0,0,0,0.5);
+        border-radius: 6px; color: white; font-size: 14px;
+        align-items: center; justify-content: center;
+      }
+      .color-preset-chip:hover .remove-preset { display: flex; }
+      .add-preset-btn {
+        width: 28px; height: 28px; border-radius: 6px; cursor: pointer;
+        border: 1px dashed var(--divider-color, rgba(0,0,0,0.3));
+        background: transparent; color: var(--secondary-text-color, #727272);
+        display: flex; align-items: center; justify-content: center; font-size: 16px;
+      }
+      .add-preset-btn:hover { border-color: var(--primary-color, #03a9f4); color: var(--primary-color, #03a9f4); }
     `;
   }
 
@@ -3257,28 +3159,11 @@ class SpatialLightColorCardEditor extends HTMLElement {
     const config = this._config;
     const entities = config.entities || [];
     const editPositions = !!config._edit_positions;
+    const presets = Array.isArray(config.color_presets) ? config.color_presets : [];
 
     this.shadowRoot.innerHTML = `
       <style>${this._editorStyles()}</style>
       <div class="card-config">
-
-        <!-- Edit Positions -->
-        <div class="section" id="section-positions">
-          <div class="section-header" data-section="positions">
-            <h3>Positions</h3>
-            <span class="chevron">&#9660;</span>
-          </div>
-          <div class="section-body">
-            <div class="option-row">
-              <div>
-                <div class="label">Edit Positions</div>
-                <div class="sublabel">Drag entities on the card preview to reposition</div>
-              </div>
-              <ha-switch id="cfgEditPositions"></ha-switch>
-            </div>
-            ${editPositions ? '<div class="edit-positions-banner">Position editing is active. Drag lights on the card preview above to reposition them. Changes are saved automatically.</div>' : ''}
-          </div>
-        </div>
 
         <!-- Entities Section -->
         <div class="section" id="section-entities">
@@ -3294,6 +3179,25 @@ class SpatialLightColorCardEditor extends HTMLElement {
             <div class="add-entity-row">
               <ha-entity-picker id="addEntityPicker" label="Add entity..."></ha-entity-picker>
             </div>
+          </div>
+        </div>
+
+        <!-- Positions Section -->
+        <div class="section" id="section-positions">
+          <div class="section-header" data-section="positions">
+            <h3>Positions</h3>
+            <span class="chevron">&#9660;</span>
+          </div>
+          <div class="section-body">
+            <div class="option-row">
+              <div>
+                <div class="label">Edit Positions</div>
+                <div class="sublabel">Drag entities on the card preview to reposition</div>
+              </div>
+              <ha-switch id="cfgEditPositions"></ha-switch>
+            </div>
+            ${editPositions ? '<div class="edit-positions-banner">Position editing is active. Drag lights on the card preview above to reposition them. Changes are saved automatically.</div>' : ''}
+            <button class="action-btn" id="rearrangeBtn">Rearrange All in Grid</button>
           </div>
         </div>
 
@@ -3377,8 +3281,71 @@ class SpatialLightColorCardEditor extends HTMLElement {
           </div>
         </div>
 
+        <!-- Colors Section -->
+        <div class="section collapsed" id="section-colors">
+          <div class="section-header" data-section="colors">
+            <h3>Colors</h3>
+            <span class="chevron">&#9660;</span>
+          </div>
+          <div class="section-body">
+            <div class="input-row">
+              <label>Switch On Color</label>
+              <div class="color-input-row">
+                <input type="color" id="cfgSwitchOnColorPicker" value="${this._esc(config.switch_on_color || '#ffa500')}">
+                <input type="text" id="cfgSwitchOnColor" placeholder="#ffa500">
+              </div>
+            </div>
+            <div class="input-row">
+              <label>Switch Off Color</label>
+              <div class="color-input-row">
+                <input type="color" id="cfgSwitchOffColorPicker" value="${this._esc(config.switch_off_color || '#3a3a3a')}">
+                <input type="text" id="cfgSwitchOffColor" placeholder="#3a3a3a">
+              </div>
+            </div>
+            <div class="input-row">
+              <label>Scene Color</label>
+              <div class="color-input-row">
+                <input type="color" id="cfgSceneColorPicker" value="${this._esc(config.scene_color || '#6366f1')}">
+                <input type="text" id="cfgSceneColor" placeholder="#6366f1">
+              </div>
+            </div>
+            <div class="input-row">
+              <label>Color Presets</label>
+              <div class="color-presets-list" id="colorPresetsList">
+                ${presets.map((c, i) => `
+                  <div class="color-preset-chip" data-index="${i}" style="background:${this._esc(c)};" title="${this._esc(c)}">
+                    <span class="remove-preset" data-index="${i}">&times;</span>
+                  </div>
+                `).join('')}
+                <button class="add-preset-btn" id="addPresetBtn" title="Add color preset">+</button>
+              </div>
+              <input type="color" id="presetColorPicker" style="display:none;">
+            </div>
+          </div>
+        </div>
+
+        <!-- Temperature Section -->
+        <div class="section collapsed" id="section-temperature">
+          <div class="section-header" data-section="temperature">
+            <h3>Temperature Range</h3>
+            <span class="chevron">&#9660;</span>
+          </div>
+          <div class="section-body">
+            <div class="two-col">
+              <div class="input-row">
+                <label for="cfgTempMin">Min Temperature (K)</label>
+                <input type="number" id="cfgTempMin" min="1000" max="10000" step="100" placeholder="Auto">
+              </div>
+              <div class="input-row">
+                <label for="cfgTempMax">Max Temperature (K)</label>
+                <input type="number" id="cfgTempMax" min="1000" max="10000" step="100" placeholder="Auto">
+              </div>
+            </div>
+          </div>
+        </div>
+
         <!-- Layout Section -->
-        <div class="section" id="section-layout">
+        <div class="section collapsed" id="section-layout">
           <div class="section-header" data-section="layout">
             <h3>Layout</h3>
             <span class="chevron">&#9660;</span>
@@ -3388,15 +3355,11 @@ class SpatialLightColorCardEditor extends HTMLElement {
               <div><div class="label">Controls Below Canvas</div><div class="sublabel">Place controls below instead of floating overlay</div></div>
               <ha-switch id="cfgControlsBelow"></ha-switch>
             </div>
-            <div class="option-row">
-              <div><div class="label">Show Settings Button</div><div class="sublabel">Show gear icon for runtime settings</div></div>
-              <ha-switch id="cfgShowSettings"></ha-switch>
-            </div>
           </div>
         </div>
 
         <!-- Interaction Section -->
-        <div class="section" id="section-interaction">
+        <div class="section collapsed" id="section-interaction">
           <div class="section-header" data-section="interaction">
             <h3>Interaction</h3>
             <span class="chevron">&#9660;</span>
@@ -3414,7 +3377,12 @@ class SpatialLightColorCardEditor extends HTMLElement {
 
     this._setDOMValues();
     this._attachEditorListeners();
-    requestAnimationFrame(() => this._setupEntityPickers());
+    // Setup entity pickers after DOM is ready
+    requestAnimationFrame(() => {
+      this._setupEntityPickers();
+      // Double-ensure in case custom element wasn't upgraded yet
+      setTimeout(() => this._setupEntityPickers(), 100);
+    });
   }
 
   _setDOMValues() {
@@ -3439,6 +3407,18 @@ class SpatialLightColorCardEditor extends HTMLElement {
     }
     setVal('cfgBgImage', bgUrl);
 
+    // Colors
+    setVal('cfgSwitchOnColor', c.switch_on_color || '#ffa500');
+    setVal('cfgSwitchOnColorPicker', c.switch_on_color || '#ffa500');
+    setVal('cfgSwitchOffColor', c.switch_off_color || '#3a3a3a');
+    setVal('cfgSwitchOffColorPicker', c.switch_off_color || '#3a3a3a');
+    setVal('cfgSceneColor', c.scene_color || '#6366f1');
+    setVal('cfgSceneColorPicker', c.scene_color || '#6366f1');
+
+    // Temperature
+    setVal('cfgTempMin', c.temperature_min != null ? c.temperature_min : '');
+    setVal('cfgTempMax', c.temperature_max != null ? c.temperature_max : '');
+
     // Switches
     const switches = {
       cfgEditPositions: !!c._edit_positions,
@@ -3448,7 +3428,6 @@ class SpatialLightColorCardEditor extends HTMLElement {
       cfgLiveColors: c.show_live_colors || false,
       cfgAlwaysControls: c.always_show_controls || false,
       cfgControlsBelow: c.controls_below !== false,
-      cfgShowSettings: c.show_settings_button !== false,
       cfgSwitchTap: c.switch_single_tap || false,
     };
     const setChecked = () => {
@@ -3490,8 +3469,30 @@ class SpatialLightColorCardEditor extends HTMLElement {
           delete this._config._editor_id;
         }
         this._fireConfigChanged();
-        // Re-render to show/hide the banner
         this._render();
+      });
+    }
+
+    // --- Rearrange button ---
+    const rearrangeBtn = root.getElementById('rearrangeBtn');
+    if (rearrangeBtn) {
+      rearrangeBtn.addEventListener('click', () => {
+        const entities = this._config.entities || [];
+        if (entities.length === 0) return;
+        const cols = Math.ceil(Math.sqrt(entities.length * 1.5));
+        const rows = Math.ceil(entities.length / cols);
+        const spacing = 100 / (cols + 1);
+        const newPositions = {};
+        entities.forEach((entity, idx) => {
+          const col = idx % cols;
+          const row = Math.floor(idx / cols);
+          newPositions[entity] = {
+            x: spacing * (col + 1),
+            y: (100 / (rows + 1)) * (row + 1),
+          };
+        });
+        this._config.positions = newPositions;
+        this._fireConfigChanged();
       });
     }
 
@@ -3501,7 +3502,6 @@ class SpatialLightColorCardEditor extends HTMLElement {
         e.stopPropagation();
         const entity = btn.closest('.entity-item').dataset.entity;
         this._expandedEntity = (this._expandedEntity === entity) ? null : entity;
-        // Toggle expanded class without full re-render
         root.querySelectorAll('.entity-item').forEach(item => {
           item.classList.toggle('expanded', item.dataset.entity === this._expandedEntity);
         });
@@ -3529,14 +3529,20 @@ class SpatialLightColorCardEditor extends HTMLElement {
     // --- Add entity picker ---
     const addPicker = root.getElementById('addEntityPicker');
     if (addPicker) {
-      addPicker.addEventListener('value-changed', (ev) => {
-        const val = ev.detail.value;
+      // Listen on both the picker and via event delegation for value-changed
+      const handleAdd = (val) => {
         if (val && !(this._config.entities || []).includes(val)) {
           if (!this._config.entities) this._config.entities = [];
           this._config.entities.push(val);
           this._fireConfigChanged();
           this._render();
         }
+      };
+      addPicker.addEventListener('value-changed', (ev) => {
+        handleAdd(ev.detail && ev.detail.value);
+      });
+      addPicker.addEventListener('change', () => {
+        handleAdd(addPicker.value);
       });
     }
 
@@ -3563,7 +3569,6 @@ class SpatialLightColorCardEditor extends HTMLElement {
         if (!this._config.color_overrides) this._config.color_overrides = {};
         if (val) { this._config.color_overrides[entity] = val; }
         else { delete this._config.color_overrides[entity]; }
-        // Update color preview
         const preview = root.querySelector(`.color-preview[data-entity="${entity}"]`);
         if (preview) preview.style.background = val || 'transparent';
       });
@@ -3613,7 +3618,6 @@ class SpatialLightColorCardEditor extends HTMLElement {
     this._bindSwitch('cfgLiveColors', 'show_live_colors');
     this._bindSwitch('cfgAlwaysControls', 'always_show_controls');
     this._bindSwitch('cfgControlsBelow', 'controls_below');
-    this._bindSwitch('cfgShowSettings', 'show_settings_button');
     this._bindSwitch('cfgSwitchTap', 'switch_single_tap');
 
     // Light size slider
@@ -3626,6 +3630,81 @@ class SpatialLightColorCardEditor extends HTMLElement {
         if (Number.isFinite(v) && v > 0) { this._config.light_size = v; this._fireConfigChanged(); }
       });
     }
+
+    // --- Color inputs (synced picker + text) ---
+    this._bindColorPair('cfgSwitchOnColor', 'cfgSwitchOnColorPicker', 'switch_on_color', '#ffa500');
+    this._bindColorPair('cfgSwitchOffColor', 'cfgSwitchOffColorPicker', 'switch_off_color', '#3a3a3a');
+    this._bindColorPair('cfgSceneColor', 'cfgSceneColorPicker', 'scene_color', '#6366f1');
+
+    // --- Color presets ---
+    root.querySelectorAll('.color-preset-chip .remove-preset').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const idx = parseInt(btn.dataset.index, 10);
+        if (!Array.isArray(this._config.color_presets)) return;
+        this._config.color_presets.splice(idx, 1);
+        this._fireConfigChanged();
+        this._render();
+      });
+    });
+
+    const addPresetBtn = root.getElementById('addPresetBtn');
+    const presetPicker = root.getElementById('presetColorPicker');
+    if (addPresetBtn && presetPicker) {
+      addPresetBtn.addEventListener('click', () => presetPicker.click());
+      presetPicker.addEventListener('input', (e) => {
+        const color = e.target.value;
+        if (!Array.isArray(this._config.color_presets)) this._config.color_presets = [];
+        this._config.color_presets.push(color);
+        this._fireConfigChanged();
+        this._render();
+      });
+    }
+
+    // --- Temperature inputs ---
+    this._bindNumberInput('cfgTempMin', (val) => {
+      this._config.temperature_min = (val >= 1000 && val <= 10000) ? val : null;
+    });
+    this._bindNumberInput('cfgTempMax', (val) => {
+      this._config.temperature_max = (val >= 1000 && val <= 10000) ? val : null;
+    });
+  }
+
+  _bindColorPair(textId, pickerId, configKey, fallback) {
+    const root = this.shadowRoot;
+    const textEl = root.getElementById(textId);
+    const pickerEl = root.getElementById(pickerId);
+    if (!textEl || !pickerEl) return;
+
+    let timer = null;
+    textEl.addEventListener('input', () => {
+      clearTimeout(timer);
+      timer = setTimeout(() => {
+        const val = textEl.value.trim();
+        if (val) {
+          this._config[configKey] = val;
+          // Try to sync picker (only valid 6-digit hex)
+          if (/^#[0-9a-fA-F]{6}$/.test(val)) pickerEl.value = val;
+        } else {
+          this._config[configKey] = fallback;
+          pickerEl.value = fallback;
+        }
+        this._fireConfigChanged();
+      }, 400);
+    });
+    textEl.addEventListener('change', () => {
+      clearTimeout(timer);
+      const val = textEl.value.trim() || fallback;
+      this._config[configKey] = val;
+      if (/^#[0-9a-fA-F]{6}$/.test(val)) pickerEl.value = val;
+      this._fireConfigChanged();
+    });
+
+    pickerEl.addEventListener('input', () => {
+      textEl.value = pickerEl.value;
+      this._config[configKey] = pickerEl.value;
+      this._fireConfigChanged();
+    });
   }
 
   _bindEntityOverride(inputEl, setter) {
@@ -3650,7 +3729,12 @@ class SpatialLightColorCardEditor extends HTMLElement {
   _bindNumberInput(id, setter) {
     const el = this.shadowRoot.getElementById(id);
     if (!el) return;
-    el.addEventListener('change', () => { const v = parseInt(el.value, 10); if (Number.isFinite(v)) { setter(v); this._fireConfigChanged(); } });
+    el.addEventListener('change', () => {
+      const raw = el.value.trim();
+      if (raw === '') { setter(null); this._fireConfigChanged(); return; }
+      const v = parseInt(raw, 10);
+      if (Number.isFinite(v)) { setter(v); this._fireConfigChanged(); }
+    });
   }
 
   _bindSwitch(id, key) {

@@ -57,11 +57,6 @@ class SpatialLightColorCard extends HTMLElement {
       settingsBtn: null,
       settingsPanel: null,
       lockToggle: null,
-      iconToggle: null,
-      iconOnlyToggle: null,
-      lightSizeSlider: null,
-      lightSizeValue: null,
-      switchTapToggle: null,
       rearrangeBtn: null,
       exportBtn: null,
       yamlModal: null,
@@ -671,10 +666,10 @@ class SpatialLightColorCard extends HTMLElement {
         <div class="canvas-wrapper">
           <div class="canvas" id="canvas" role="application" aria-label="Spatial light control area" style="${this._canvasBackgroundStyle()}">
             <div class="grid"></div>
-            ${this._renderLightsHTML()}
+            ${this._config.entities.length === 0 ? this._renderEmptyState() : this._renderLightsHTML()}
             ${controlsPosition === 'floating' ? this._renderControlsFloating(showControls, controlContext) : ''}
-            ${this._renderSettings()}
           </div>
+          ${this._renderSettings()}
           ${controlsPosition === 'below' ? this._renderControlsBelow(controlContext) : ''}
         </div>
         ${this._renderYamlModal()}
@@ -693,11 +688,6 @@ class SpatialLightColorCard extends HTMLElement {
     this._els.settingsBtn = this.shadowRoot.getElementById('settingsBtn');
     this._els.settingsPanel = this.shadowRoot.getElementById('settingsPanel');
     this._els.lockToggle = this.shadowRoot.getElementById('lockToggle');
-    this._els.iconToggle = this.shadowRoot.getElementById('iconToggle');
-    this._els.iconOnlyToggle = this.shadowRoot.getElementById('iconOnlyToggle');
-    this._els.lightSizeSlider = this.shadowRoot.getElementById('lightSizeSlider');
-    this._els.lightSizeValue = this.shadowRoot.getElementById('lightSizeValue');
-    this._els.switchTapToggle = this.shadowRoot.getElementById('switchTapToggle');
     this._els.rearrangeBtn = this.shadowRoot.getElementById('rearrangeBtn');
     this._els.exportBtn = this.shadowRoot.getElementById('exportBtn');
     this._els.yamlModal = this.shadowRoot.getElementById('yamlModal');
@@ -1073,9 +1063,10 @@ class SpatialLightColorCard extends HTMLElement {
       .settings-panel {
         position: absolute; top: 16px; right: 16px;
         background: rgba(20,20,20,0.98); backdrop-filter: blur(16px) saturate(160%);
-        border:1px solid var(--border-medium); border-radius:12px; padding:16px; min-width: 260px;
+        border:1px solid var(--border-medium); border-radius:12px; padding:16px; min-width: 220px;
         box-shadow: var(--shadow-md); opacity:0; pointer-events:none; transform: translateY(-6px);
         transition: opacity var(--transition-base), transform var(--transition-base); z-index:100;
+        max-height: calc(100% - 32px); overflow-y: auto;
       }
       .settings-panel.visible { opacity:1; pointer-events:auto; transform: translateY(0); }
       .settings-section { margin-bottom: 12px; }
@@ -1101,24 +1092,6 @@ class SpatialLightColorCard extends HTMLElement {
       }
       .settings-button:hover { background: var(--surface-elevated); border-color: var(--border-medium); color: var(--text-primary); }
       .settings-button:active { transform: scale(0.98); }
-
-      .settings-size-row { flex-wrap: wrap; }
-      .settings-size-control { display: flex; align-items: center; gap: 8px; width: 100%; margin-top: 6px; }
-      .settings-slider {
-        flex: 1; -webkit-appearance: none; appearance: none;
-        height: 6px; background: var(--surface-tertiary); border-radius: 3px; cursor: pointer;
-      }
-      .settings-slider::-webkit-slider-thumb {
-        -webkit-appearance: none; width: 16px; height: 16px; border-radius: 50%;
-        background: var(--accent-primary); border: 2px solid var(--surface-primary);
-        cursor: pointer; transition: transform var(--transition-fast);
-      }
-      .settings-slider::-webkit-slider-thumb:hover { transform: scale(1.1); }
-      .settings-slider::-moz-range-thumb {
-        width: 16px; height: 16px; border-radius: 50%; background: var(--accent-primary);
-        border: 2px solid var(--surface-primary); cursor: pointer;
-      }
-      .settings-size-value { font-size: 12px; color: var(--text-tertiary); min-width: 40px; text-align: right; }
 
       .modal-overlay {
         position: fixed; inset: 0; background: rgba(0,0,0,0.8); backdrop-filter: blur(8px);
@@ -1151,6 +1124,14 @@ class SpatialLightColorCard extends HTMLElement {
         .color-wheel-presets-wrap { flex-direction: row; gap: 12px; }
         .color-presets { flex-direction: row; flex-wrap: wrap; max-width: none; }
       }
+
+      .empty-state {
+        position: absolute; inset: 0; display: flex; flex-direction: column;
+        align-items: center; justify-content: center; gap: 12px; pointer-events: none;
+      }
+      .empty-state-icon { color: var(--text-tertiary); opacity: 0.5; }
+      .empty-state-title { font-size: 16px; font-weight: 600; color: var(--text-secondary); }
+      .empty-state-text { font-size: 13px; color: var(--text-tertiary); text-align: center; max-width: 280px; line-height: 1.5; }
 
       .settings-btn:focus-visible, .modal-close:focus-visible, .settings-button:focus-visible { outline: 2px solid var(--accent-primary); outline-offset: 2px; }
 
@@ -1209,6 +1190,22 @@ class SpatialLightColorCard extends HTMLElement {
       if (domain === 'switch' || domain === 'input_boolean') return this._config.switch_off_color;
       return 'transparent';
     }
+  }
+
+  _renderEmptyState() {
+    return `
+      <div class="empty-state">
+        <div class="empty-state-icon">
+          <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M9 18h6"/>
+            <path d="M10 22h4"/>
+            <path d="M12 2a7 7 0 0 0-4 12.7V17h8v-2.3A7 7 0 0 0 12 2z"/>
+          </svg>
+        </div>
+        <div class="empty-state-title">No entities configured</div>
+        <div class="empty-state-text">Edit this card to add light entities and start building your spatial layout.</div>
+      </div>
+    `;
   }
 
   _renderLightsHTML() {
@@ -1347,41 +1344,8 @@ class SpatialLightColorCard extends HTMLElement {
           </div>
         </div>
         <div class="settings-section">
-          <div class="settings-label">Display</div>
-          <div class="settings-option">
-            <span>Show Entity Icons</span>
-            <button class="toggle ${this._config.show_entity_icons ? 'on' : ''}" id="iconToggle" role="switch" aria-checked="${this._config.show_entity_icons}" aria-label="Show entity icons"></button>
-          </div>
-          <div class="settings-option">
-            <span>Icon-Only Mode</span>
-            <button class="toggle ${this._config.icon_only_mode ? 'on' : ''}" id="iconOnlyToggle" role="switch" aria-checked="${this._config.icon_only_mode}" aria-label="Show icons only without filled circles"></button>
-          </div>
-          <div class="settings-option">
-            <span>Show Live Colors</span>
-            <button class="toggle ${this._config.show_live_colors ? 'on' : ''}" id="liveColorsToggle" role="switch" aria-checked="${this._config.show_live_colors}" aria-label="Show live colors as presets"></button>
-          </div>
-          <div class="settings-option settings-size-row">
-            <span>Light Size</span>
-            <div class="settings-size-control">
-              <input type="range" class="settings-slider" id="lightSizeSlider" min="24" max="96" value="${this._config.light_size}" aria-label="Light size">
-              <span class="settings-size-value" id="lightSizeValue">${this._config.light_size}px</span>
-            </div>
-          </div>
-        </div>
-        <div class="settings-section">
-          <div class="settings-label">Interaction</div>
-          <div class="settings-option">
-            <span>Single-Tap Switch/Scene</span>
-            <button class="toggle ${this._config.switch_single_tap ? 'on' : ''}" id="switchTapToggle" role="switch" aria-checked="${this._config.switch_single_tap}" aria-label="Toggle switches with a single tap"></button>
-          </div>
-        </div>
-        <div class="settings-section">
           <div class="settings-label">Layout</div>
           <button class="settings-button" id="rearrangeBtn">Rearrange All Lights</button>
-        </div>
-        <div class="settings-section">
-          <div class="settings-label">Grid</div>
-          <div class="settings-option"><span>Size: ${this._gridSize}px</span></div>
         </div>
         <div class="settings-section">
           <button class="settings-button" id="exportBtn">Export Configuration</button>
@@ -1666,6 +1630,13 @@ class SpatialLightColorCard extends HTMLElement {
     };
     document.addEventListener('click', this._boundCloseSettings);
 
+    // Prevent settings panel clicks from propagating to the document close handler
+    if (this._els.settingsPanel) {
+      this._els.settingsPanel.addEventListener('click', (e) => {
+        e.stopPropagation();
+      });
+    }
+
     if (this._els.lockToggle) {
       this._els.lockToggle.addEventListener('click', () => {
         this._lockPositions = !this._lockPositions;
@@ -1675,58 +1646,6 @@ class SpatialLightColorCard extends HTMLElement {
         this.shadowRoot.querySelectorAll('.light').forEach(l => {
           l.style.cursor = this._lockPositions ? 'pointer' : 'grab';
         });
-      });
-    }
-
-    if (this._els.iconToggle) {
-      this._els.iconToggle.addEventListener('click', () => {
-        this._config.show_entity_icons = !this._config.show_entity_icons;
-        this._els.iconToggle.classList.toggle('on', this._config.show_entity_icons);
-        this._els.iconToggle.setAttribute('aria-checked', String(this._config.show_entity_icons));
-        // Update light contents
-        this._rerenderLightIconsOnly();
-      });
-    }
-
-    if (this._els.iconOnlyToggle) {
-      this._els.iconOnlyToggle.addEventListener('click', () => {
-        this._config.icon_only_mode = !this._config.icon_only_mode;
-        this._els.iconOnlyToggle.classList.toggle('on', this._config.icon_only_mode);
-        this._els.iconOnlyToggle.setAttribute('aria-checked', String(this._config.icon_only_mode));
-        // Re-render lights with icon-only mode
-        this._rerenderLightsForDisplayMode();
-      });
-    }
-
-    const liveColorsToggle = this.shadowRoot.getElementById('liveColorsToggle');
-    if (liveColorsToggle) {
-      liveColorsToggle.addEventListener('click', () => {
-        this._config.show_live_colors = !this._config.show_live_colors;
-        liveColorsToggle.classList.toggle('on', this._config.show_live_colors);
-        liveColorsToggle.setAttribute('aria-checked', String(this._config.show_live_colors));
-        this._refreshColorPresets();
-      });
-    }
-
-    if (this._els.lightSizeSlider) {
-      this._els.lightSizeSlider.addEventListener('input', (e) => {
-        const newSize = parseInt(e.target.value, 10);
-        if (Number.isFinite(newSize) && newSize > 0) {
-          this._config.light_size = newSize;
-          if (this._els.lightSizeValue) {
-            this._els.lightSizeValue.textContent = `${newSize}px`;
-          }
-          // Update all lights with new size
-          this._updateLightSizes();
-        }
-      });
-    }
-
-    if (this._els.switchTapToggle) {
-      this._els.switchTapToggle.addEventListener('click', () => {
-        this._config.switch_single_tap = !this._config.switch_single_tap;
-        this._els.switchTapToggle.classList.toggle('on', this._config.switch_single_tap);
-        this._els.switchTapToggle.setAttribute('aria-checked', String(this._config.switch_single_tap));
       });
     }
 
@@ -3009,6 +2928,9 @@ class SpatialLightColorCard extends HTMLElement {
   }
 
   getCardSize() { return 8; }
+  static getConfigElement() {
+    return document.createElement('spatial-light-color-card-editor');
+  }
   static getStubConfig() {
     return {
       entities: [], positions: {}, title: '',
@@ -3023,6 +2945,510 @@ class SpatialLightColorCard extends HTMLElement {
   }
 }
 
+/** ---------- Visual Card Editor ---------- */
+class SpatialLightColorCardEditor extends HTMLElement {
+  constructor() {
+    super();
+    this.attachShadow({ mode: 'open' });
+    this._config = {};
+    this._hass = null;
+  }
+
+  set hass(hass) {
+    this._hass = hass;
+    if (this.shadowRoot) {
+      this.shadowRoot.querySelectorAll('ha-entity-picker').forEach(picker => {
+        picker.hass = hass;
+      });
+    }
+  }
+
+  setConfig(config) {
+    this._config = JSON.parse(JSON.stringify(config));
+    this._render();
+  }
+
+  _fireConfigChanged() {
+    const config = JSON.parse(JSON.stringify(this._config));
+    this.dispatchEvent(new CustomEvent('config-changed', {
+      detail: { config },
+      bubbles: true,
+      composed: true,
+    }));
+  }
+
+  _editorStyles() {
+    return `
+      :host {
+        display: block;
+      }
+      .card-config {
+        display: flex;
+        flex-direction: column;
+        gap: 16px;
+      }
+      .section {
+        border: 1px solid var(--divider-color, rgba(0,0,0,0.12));
+        border-radius: 8px;
+        overflow: hidden;
+      }
+      .section-header {
+        padding: 12px 16px;
+        background: var(--secondary-background-color, #fafafa);
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        user-select: none;
+      }
+      .section-header h3 {
+        margin: 0;
+        font-size: 14px;
+        font-weight: 600;
+        color: var(--primary-text-color, #212121);
+      }
+      .section-header .chevron {
+        transition: transform 200ms ease;
+        color: var(--secondary-text-color, #727272);
+        font-size: 18px;
+      }
+      .section.collapsed .section-header .chevron {
+        transform: rotate(-90deg);
+      }
+      .section.collapsed .section-body {
+        display: none;
+      }
+      .section-body {
+        padding: 12px 16px;
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+      }
+      .entity-row {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+      .entity-row ha-entity-picker {
+        flex: 1;
+      }
+      .entity-remove-btn {
+        --mdc-icon-size: 20px;
+        color: var(--secondary-text-color, #727272);
+        cursor: pointer;
+        border: none;
+        background: none;
+        padding: 4px;
+        border-radius: 50%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 18px;
+        line-height: 1;
+        min-width: 28px;
+        min-height: 28px;
+      }
+      .entity-remove-btn:hover {
+        background: var(--secondary-background-color, #fafafa);
+        color: var(--error-color, #db4437);
+      }
+      .add-entity-row {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+      .add-entity-row ha-entity-picker {
+        flex: 1;
+      }
+      .option-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        min-height: 40px;
+        gap: 16px;
+      }
+      .option-row .label {
+        font-size: 14px;
+        color: var(--primary-text-color, #212121);
+        flex: 1;
+      }
+      .option-row .sublabel {
+        font-size: 12px;
+        color: var(--secondary-text-color, #727272);
+        margin-top: 2px;
+      }
+      .input-row {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+      }
+      .input-row label {
+        font-size: 12px;
+        font-weight: 500;
+        color: var(--secondary-text-color, #727272);
+      }
+      .input-row input[type="number"],
+      .input-row input[type="text"] {
+        width: 100%;
+        padding: 8px 12px;
+        border: 1px solid var(--divider-color, rgba(0,0,0,0.12));
+        border-radius: 6px;
+        font-size: 14px;
+        color: var(--primary-text-color, #212121);
+        background: var(--card-background-color, #fff);
+        box-sizing: border-box;
+        outline: none;
+        transition: border-color 150ms ease;
+      }
+      .input-row input:focus {
+        border-color: var(--primary-color, #03a9f4);
+      }
+      .two-col {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 12px;
+      }
+      .slider-row {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+      }
+      .slider-row input[type="range"] {
+        flex: 1;
+        -webkit-appearance: none;
+        appearance: none;
+        height: 6px;
+        background: var(--divider-color, rgba(0,0,0,0.12));
+        border-radius: 3px;
+        cursor: pointer;
+      }
+      .slider-row input[type="range"]::-webkit-slider-thumb {
+        -webkit-appearance: none;
+        width: 18px;
+        height: 18px;
+        border-radius: 50%;
+        background: var(--primary-color, #03a9f4);
+        cursor: pointer;
+      }
+      .slider-row input[type="range"]::-moz-range-thumb {
+        width: 18px;
+        height: 18px;
+        border-radius: 50%;
+        background: var(--primary-color, #03a9f4);
+        cursor: pointer;
+        border: none;
+      }
+      .slider-value {
+        font-size: 13px;
+        color: var(--secondary-text-color, #727272);
+        min-width: 44px;
+        text-align: right;
+        font-variant-numeric: tabular-nums;
+      }
+      .empty-entities {
+        text-align: center;
+        padding: 16px;
+        color: var(--secondary-text-color, #727272);
+        font-size: 13px;
+      }
+      ha-switch {
+        --mdc-theme-secondary: var(--primary-color, #03a9f4);
+      }
+    `;
+  }
+
+  _render() {
+    const config = this._config;
+    const entities = config.entities || [];
+
+    this.shadowRoot.innerHTML = `
+      <style>${this._editorStyles()}</style>
+      <div class="card-config">
+
+        <!-- Entities Section -->
+        <div class="section" id="section-entities">
+          <div class="section-header" data-section="entities">
+            <h3>Entities</h3>
+            <span class="chevron">&#9660;</span>
+          </div>
+          <div class="section-body">
+            <div id="entities-list">
+              ${entities.length === 0 ? '<div class="empty-entities">No entities added yet. Use the picker below to add lights, switches, or scenes.</div>' : ''}
+              ${entities.map((entity, i) => `
+                <div class="entity-row" data-index="${i}">
+                  <ha-entity-picker
+                    data-index="${i}"
+                    allow-custom-entity
+                  ></ha-entity-picker>
+                  <button class="entity-remove-btn" data-index="${i}" title="Remove entity">&times;</button>
+                </div>
+              `).join('')}
+            </div>
+            <div class="add-entity-row">
+              <ha-entity-picker
+                id="addEntityPicker"
+                label="Add entity..."
+              ></ha-entity-picker>
+            </div>
+          </div>
+        </div>
+
+        <!-- General Section -->
+        <div class="section" id="section-general">
+          <div class="section-header" data-section="general">
+            <h3>General</h3>
+            <span class="chevron">&#9660;</span>
+          </div>
+          <div class="section-body">
+            <div class="input-row">
+              <label>Title</label>
+              <input type="text" id="cfgTitle" value="${this._escAttr(config.title || '')}" placeholder="Optional card title">
+            </div>
+            <div class="two-col">
+              <div class="input-row">
+                <label>Canvas Height (px)</label>
+                <input type="number" id="cfgCanvasHeight" value="${config.canvas_height || 450}" min="100" max="2000" step="10">
+              </div>
+              <div class="input-row">
+                <label>Grid Size (px)</label>
+                <input type="number" id="cfgGridSize" value="${config.grid_size || 25}" min="5" max="100" step="5">
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Display Section -->
+        <div class="section" id="section-display">
+          <div class="section-header" data-section="display">
+            <h3>Display</h3>
+            <span class="chevron">&#9660;</span>
+          </div>
+          <div class="section-body">
+            <div class="option-row">
+              <div>
+                <div class="label">Show Entity Icons</div>
+                <div class="sublabel">Display MDI icons on light circles</div>
+              </div>
+              <ha-switch id="cfgShowIcons" ${config.show_entity_icons ? 'checked' : ''}></ha-switch>
+            </div>
+            <div class="option-row">
+              <div>
+                <div class="label">Icon-Only Mode</div>
+                <div class="sublabel">Show icons without filled circles</div>
+              </div>
+              <ha-switch id="cfgIconOnly" ${config.icon_only_mode ? 'checked' : ''}></ha-switch>
+            </div>
+            <div class="option-row">
+              <div>
+                <div class="label">Show Live Colors</div>
+                <div class="sublabel">Display current light colors as presets</div>
+              </div>
+              <ha-switch id="cfgLiveColors" ${config.show_live_colors ? 'checked' : ''}></ha-switch>
+            </div>
+            <div class="option-row">
+              <div>
+                <div class="label">Always Show Controls</div>
+                <div class="sublabel">Keep brightness/color controls visible</div>
+              </div>
+              <ha-switch id="cfgAlwaysControls" ${config.always_show_controls ? 'checked' : ''}></ha-switch>
+            </div>
+            <div class="option-row">
+              <div class="label">Light Size</div>
+              <div class="slider-row" style="flex:0 0 auto;">
+                <input type="range" id="cfgLightSize" min="24" max="96" value="${config.light_size || 56}" style="width:120px;">
+                <span class="slider-value" id="cfgLightSizeValue">${config.light_size || 56}px</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Layout Section -->
+        <div class="section" id="section-layout">
+          <div class="section-header" data-section="layout">
+            <h3>Layout</h3>
+            <span class="chevron">&#9660;</span>
+          </div>
+          <div class="section-body">
+            <div class="option-row">
+              <div>
+                <div class="label">Controls Below Canvas</div>
+                <div class="sublabel">Place color/brightness controls below instead of floating</div>
+              </div>
+              <ha-switch id="cfgControlsBelow" ${config.controls_below !== false ? 'checked' : ''}></ha-switch>
+            </div>
+            <div class="option-row">
+              <div>
+                <div class="label">Show Settings Button</div>
+                <div class="sublabel">Show gear icon for runtime settings</div>
+              </div>
+              <ha-switch id="cfgShowSettings" ${config.show_settings_button !== false ? 'checked' : ''}></ha-switch>
+            </div>
+          </div>
+        </div>
+
+        <!-- Interaction Section -->
+        <div class="section" id="section-interaction">
+          <div class="section-header" data-section="interaction">
+            <h3>Interaction</h3>
+            <span class="chevron">&#9660;</span>
+          </div>
+          <div class="section-body">
+            <div class="option-row">
+              <div>
+                <div class="label">Single-Tap for Switches &amp; Scenes</div>
+                <div class="sublabel">Toggle switches and activate scenes with one tap</div>
+              </div>
+              <ha-switch id="cfgSwitchTap" ${config.switch_single_tap ? 'checked' : ''}></ha-switch>
+            </div>
+          </div>
+        </div>
+
+      </div>
+    `;
+
+    this._attachEditorListeners();
+  }
+
+  _escAttr(str) {
+    return String(str).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  }
+
+  _attachEditorListeners() {
+    const root = this.shadowRoot;
+
+    // Section collapse toggles
+    root.querySelectorAll('.section-header').forEach(header => {
+      header.addEventListener('click', () => {
+        header.closest('.section').classList.toggle('collapsed');
+      });
+    });
+
+    // --- Entity management ---
+    // Set hass on all entity pickers
+    if (this._hass) {
+      root.querySelectorAll('ha-entity-picker').forEach(picker => {
+        picker.hass = this._hass;
+        // Set include domains for filtering
+        picker.includeDomains = ['light', 'switch', 'scene', 'input_boolean'];
+      });
+    }
+
+    // Set current values on existing entity pickers
+    const entities = this._config.entities || [];
+    entities.forEach((entity, i) => {
+      const picker = root.querySelector(`ha-entity-picker[data-index="${i}"]`);
+      if (picker) {
+        picker.value = entity;
+        picker.addEventListener('value-changed', (ev) => {
+          const newVal = ev.detail.value;
+          if (newVal && newVal !== this._config.entities[i]) {
+            this._config.entities[i] = newVal;
+            this._fireConfigChanged();
+          }
+        });
+      }
+    });
+
+    // Remove entity buttons
+    root.querySelectorAll('.entity-remove-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const idx = parseInt(btn.dataset.index, 10);
+        const entity = this._config.entities[idx];
+        this._config.entities.splice(idx, 1);
+        // Clean up associated config for removed entity
+        if (this._config.positions) delete this._config.positions[entity];
+        if (this._config.size_overrides) delete this._config.size_overrides[entity];
+        if (this._config.icon_only_overrides) delete this._config.icon_only_overrides[entity];
+        if (this._config.label_overrides) delete this._config.label_overrides[entity];
+        if (this._config.color_overrides) delete this._config.color_overrides[entity];
+        this._fireConfigChanged();
+        this._render();
+      });
+    });
+
+    // Add entity picker
+    const addPicker = root.getElementById('addEntityPicker');
+    if (addPicker) {
+      addPicker.addEventListener('value-changed', (ev) => {
+        const newEntity = ev.detail.value;
+        if (newEntity && !(this._config.entities || []).includes(newEntity)) {
+          if (!this._config.entities) this._config.entities = [];
+          this._config.entities.push(newEntity);
+          this._fireConfigChanged();
+          this._render();
+        }
+      });
+    }
+
+    // --- General settings ---
+    const titleInput = root.getElementById('cfgTitle');
+    if (titleInput) {
+      titleInput.addEventListener('input', () => {
+        this._config.title = titleInput.value;
+        this._fireConfigChanged();
+      });
+    }
+
+    const canvasHeightInput = root.getElementById('cfgCanvasHeight');
+    if (canvasHeightInput) {
+      canvasHeightInput.addEventListener('change', () => {
+        const val = parseInt(canvasHeightInput.value, 10);
+        if (Number.isFinite(val) && val >= 100) {
+          this._config.canvas_height = val;
+          this._fireConfigChanged();
+        }
+      });
+    }
+
+    const gridSizeInput = root.getElementById('cfgGridSize');
+    if (gridSizeInput) {
+      gridSizeInput.addEventListener('change', () => {
+        const val = parseInt(gridSizeInput.value, 10);
+        if (Number.isFinite(val) && val >= 5) {
+          this._config.grid_size = val;
+          this._fireConfigChanged();
+        }
+      });
+    }
+
+    // --- Display toggles ---
+    this._bindSwitch('cfgShowIcons', 'show_entity_icons');
+    this._bindSwitch('cfgIconOnly', 'icon_only_mode');
+    this._bindSwitch('cfgLiveColors', 'show_live_colors');
+    this._bindSwitch('cfgAlwaysControls', 'always_show_controls');
+    this._bindSwitch('cfgControlsBelow', 'controls_below');
+    this._bindSwitch('cfgShowSettings', 'show_settings_button');
+    this._bindSwitch('cfgSwitchTap', 'switch_single_tap');
+
+    // Light size slider
+    const lightSizeSlider = root.getElementById('cfgLightSize');
+    const lightSizeValue = root.getElementById('cfgLightSizeValue');
+    if (lightSizeSlider) {
+      lightSizeSlider.addEventListener('input', () => {
+        const val = parseInt(lightSizeSlider.value, 10);
+        if (lightSizeValue) lightSizeValue.textContent = `${val}px`;
+      });
+      lightSizeSlider.addEventListener('change', () => {
+        const val = parseInt(lightSizeSlider.value, 10);
+        if (Number.isFinite(val) && val > 0) {
+          this._config.light_size = val;
+          this._fireConfigChanged();
+        }
+      });
+    }
+  }
+
+  _bindSwitch(elementId, configKey) {
+    const el = this.shadowRoot.getElementById(elementId);
+    if (!el) return;
+    el.addEventListener('change', () => {
+      this._config[configKey] = el.checked;
+      this._fireConfigChanged();
+    });
+  }
+}
+
+customElements.define('spatial-light-color-card-editor', SpatialLightColorCardEditor);
 customElements.define('spatial-light-color-card', SpatialLightColorCard);
 
 window.customCards = window.customCards || [];

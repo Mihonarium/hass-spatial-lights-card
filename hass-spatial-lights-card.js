@@ -3007,6 +3007,12 @@ class SpatialLightColorCardEditor extends HTMLElement {
     if (defPicker) {
       defPicker.value = this._config.default_entity || '';
     }
+    // Set hass on background image selector
+    const bgSelector = this.shadowRoot.getElementById('cfgBgImageSelector');
+    if (bgSelector) {
+      bgSelector.hass = this._hass;
+      if (!bgSelector.selector) bgSelector.selector = { image: {} };
+    }
   }
 
   _getEntityName(entityId) {
@@ -3165,6 +3171,7 @@ class SpatialLightColorCardEditor extends HTMLElement {
         min-width: 44px; text-align: right; font-variant-numeric: tabular-nums;
       }
       ha-switch { --mdc-theme-secondary: var(--primary-color, #03a9f4); }
+      ha-selector { display: block; width: 100%; }
 
       .edit-positions-banner {
         padding: 10px 14px; border-radius: 8px;
@@ -3354,8 +3361,8 @@ class SpatialLightColorCardEditor extends HTMLElement {
               </div>
             </div>
             <div class="input-row">
-              <label for="cfgBgImage">Background Image URL</label>
-              <input type="url" id="cfgBgImage" placeholder="/local/floorplan.png or https://...">
+              <label>Background Image</label>
+              <ha-selector id="cfgBgImageSelector"></ha-selector>
             </div>
             <div class="two-col">
               <div class="input-row">
@@ -3535,7 +3542,12 @@ class SpatialLightColorCardEditor extends HTMLElement {
     if (c.background_image) {
       bgUrl = typeof c.background_image === 'string' ? c.background_image : (c.background_image.url || '');
     }
-    setVal('cfgBgImage', bgUrl);
+    const bgSelector = root.getElementById('cfgBgImageSelector');
+    if (bgSelector) {
+      bgSelector.selector = { image: {} };
+      bgSelector.value = bgUrl || '';
+      if (this._hass) bgSelector.hass = this._hass;
+    }
 
     // Colors
     setVal('cfgSwitchOnColor', c.switch_on_color || '#ffa500');
@@ -3804,15 +3816,22 @@ class SpatialLightColorCardEditor extends HTMLElement {
       });
     }
 
-    this._bindTextInput('cfgBgImage', (val) => {
-      if (val) {
-        if (this._config.background_image && typeof this._config.background_image === 'object') {
-          this._config.background_image.url = val;
+    const bgImageSelector = root.getElementById('cfgBgImageSelector');
+    if (bgImageSelector) {
+      bgImageSelector.addEventListener('value-changed', (ev) => {
+        const val = ev.detail.value || '';
+        if (val) {
+          if (this._config.background_image && typeof this._config.background_image === 'object') {
+            this._config.background_image.url = val;
+          } else {
+            this._config.background_image = val;
+          }
         } else {
-          this._config.background_image = val;
+          this._config.background_image = null;
         }
-      } else { this._config.background_image = null; }
-    });
+        this._fireConfigChanged();
+      });
+    }
 
     // --- Display/Layout/Interaction toggles ---
     this._bindSwitch('cfgMinimalUI', 'minimal_ui');

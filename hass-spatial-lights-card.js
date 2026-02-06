@@ -2952,214 +2952,226 @@ class SpatialLightColorCardEditor extends HTMLElement {
     this.attachShadow({ mode: 'open' });
     this._config = {};
     this._hass = null;
+    this._configFromEditor = false;
   }
 
   set hass(hass) {
     this._hass = hass;
-    if (this.shadowRoot) {
-      this.shadowRoot.querySelectorAll('ha-entity-picker').forEach(picker => {
-        picker.hass = hass;
-      });
-    }
+    this._updateEntityPickers();
+    // If entities list is rendered, update friendly names
+    this._updateEntityNames();
   }
 
   setConfig(config) {
     this._config = JSON.parse(JSON.stringify(config));
+    if (this._configFromEditor) {
+      this._configFromEditor = false;
+      return;
+    }
     this._render();
   }
 
   _fireConfigChanged() {
+    this._configFromEditor = true;
     const config = JSON.parse(JSON.stringify(this._config));
     this.dispatchEvent(new CustomEvent('config-changed', {
       detail: { config },
       bubbles: true,
       composed: true,
     }));
+    // Safety: clear flag after a frame in case HA doesn't call setConfig synchronously
+    requestAnimationFrame(() => { this._configFromEditor = false; });
+  }
+
+  _updateEntityPickers() {
+    if (!this._hass || !this.shadowRoot) return;
+    this.shadowRoot.querySelectorAll('ha-entity-picker').forEach(picker => {
+      picker.hass = this._hass;
+      picker.includeDomains = ['light', 'switch', 'scene', 'input_boolean'];
+    });
+  }
+
+  _updateEntityNames() {
+    if (!this._hass || !this.shadowRoot) return;
+    this.shadowRoot.querySelectorAll('.entity-friendly-name').forEach(el => {
+      const entityId = el.dataset.entity;
+      if (entityId && this._hass.states[entityId]) {
+        el.textContent = this._hass.states[entityId].attributes.friendly_name || entityId;
+      }
+    });
+  }
+
+  _getEntityName(entityId) {
+    if (this._hass && this._hass.states[entityId]) {
+      return this._hass.states[entityId].attributes.friendly_name || entityId;
+    }
+    return entityId;
+  }
+
+  _getDomainIcon(entityId) {
+    const domain = entityId.split('.')[0];
+    switch(domain) {
+      case 'light': return 'mdi:lightbulb';
+      case 'switch': return 'mdi:toggle-switch';
+      case 'scene': return 'mdi:palette';
+      case 'input_boolean': return 'mdi:toggle-switch-outline';
+      default: return 'mdi:help-circle';
+    }
   }
 
   _editorStyles() {
     return `
-      :host {
-        display: block;
-      }
+      :host { display: block; }
       .card-config {
-        display: flex;
-        flex-direction: column;
-        gap: 16px;
+        display: flex; flex-direction: column; gap: 16px;
       }
       .section {
         border: 1px solid var(--divider-color, rgba(0,0,0,0.12));
-        border-radius: 8px;
-        overflow: hidden;
+        border-radius: 8px; overflow: hidden;
       }
       .section-header {
         padding: 12px 16px;
         background: var(--secondary-background-color, #fafafa);
-        cursor: pointer;
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        user-select: none;
+        cursor: pointer; display: flex; align-items: center;
+        justify-content: space-between; user-select: none;
       }
       .section-header h3 {
-        margin: 0;
-        font-size: 14px;
-        font-weight: 600;
+        margin: 0; font-size: 14px; font-weight: 600;
         color: var(--primary-text-color, #212121);
       }
       .section-header .chevron {
         transition: transform 200ms ease;
-        color: var(--secondary-text-color, #727272);
-        font-size: 18px;
+        color: var(--secondary-text-color, #727272); font-size: 12px;
       }
-      .section.collapsed .section-header .chevron {
-        transform: rotate(-90deg);
-      }
-      .section.collapsed .section-body {
-        display: none;
-      }
+      .section.collapsed .section-header .chevron { transform: rotate(-90deg); }
+      .section.collapsed .section-body { display: none; }
       .section-body {
-        padding: 12px 16px;
-        display: flex;
-        flex-direction: column;
-        gap: 12px;
+        padding: 12px 16px; display: flex; flex-direction: column; gap: 12px;
       }
-      .entity-row {
-        display: flex;
-        align-items: center;
-        gap: 8px;
+
+      /* Entity chips */
+      .entity-list { display: flex; flex-direction: column; gap: 6px; }
+      .entity-chip {
+        display: flex; align-items: center; gap: 10px;
+        padding: 8px 12px; border-radius: 8px;
+        background: var(--secondary-background-color, #f5f5f5);
+        border: 1px solid var(--divider-color, rgba(0,0,0,0.08));
       }
-      .entity-row ha-entity-picker {
-        flex: 1;
+      .entity-chip ha-icon {
+        color: var(--secondary-text-color, #727272);
+        --mdc-icon-size: 20px; flex-shrink: 0;
+      }
+      .entity-chip-info { flex: 1; min-width: 0; }
+      .entity-friendly-name {
+        font-size: 14px; color: var(--primary-text-color, #212121);
+        white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: block;
+      }
+      .entity-id-text {
+        font-size: 11px; color: var(--secondary-text-color, #727272);
+        white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: block;
+        font-family: monospace;
       }
       .entity-remove-btn {
-        --mdc-icon-size: 20px;
         color: var(--secondary-text-color, #727272);
-        cursor: pointer;
-        border: none;
-        background: none;
-        padding: 4px;
-        border-radius: 50%;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        font-size: 18px;
-        line-height: 1;
-        min-width: 28px;
-        min-height: 28px;
+        cursor: pointer; border: none; background: none; padding: 4px;
+        border-radius: 50%; display: flex; align-items: center;
+        justify-content: center; font-size: 18px; line-height: 1;
+        min-width: 28px; min-height: 28px; flex-shrink: 0;
       }
       .entity-remove-btn:hover {
-        background: var(--secondary-background-color, #fafafa);
-        color: var(--error-color, #db4437);
+        background: rgba(219,68,55,0.1); color: var(--error-color, #db4437);
       }
       .add-entity-row {
-        display: flex;
-        align-items: center;
-        gap: 8px;
+        padding-top: 4px;
       }
-      .add-entity-row ha-entity-picker {
-        flex: 1;
+      .add-entity-row ha-entity-picker { width: 100%; }
+      .empty-entities {
+        text-align: center; padding: 20px 16px;
+        color: var(--secondary-text-color, #727272); font-size: 13px;
+        line-height: 1.5;
       }
+
+      /* Form elements */
       .option-row {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        min-height: 40px;
-        gap: 16px;
+        display: flex; align-items: center; justify-content: space-between;
+        min-height: 40px; gap: 16px;
       }
       .option-row .label {
-        font-size: 14px;
-        color: var(--primary-text-color, #212121);
-        flex: 1;
+        font-size: 14px; color: var(--primary-text-color, #212121); flex: 1;
       }
       .option-row .sublabel {
-        font-size: 12px;
-        color: var(--secondary-text-color, #727272);
-        margin-top: 2px;
+        font-size: 12px; color: var(--secondary-text-color, #727272); margin-top: 2px;
       }
       .input-row {
-        display: flex;
-        flex-direction: column;
-        gap: 4px;
+        display: flex; flex-direction: column; gap: 4px;
       }
       .input-row label {
-        font-size: 12px;
-        font-weight: 500;
+        font-size: 12px; font-weight: 500;
         color: var(--secondary-text-color, #727272);
       }
       .input-row input[type="number"],
-      .input-row input[type="text"] {
-        width: 100%;
-        padding: 8px 12px;
+      .input-row input[type="text"],
+      .input-row input[type="url"] {
+        width: 100%; padding: 8px 12px;
         border: 1px solid var(--divider-color, rgba(0,0,0,0.12));
-        border-radius: 6px;
-        font-size: 14px;
+        border-radius: 6px; font-size: 14px;
         color: var(--primary-text-color, #212121);
         background: var(--card-background-color, #fff);
-        box-sizing: border-box;
-        outline: none;
+        box-sizing: border-box; outline: none;
         transition: border-color 150ms ease;
       }
       .input-row input:focus {
         border-color: var(--primary-color, #03a9f4);
       }
+      .input-row select {
+        width: 100%; padding: 8px 12px;
+        border: 1px solid var(--divider-color, rgba(0,0,0,0.12));
+        border-radius: 6px; font-size: 14px;
+        color: var(--primary-text-color, #212121);
+        background: var(--card-background-color, #fff);
+        box-sizing: border-box; outline: none;
+        cursor: pointer;
+      }
       .two-col {
-        display: grid;
-        grid-template-columns: 1fr 1fr;
-        gap: 12px;
+        display: grid; grid-template-columns: 1fr 1fr; gap: 12px;
       }
       .slider-row {
-        display: flex;
-        align-items: center;
-        gap: 12px;
+        display: flex; align-items: center; gap: 12px;
       }
       .slider-row input[type="range"] {
-        flex: 1;
-        -webkit-appearance: none;
-        appearance: none;
-        height: 6px;
-        background: var(--divider-color, rgba(0,0,0,0.12));
-        border-radius: 3px;
-        cursor: pointer;
+        flex: 1; -webkit-appearance: none; appearance: none;
+        height: 6px; background: var(--divider-color, rgba(0,0,0,0.12));
+        border-radius: 3px; cursor: pointer;
       }
       .slider-row input[type="range"]::-webkit-slider-thumb {
-        -webkit-appearance: none;
-        width: 18px;
-        height: 18px;
-        border-radius: 50%;
-        background: var(--primary-color, #03a9f4);
-        cursor: pointer;
+        -webkit-appearance: none; width: 18px; height: 18px; border-radius: 50%;
+        background: var(--primary-color, #03a9f4); cursor: pointer;
       }
       .slider-row input[type="range"]::-moz-range-thumb {
-        width: 18px;
-        height: 18px;
-        border-radius: 50%;
-        background: var(--primary-color, #03a9f4);
-        cursor: pointer;
-        border: none;
+        width: 18px; height: 18px; border-radius: 50%;
+        background: var(--primary-color, #03a9f4); cursor: pointer; border: none;
       }
       .slider-value {
-        font-size: 13px;
-        color: var(--secondary-text-color, #727272);
-        min-width: 44px;
-        text-align: right;
-        font-variant-numeric: tabular-nums;
+        font-size: 13px; color: var(--secondary-text-color, #727272);
+        min-width: 44px; text-align: right; font-variant-numeric: tabular-nums;
       }
-      .empty-entities {
-        text-align: center;
-        padding: 16px;
-        color: var(--secondary-text-color, #727272);
-        font-size: 13px;
-      }
-      ha-switch {
-        --mdc-theme-secondary: var(--primary-color, #03a9f4);
-      }
+      ha-switch { --mdc-theme-secondary: var(--primary-color, #03a9f4); }
     `;
   }
 
   _render() {
     const config = this._config;
     const entities = config.entities || [];
+
+    // Determine background_image URL for the input
+    let bgUrl = '';
+    if (config.background_image) {
+      if (typeof config.background_image === 'string') {
+        bgUrl = config.background_image;
+      } else if (config.background_image.url) {
+        bgUrl = config.background_image.url;
+      }
+    }
 
     this.shadowRoot.innerHTML = `
       <style>${this._editorStyles()}</style>
@@ -3172,18 +3184,21 @@ class SpatialLightColorCardEditor extends HTMLElement {
             <span class="chevron">&#9660;</span>
           </div>
           <div class="section-body">
-            <div id="entities-list">
-              ${entities.length === 0 ? '<div class="empty-entities">No entities added yet. Use the picker below to add lights, switches, or scenes.</div>' : ''}
-              ${entities.map((entity, i) => `
-                <div class="entity-row" data-index="${i}">
-                  <ha-entity-picker
-                    data-index="${i}"
-                    allow-custom-entity
-                  ></ha-entity-picker>
-                  <button class="entity-remove-btn" data-index="${i}" title="Remove entity">&times;</button>
-                </div>
-              `).join('')}
-            </div>
+            ${entities.length === 0
+              ? '<div class="empty-entities">No entities added yet.<br>Use the picker below to add lights, switches, or scenes.</div>'
+              : `<div class="entity-list" id="entityList">
+                  ${entities.map((entity, i) => `
+                    <div class="entity-chip" data-index="${i}">
+                      <ha-icon icon="${this._getDomainIcon(entity)}"></ha-icon>
+                      <div class="entity-chip-info">
+                        <span class="entity-friendly-name" data-entity="${entity}">${this._getEntityName(entity)}</span>
+                        <span class="entity-id-text">${entity}</span>
+                      </div>
+                      <button class="entity-remove-btn" data-index="${i}" title="Remove">&times;</button>
+                    </div>
+                  `).join('')}
+                </div>`
+            }
             <div class="add-entity-row">
               <ha-entity-picker
                 id="addEntityPicker"
@@ -3201,17 +3216,36 @@ class SpatialLightColorCardEditor extends HTMLElement {
           </div>
           <div class="section-body">
             <div class="input-row">
-              <label>Title</label>
-              <input type="text" id="cfgTitle" value="${this._escAttr(config.title || '')}" placeholder="Optional card title">
+              <label for="cfgTitle">Title</label>
+              <input type="text" id="cfgTitle" placeholder="Optional card title">
             </div>
             <div class="two-col">
               <div class="input-row">
-                <label>Canvas Height (px)</label>
-                <input type="number" id="cfgCanvasHeight" value="${config.canvas_height || 450}" min="100" max="2000" step="10">
+                <label for="cfgCanvasHeight">Canvas Height (px)</label>
+                <input type="number" id="cfgCanvasHeight" min="100" max="2000" step="10">
               </div>
               <div class="input-row">
-                <label>Grid Size (px)</label>
-                <input type="number" id="cfgGridSize" value="${config.grid_size || 25}" min="5" max="100" step="5">
+                <label for="cfgGridSize">Grid Size (px)</label>
+                <input type="number" id="cfgGridSize" min="5" max="100" step="5">
+              </div>
+            </div>
+            <div class="input-row">
+              <label for="cfgBgImage">Background Image URL</label>
+              <input type="url" id="cfgBgImage" placeholder="/local/floorplan.png or https://...">
+            </div>
+            <div class="two-col">
+              <div class="input-row">
+                <label for="cfgLabelMode">Label Mode</label>
+                <select id="cfgLabelMode">
+                  <option value="smart">Smart</option>
+                  <option value="full">Full Name</option>
+                  <option value="initials">Initials</option>
+                  <option value="none">None</option>
+                </select>
+              </div>
+              <div class="input-row">
+                <label for="cfgDefaultEntity">Default Entity</label>
+                <input type="text" id="cfgDefaultEntity" placeholder="e.g. light.living_room">
               </div>
             </div>
           </div>
@@ -3226,37 +3260,44 @@ class SpatialLightColorCardEditor extends HTMLElement {
           <div class="section-body">
             <div class="option-row">
               <div>
+                <div class="label">Minimal UI</div>
+                <div class="sublabel">Hide circles, show only icons</div>
+              </div>
+              <ha-switch id="cfgMinimalUI"></ha-switch>
+            </div>
+            <div class="option-row">
+              <div>
                 <div class="label">Show Entity Icons</div>
                 <div class="sublabel">Display MDI icons on light circles</div>
               </div>
-              <ha-switch id="cfgShowIcons" ${config.show_entity_icons ? 'checked' : ''}></ha-switch>
+              <ha-switch id="cfgShowIcons"></ha-switch>
             </div>
             <div class="option-row">
               <div>
                 <div class="label">Icon-Only Mode</div>
                 <div class="sublabel">Show icons without filled circles</div>
               </div>
-              <ha-switch id="cfgIconOnly" ${config.icon_only_mode ? 'checked' : ''}></ha-switch>
+              <ha-switch id="cfgIconOnly"></ha-switch>
             </div>
             <div class="option-row">
               <div>
                 <div class="label">Show Live Colors</div>
                 <div class="sublabel">Display current light colors as presets</div>
               </div>
-              <ha-switch id="cfgLiveColors" ${config.show_live_colors ? 'checked' : ''}></ha-switch>
+              <ha-switch id="cfgLiveColors"></ha-switch>
             </div>
             <div class="option-row">
               <div>
                 <div class="label">Always Show Controls</div>
                 <div class="sublabel">Keep brightness/color controls visible</div>
               </div>
-              <ha-switch id="cfgAlwaysControls" ${config.always_show_controls ? 'checked' : ''}></ha-switch>
+              <ha-switch id="cfgAlwaysControls"></ha-switch>
             </div>
             <div class="option-row">
               <div class="label">Light Size</div>
               <div class="slider-row" style="flex:0 0 auto;">
-                <input type="range" id="cfgLightSize" min="24" max="96" value="${config.light_size || 56}" style="width:120px;">
-                <span class="slider-value" id="cfgLightSizeValue">${config.light_size || 56}px</span>
+                <input type="range" id="cfgLightSize" min="24" max="96" style="width:120px;">
+                <span class="slider-value" id="cfgLightSizeValue">56px</span>
               </div>
             </div>
           </div>
@@ -3272,16 +3313,16 @@ class SpatialLightColorCardEditor extends HTMLElement {
             <div class="option-row">
               <div>
                 <div class="label">Controls Below Canvas</div>
-                <div class="sublabel">Place color/brightness controls below instead of floating</div>
+                <div class="sublabel">Place controls below instead of floating overlay</div>
               </div>
-              <ha-switch id="cfgControlsBelow" ${config.controls_below !== false ? 'checked' : ''}></ha-switch>
+              <ha-switch id="cfgControlsBelow"></ha-switch>
             </div>
             <div class="option-row">
               <div>
                 <div class="label">Show Settings Button</div>
                 <div class="sublabel">Show gear icon for runtime settings</div>
               </div>
-              <ha-switch id="cfgShowSettings" ${config.show_settings_button !== false ? 'checked' : ''}></ha-switch>
+              <ha-switch id="cfgShowSettings"></ha-switch>
             </div>
           </div>
         </div>
@@ -3298,7 +3339,7 @@ class SpatialLightColorCardEditor extends HTMLElement {
                 <div class="label">Single-Tap for Switches &amp; Scenes</div>
                 <div class="sublabel">Toggle switches and activate scenes with one tap</div>
               </div>
-              <ha-switch id="cfgSwitchTap" ${config.switch_single_tap ? 'checked' : ''}></ha-switch>
+              <ha-switch id="cfgSwitchTap"></ha-switch>
             </div>
           </div>
         </div>
@@ -3306,7 +3347,74 @@ class SpatialLightColorCardEditor extends HTMLElement {
       </div>
     `;
 
+    // Set values on DOM elements AFTER innerHTML (not via attributes - properties are more reliable)
+    this._setDOMValues();
     this._attachEditorListeners();
+
+    // Set up entity pickers after custom elements have a chance to upgrade
+    requestAnimationFrame(() => {
+      this._updateEntityPickers();
+    });
+  }
+
+  _setDOMValues() {
+    const root = this.shadowRoot;
+    const config = this._config;
+
+    // Text/number inputs
+    const titleEl = root.getElementById('cfgTitle');
+    if (titleEl) titleEl.value = config.title || '';
+
+    const canvasHeightEl = root.getElementById('cfgCanvasHeight');
+    if (canvasHeightEl) canvasHeightEl.value = config.canvas_height || 450;
+
+    const gridSizeEl = root.getElementById('cfgGridSize');
+    if (gridSizeEl) gridSizeEl.value = config.grid_size || 25;
+
+    const defaultEntityEl = root.getElementById('cfgDefaultEntity');
+    if (defaultEntityEl) defaultEntityEl.value = config.default_entity || '';
+
+    const labelModeEl = root.getElementById('cfgLabelMode');
+    if (labelModeEl) labelModeEl.value = config.label_mode || 'smart';
+
+    // Background image
+    const bgImageEl = root.getElementById('cfgBgImage');
+    if (bgImageEl) {
+      let bgUrl = '';
+      if (config.background_image) {
+        if (typeof config.background_image === 'string') bgUrl = config.background_image;
+        else if (config.background_image.url) bgUrl = config.background_image.url;
+      }
+      bgImageEl.value = bgUrl;
+    }
+
+    // Light size slider
+    const lightSizeEl = root.getElementById('cfgLightSize');
+    if (lightSizeEl) lightSizeEl.value = config.light_size || 56;
+    const lightSizeValEl = root.getElementById('cfgLightSizeValue');
+    if (lightSizeValEl) lightSizeValEl.textContent = `${config.light_size || 56}px`;
+
+    // Switches - set .checked property after a microtask so ha-switch has upgraded
+    const switchMap = {
+      cfgMinimalUI: config.minimal_ui || false,
+      cfgShowIcons: config.show_entity_icons || false,
+      cfgIconOnly: config.icon_only_mode || false,
+      cfgLiveColors: config.show_live_colors || false,
+      cfgAlwaysControls: config.always_show_controls || false,
+      cfgControlsBelow: config.controls_below !== false,
+      cfgShowSettings: config.show_settings_button !== false,
+      cfgSwitchTap: config.switch_single_tap || false,
+    };
+
+    // Set checked immediately and also after upgrade
+    const setSwitchValues = () => {
+      Object.entries(switchMap).forEach(([id, val]) => {
+        const el = root.getElementById(id);
+        if (el) el.checked = val;
+      });
+    };
+    setSwitchValues();
+    requestAnimationFrame(() => setSwitchValues());
   }
 
   _escAttr(str) {
@@ -3324,30 +3432,6 @@ class SpatialLightColorCardEditor extends HTMLElement {
     });
 
     // --- Entity management ---
-    // Set hass on all entity pickers
-    if (this._hass) {
-      root.querySelectorAll('ha-entity-picker').forEach(picker => {
-        picker.hass = this._hass;
-        // Set include domains for filtering
-        picker.includeDomains = ['light', 'switch', 'scene', 'input_boolean'];
-      });
-    }
-
-    // Set current values on existing entity pickers
-    const entities = this._config.entities || [];
-    entities.forEach((entity, i) => {
-      const picker = root.querySelector(`ha-entity-picker[data-index="${i}"]`);
-      if (picker) {
-        picker.value = entity;
-        picker.addEventListener('value-changed', (ev) => {
-          const newVal = ev.detail.value;
-          if (newVal && newVal !== this._config.entities[i]) {
-            this._config.entities[i] = newVal;
-            this._fireConfigChanged();
-          }
-        });
-      }
-    });
 
     // Remove entity buttons
     root.querySelectorAll('.entity-remove-btn').forEach(btn => {
@@ -3355,7 +3439,6 @@ class SpatialLightColorCardEditor extends HTMLElement {
         const idx = parseInt(btn.dataset.index, 10);
         const entity = this._config.entities[idx];
         this._config.entities.splice(idx, 1);
-        // Clean up associated config for removed entity
         if (this._config.positions) delete this._config.positions[entity];
         if (this._config.size_overrides) delete this._config.size_overrides[entity];
         if (this._config.icon_only_overrides) delete this._config.icon_only_overrides[entity];
@@ -3380,38 +3463,46 @@ class SpatialLightColorCardEditor extends HTMLElement {
       });
     }
 
-    // --- General settings ---
-    const titleInput = root.getElementById('cfgTitle');
-    if (titleInput) {
-      titleInput.addEventListener('input', () => {
-        this._config.title = titleInput.value;
+    // --- General inputs (use 'change' for number/select, debounced 'input' for text) ---
+
+    this._bindTextInput('cfgTitle', (val) => {
+      this._config.title = val;
+    });
+
+    this._bindNumberInput('cfgCanvasHeight', (val) => {
+      if (val >= 100 && val <= 2000) this._config.canvas_height = val;
+    });
+
+    this._bindNumberInput('cfgGridSize', (val) => {
+      if (val >= 5 && val <= 100) this._config.grid_size = val;
+    });
+
+    this._bindTextInput('cfgDefaultEntity', (val) => {
+      this._config.default_entity = val || null;
+    });
+
+    const labelModeEl = root.getElementById('cfgLabelMode');
+    if (labelModeEl) {
+      labelModeEl.addEventListener('change', () => {
+        this._config.label_mode = labelModeEl.value;
         this._fireConfigChanged();
       });
     }
 
-    const canvasHeightInput = root.getElementById('cfgCanvasHeight');
-    if (canvasHeightInput) {
-      canvasHeightInput.addEventListener('change', () => {
-        const val = parseInt(canvasHeightInput.value, 10);
-        if (Number.isFinite(val) && val >= 100) {
-          this._config.canvas_height = val;
-          this._fireConfigChanged();
+    this._bindTextInput('cfgBgImage', (val) => {
+      if (val) {
+        if (this._config.background_image && typeof this._config.background_image === 'object') {
+          this._config.background_image.url = val;
+        } else {
+          this._config.background_image = val;
         }
-      });
-    }
-
-    const gridSizeInput = root.getElementById('cfgGridSize');
-    if (gridSizeInput) {
-      gridSizeInput.addEventListener('change', () => {
-        const val = parseInt(gridSizeInput.value, 10);
-        if (Number.isFinite(val) && val >= 5) {
-          this._config.grid_size = val;
-          this._fireConfigChanged();
-        }
-      });
-    }
+      } else {
+        this._config.background_image = null;
+      }
+    });
 
     // --- Display toggles ---
+    this._bindSwitch('cfgMinimalUI', 'minimal_ui');
     this._bindSwitch('cfgShowIcons', 'show_entity_icons');
     this._bindSwitch('cfgIconOnly', 'icon_only_mode');
     this._bindSwitch('cfgLiveColors', 'show_live_colors');
@@ -3436,6 +3527,37 @@ class SpatialLightColorCardEditor extends HTMLElement {
         }
       });
     }
+  }
+
+  _bindTextInput(elementId, setter) {
+    const el = this.shadowRoot.getElementById(elementId);
+    if (!el) return;
+    let debounceTimer = null;
+    el.addEventListener('input', () => {
+      clearTimeout(debounceTimer);
+      debounceTimer = setTimeout(() => {
+        setter(el.value);
+        this._fireConfigChanged();
+      }, 300);
+    });
+    // Also fire on blur for immediate save
+    el.addEventListener('change', () => {
+      clearTimeout(debounceTimer);
+      setter(el.value);
+      this._fireConfigChanged();
+    });
+  }
+
+  _bindNumberInput(elementId, setter) {
+    const el = this.shadowRoot.getElementById(elementId);
+    if (!el) return;
+    el.addEventListener('change', () => {
+      const val = parseInt(el.value, 10);
+      if (Number.isFinite(val)) {
+        setter(val);
+        this._fireConfigChanged();
+      }
+    });
   }
 
   _bindSwitch(elementId, configKey) {

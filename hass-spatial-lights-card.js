@@ -186,7 +186,7 @@ class SpatialLightColorCard extends HTMLElement {
       color_presets: Array.isArray(config.color_presets)
         ? config.color_presets.filter(c => typeof c === 'string' && c.trim()).map(c => c.trim())
         : [],
-      show_live_colors: config.show_live_colors !== false,
+      show_live_colors: config.show_live_colors === true,
     };
 
     this._gridSize = this._config.grid_size;
@@ -2560,7 +2560,7 @@ class SpatialLightColorCard extends HTMLElement {
 
   _renderColorPresets() {
     const configPresets = this._config.color_presets || [];
-    const showLive = this._config.show_live_colors !== false;
+    const showLive = !!this._config.show_live_colors;
 
     // Always fetch live colors for entity matching (config presets need it too for highlight)
     const allLiveColors = this._getLiveColors();
@@ -2615,7 +2615,7 @@ class SpatialLightColorCard extends HTMLElement {
   }
 
   _renderTemperaturePresets() {
-    if (this._config.show_live_colors === false) return '';
+    if (!this._config.show_live_colors) return '';
     const temps = this._getLiveTemperatures();
     if (temps.length === 0) return '';
 
@@ -2972,7 +2972,7 @@ class SpatialLightColorCard extends HTMLElement {
         yamlLines.push(`${indent}- "${color}"`);
       });
     }
-    if (this._config.show_live_colors === false) yamlLines.push(`show_live_colors: false`);
+    if (this._config.show_live_colors) yamlLines.push(`show_live_colors: true`);
 
     if (this._config.label_overrides && Object.keys(this._config.label_overrides).length) {
       yamlLines.push('label_overrides:');
@@ -3018,7 +3018,7 @@ class SpatialLightColorCard extends HTMLElement {
       light_size: 56, icon_only_mode: false, size_overrides: {}, icon_only_overrides: {},
       switch_on_color: '#ffa500', switch_off_color: '#2a2a2a', scene_color: '#6366f1',
       color_presets: [],
-      show_live_colors: true,
+      show_live_colors: false,
     };
   }
 }

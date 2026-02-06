@@ -181,6 +181,11 @@ class SpatialLightColorCard extends HTMLElement {
       switch_off_color: config.switch_off_color || '#3a3a3a',
       scene_color: config.scene_color || '#6366f1',
       color_overrides: config.color_overrides || {},
+
+      // Color presets (array of hex color strings shown as quick-select circles)
+      color_presets: Array.isArray(config.color_presets)
+        ? config.color_presets.filter(c => typeof c === 'string' && c.trim()).map(c => c.trim())
+        : [],
     };
 
     this._gridSize = this._config.grid_size;
@@ -946,6 +951,23 @@ class SpatialLightColorCard extends HTMLElement {
         border: 2px solid var(--border-subtle); box-shadow: var(--shadow-sm); flex-shrink: 0;
       }
 
+      .color-wheel-presets-wrap {
+        display: flex; flex-direction: column; align-items: center; gap: 8px; flex-shrink: 0;
+      }
+
+      .color-presets {
+        display: flex; flex-wrap: wrap; gap: 6px; justify-content: center; max-width: 164px;
+      }
+      .color-preset {
+        width: 28px; height: 28px; border-radius: 9999px; cursor: pointer; border: 2px solid rgba(255,255,255,0.15);
+        box-shadow: var(--shadow-sm); transition: transform var(--transition-fast), border-color var(--transition-fast), box-shadow var(--transition-fast);
+        flex-shrink: 0; position: relative;
+      }
+      .color-preset:hover { transform: scale(1.15); border-color: rgba(255,255,255,0.5); box-shadow: 0 0 8px rgba(255,255,255,0.2); }
+      .color-preset:active { transform: scale(0.95); }
+      .color-preset.live-color { border-style: dashed; border-color: rgba(255,255,255,0.3); }
+      .color-preset.live-color:hover { border-color: rgba(255,255,255,0.6); }
+
       .slider-group { display:flex; flex-direction:column; gap:10px; min-width: 240px; flex:1; width:100%; }
       .slider-row { display:flex; align-items:center; gap:8px; width:100%; padding: 2px 0; }
 
@@ -1090,6 +1112,8 @@ class SpatialLightColorCard extends HTMLElement {
         .controls-floating, .controls-below { flex-direction:column; gap: 16px; }
         .controls-floating { left: 16px; right: 16px; width: auto; transform: none; }
         .light { --light-size: ${Math.min(this._config.light_size, 50)}px; }
+        .color-wheel-presets-wrap { flex-direction: row; gap: 12px; }
+        .color-presets { flex-direction: row; flex-wrap: wrap; max-width: none; }
       }
 
       .settings-btn:focus-visible, .modal-close:focus-visible, .settings-button:focus-visible { outline: 2px solid var(--accent-primary); outline-offset: 2px; }
@@ -1228,7 +1252,10 @@ class SpatialLightColorCard extends HTMLElement {
     const brightnessColor = Array.isArray(avgState.color) ? `rgb(${avgState.color.join(',')})` : 'var(--accent-primary)';
     return `
       <div class="controls-floating ${visible ? 'visible' : ''}" id="controlsFloating" role="region" aria-label="Light controls" aria-live="polite">
-        <canvas id="colorWheelMini" class="color-wheel-mini" width="256" height="256" role="img" aria-label="Color picker"></canvas>
+        <div class="color-wheel-presets-wrap">
+          <canvas id="colorWheelMini" class="color-wheel-mini" width="256" height="256" role="img" aria-label="Color picker"></canvas>
+          ${this._renderColorPresets()}
+        </div>
         <div class="slider-group">
           <div class="slider-row">
             <input type="range" class="slider" id="brightnessSlider" min="0" max="255" value="${avgState.brightness}" aria-label="Brightness" style="--slider-percent:${brightnessPercent}%;--slider-ratio:${brightnessPercent/100};--slider-fill:${brightnessColor};">
@@ -1253,7 +1280,10 @@ class SpatialLightColorCard extends HTMLElement {
     const brightnessColor = Array.isArray(avgState.color) ? `rgb(${avgState.color.join(',')})` : 'var(--accent-primary)';
     return `
       <div class="controls-below" id="controlsBelow" role="region" aria-label="Light controls" aria-live="polite">
-        <canvas id="colorWheelMini" class="color-wheel-mini" width="256" height="256" role="img" aria-label="Color picker"></canvas>
+        <div class="color-wheel-presets-wrap">
+          <canvas id="colorWheelMini" class="color-wheel-mini" width="256" height="256" role="img" aria-label="Color picker"></canvas>
+          ${this._renderColorPresets()}
+        </div>
         <div class="slider-group">
           <div class="slider-row">
             <input type="range" class="slider" id="brightnessSlider" min="0" max="255" value="${avgState.brightness}" aria-label="Brightness" style="--slider-percent:${brightnessPercent}%;--slider-ratio:${brightnessPercent/100};--slider-fill:${brightnessColor};">
@@ -1746,6 +1776,20 @@ class SpatialLightColorCard extends HTMLElement {
         this._colorWheelGesture = null;
       });
     }
+    // Color preset click handlers
+    this.shadowRoot.querySelectorAll('.color-preset').forEach(el => {
+      el.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const rgbAttr = el.dataset.presetRgb;
+        let rgb;
+        if (rgbAttr) {
+          rgb = rgbAttr.split(',').map(Number);
+        } else {
+          rgb = this._hexToRgb(el.dataset.presetColor);
+        }
+        if (rgb) this._applyColorWheelSelection(rgb);
+      });
+    });
     if (this._els.brightnessSlider) {
       // Input/Change listeners kept for keyboard support but logic dominated by pointer events
       this._els.brightnessSlider.addEventListener('input', (e) => this._handleBrightnessInput(e));
@@ -2232,6 +2276,102 @@ class SpatialLightColorCard extends HTMLElement {
     return [r, g, b];
   }
 
+  _hexToRgb(hex) {
+    if (!hex) return null;
+    const h = hex.replace('#', '');
+    if (h.length === 3) {
+      return [parseInt(h[0] + h[0], 16), parseInt(h[1] + h[1], 16), parseInt(h[2] + h[2], 16)];
+    }
+    if (h.length === 6) {
+      return [parseInt(h.substring(0, 2), 16), parseInt(h.substring(2, 4), 16), parseInt(h.substring(4, 6), 16)];
+    }
+    return null;
+  }
+
+  _getLiveColors() {
+    const seen = new Set();
+    const colors = [];
+    this._config.entities.forEach(id => {
+      const st = this._hass?.states?.[id];
+      if (!st || st.state !== 'on') return;
+      if (!Array.isArray(st.attributes.rgb_color)) return;
+      const [r, g, b] = st.attributes.rgb_color;
+      const hex = '#' + [r, g, b].map(v => v.toString(16).padStart(2, '0')).join('');
+      if (!seen.has(hex)) {
+        seen.add(hex);
+        colors.push({ hex, rgb: [r, g, b] });
+      }
+    });
+    return colors;
+  }
+
+  _refreshColorPresets() {
+    if (!this.shadowRoot) return;
+    const wraps = this.shadowRoot.querySelectorAll('.color-wheel-presets-wrap');
+    if (!wraps.length) return;
+
+    const presetsHtml = this._renderColorPresets();
+
+    wraps.forEach(wrap => {
+      let existing = wrap.querySelector('.color-presets');
+      if (presetsHtml) {
+        if (existing) {
+          // Create a temp container to parse the new HTML
+          const temp = document.createElement('div');
+          temp.innerHTML = presetsHtml;
+          const newPresets = temp.firstElementChild;
+          wrap.replaceChild(newPresets, existing);
+        } else {
+          wrap.insertAdjacentHTML('beforeend', presetsHtml);
+        }
+      } else if (existing) {
+        existing.remove();
+      }
+    });
+
+    // Re-bind click handlers for new preset elements
+    this.shadowRoot.querySelectorAll('.color-preset').forEach(el => {
+      if (el._presetBound) return;
+      el._presetBound = true;
+      el.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const rgbAttr = el.dataset.presetRgb;
+        let rgb;
+        if (rgbAttr) {
+          rgb = rgbAttr.split(',').map(Number);
+        } else {
+          rgb = this._hexToRgb(el.dataset.presetColor);
+        }
+        if (rgb) this._applyColorWheelSelection(rgb);
+      });
+    });
+  }
+
+  _renderColorPresets() {
+    const configPresets = this._config.color_presets || [];
+    const liveColors = this._getLiveColors();
+
+    // Deduplicate: config presets first, then live colors not already in config
+    const configSet = new Set(configPresets.map(c => c.toLowerCase()));
+    const filteredLive = liveColors.filter(lc => !configSet.has(lc.hex.toLowerCase()));
+
+    if (configPresets.length === 0 && filteredLive.length === 0) return '';
+
+    const isValidColor = (c) => /^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/.test(c);
+
+    let html = '';
+    configPresets.forEach(color => {
+      if (!isValidColor(color)) return;
+      html += `<div class="color-preset" data-preset-color="${color}" style="background:${color};" title="${color}"></div>`;
+    });
+    filteredLive.forEach(lc => {
+      html += `<div class="color-preset live-color" data-preset-color="${lc.hex}" data-preset-rgb="${lc.rgb.join(',')}" style="background:${lc.hex};" title="Current: ${lc.hex}"></div>`;
+    });
+
+    if (!html) return '';
+    return `<div class="color-presets">${html}</div>`;
+  }
+
   _applyColorWheelSelection(rgb) {
     const controlled = this._selectedLights.size > 0
       ? [...this._selectedLights]
@@ -2483,6 +2623,7 @@ class SpatialLightColorCard extends HTMLElement {
     if ((this._config.always_show_controls || this._selectedLights.size > 0 || this._config.default_entity) && this._els.colorWheel) {
       this._requestColorWheelDraw();
     }
+    this._refreshColorPresets();
     this._refreshEntityIcons();
   }
 
@@ -2543,6 +2684,13 @@ class SpatialLightColorCard extends HTMLElement {
       });
     }
 
+    if (this._config.color_presets && this._config.color_presets.length) {
+      yamlLines.push('color_presets:');
+      this._config.color_presets.forEach(color => {
+        yamlLines.push(`${indent}- "${color}"`);
+      });
+    }
+
     if (this._config.label_overrides && Object.keys(this._config.label_overrides).length) {
       yamlLines.push('label_overrides:');
       Object.entries(this._config.label_overrides).forEach(([entity, label]) => {
@@ -2585,7 +2733,8 @@ class SpatialLightColorCard extends HTMLElement {
       show_settings_button: true, always_show_controls: false, controls_below: true,
       default_entity: null, show_entity_icons: false, icon_style: 'mdi',
       light_size: 56, icon_only_mode: false, size_overrides: {}, icon_only_overrides: {},
-      switch_on_color: '#ffa500', switch_off_color: '#2a2a2a', scene_color: '#6366f1'
+      switch_on_color: '#ffa500', switch_off_color: '#2a2a2a', scene_color: '#6366f1',
+      color_presets: [],
     };
   }
 }

@@ -2882,47 +2882,30 @@ class SpatialLightColorCardEditor extends HTMLElement {
   }
 
   async _loadHAElements() {
-    // ha-entity-picker, ha-switch, ha-picture-upload are lazy-loaded by HA.
+    // ha-entity-picker and ha-switch are lazy-loaded by HA.
     // We must trigger their loading before we can use them.
-    const needEntityPicker = !customElements.get('ha-entity-picker');
-    const needPictureUpload = !customElements.get('ha-picture-upload');
-    if (!needEntityPicker && !needPictureUpload) return;
+    if (customElements.get('ha-entity-picker')) return;
 
     // Method 1: loadCardHelpers (most reliable)
     try {
       if (window.loadCardHelpers) {
         const helpers = await window.loadCardHelpers();
         if (helpers) {
-          // Creating an entities card forces HA to load ha-entity-picker
-          if (needEntityPicker) {
-            const card = await helpers.createCardElement({ type: 'entities', entities: [] });
-            if (card) {
-              await card.constructor?.getConfigElement?.();
-            }
-          }
-          // Creating a picture card forces HA to load ha-picture-upload
-          if (needPictureUpload) {
-            const picCard = await helpers.createCardElement({ type: 'picture', image: '' });
-            if (picCard) {
-              await picCard.constructor?.getConfigElement?.();
-            }
+          // Creating an entities card element forces HA to load ha-entity-picker
+          const card = await helpers.createCardElement({ type: 'entities', entities: [] });
+          if (card) {
+            // Trigger the card to load its editor elements
+            await card.constructor?.getConfigElement?.();
           }
         }
       }
     } catch (_) { /* ignore */ }
 
-    // Method 2: Wait for custom elements to be defined (with timeout)
-    const waitFor = [];
+    // Method 2: Wait for custom element to be defined (with timeout)
     if (!customElements.get('ha-entity-picker')) {
-      waitFor.push(customElements.whenDefined('ha-entity-picker'));
-    }
-    if (!customElements.get('ha-picture-upload')) {
-      waitFor.push(customElements.whenDefined('ha-picture-upload'));
-    }
-    if (waitFor.length) {
       try {
         await Promise.race([
-          Promise.all(waitFor),
+          customElements.whenDefined('ha-entity-picker'),
           new Promise(resolve => setTimeout(resolve, 3000)),
         ]);
       } catch (_) { /* ignore */ }
@@ -3024,10 +3007,10 @@ class SpatialLightColorCardEditor extends HTMLElement {
     if (defPicker) {
       defPicker.value = this._config.default_entity || '';
     }
-    // Set hass on background image uploader
-    const bgUpload = this.shadowRoot.getElementById('cfgBgImage');
-    if (bgUpload) {
-      bgUpload.hass = this._hass;
+    // Set hass on background image form
+    const bgForm = this.shadowRoot.getElementById('cfgBgImageForm');
+    if (bgForm) {
+      bgForm.hass = this._hass;
     }
   }
 
@@ -3187,7 +3170,7 @@ class SpatialLightColorCardEditor extends HTMLElement {
         min-width: 44px; text-align: right; font-variant-numeric: tabular-nums;
       }
       ha-switch { --mdc-theme-secondary: var(--primary-color, #03a9f4); }
-      ha-picture-upload { display: block; width: 100%; }
+      #cfgBgImageForm { display: block; width: 100%; }
 
       .edit-positions-banner {
         padding: 10px 14px; border-radius: 8px;
@@ -3378,7 +3361,7 @@ class SpatialLightColorCardEditor extends HTMLElement {
             </div>
             <div class="input-row">
               <label>Background Image</label>
-              <ha-picture-upload id="cfgBgImage" select-media></ha-picture-upload>
+              <ha-form id="cfgBgImageForm"></ha-form>
             </div>
             <div class="two-col">
               <div class="input-row">
@@ -3553,15 +3536,20 @@ class SpatialLightColorCardEditor extends HTMLElement {
     const lsv = root.getElementById('cfgLightSizeValue');
     if (lsv) lsv.textContent = `${c.light_size || 56}px`;
 
-    // Background image
+    // Background image (ha-form with media selector, same as built-in picture cards)
     let bgUrl = '';
     if (c.background_image) {
       bgUrl = typeof c.background_image === 'string' ? c.background_image : (c.background_image.url || '');
     }
-    const bgUpload = root.getElementById('cfgBgImage');
-    if (bgUpload) {
-      bgUpload.value = bgUrl || null;
-      if (this._hass) bgUpload.hass = this._hass;
+    const bgForm = root.getElementById('cfgBgImageForm');
+    if (bgForm) {
+      bgForm.schema = [{
+        name: 'image',
+        selector: { media: { accept: ['image/*'], clearable: true, image_upload: true, hide_content_type: true } },
+      }];
+      bgForm.data = bgUrl ? { image: { media_content_id: bgUrl } } : {};
+      bgForm.computeLabel = () => '';
+      if (this._hass) bgForm.hass = this._hass;
     }
 
     // Colors
@@ -3831,15 +3819,17 @@ class SpatialLightColorCardEditor extends HTMLElement {
       });
     }
 
-    const bgUpload = root.getElementById('cfgBgImage');
-    if (bgUpload) {
-      bgUpload.addEventListener('change', () => {
-        const val = bgUpload.value || '';
-        if (val) {
+    const bgForm = root.getElementById('cfgBgImageForm');
+    if (bgForm) {
+      bgForm.addEventListener('value-changed', (ev) => {
+        ev.stopPropagation();
+        const imageData = ev.detail.value?.image;
+        const url = (imageData && imageData.media_content_id) || '';
+        if (url) {
           if (this._config.background_image && typeof this._config.background_image === 'object') {
-            this._config.background_image.url = val;
+            this._config.background_image.url = url;
           } else {
-            this._config.background_image = val;
+            this._config.background_image = url;
           }
         } else {
           this._config.background_image = null;

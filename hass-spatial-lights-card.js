@@ -2835,9 +2835,10 @@ class SpatialLightColorCardEditor extends HTMLElement {
     this._editorId = Math.random().toString(36).substr(2, 9);
     this._expandedEntity = null;
     this._boundPositionHandler = null;
+    this._haElementsLoaded = false;
   }
 
-  connectedCallback() {
+  async connectedCallback() {
     this._boundPositionHandler = (e) => {
       if (e.detail && e.detail.editorId === this._editorId && e.detail.positions) {
         if (!this._config.positions) this._config.positions = {};
@@ -2846,6 +2847,47 @@ class SpatialLightColorCardEditor extends HTMLElement {
       }
     };
     window.addEventListener('spatial-card-positions-changed', this._boundPositionHandler);
+
+    // Force HA to load lazy custom elements (ha-entity-picker, ha-switch, etc.)
+    if (!this._haElementsLoaded) {
+      await this._loadHAElements();
+      this._haElementsLoaded = true;
+      // Re-render now that elements are available
+      if (this._config.entities) {
+        this._render();
+      }
+    }
+  }
+
+  async _loadHAElements() {
+    // ha-entity-picker and ha-switch are lazy-loaded by HA.
+    // We must trigger their loading before we can use them.
+    if (customElements.get('ha-entity-picker')) return;
+
+    // Method 1: loadCardHelpers (most reliable)
+    try {
+      if (window.loadCardHelpers) {
+        const helpers = await window.loadCardHelpers();
+        if (helpers) {
+          // Creating an entities card element forces HA to load ha-entity-picker
+          const card = await helpers.createCardElement({ type: 'entities', entities: [] });
+          if (card) {
+            // Trigger the card to load its editor elements
+            await card.constructor?.getConfigElement?.();
+          }
+        }
+      }
+    } catch (_) { /* ignore */ }
+
+    // Method 2: Wait for custom element to be defined (with timeout)
+    if (!customElements.get('ha-entity-picker')) {
+      try {
+        await Promise.race([
+          customElements.whenDefined('ha-entity-picker'),
+          new Promise(resolve => setTimeout(resolve, 3000)),
+        ]);
+      } catch (_) { /* ignore */ }
+    }
   }
 
   disconnectedCallback() {

@@ -2836,17 +2836,32 @@ class SpatialLightColorCardEditor extends HTMLElement {
     this._expandedEntity = null;
     this._boundPositionHandler = null;
     this._haElementsLoaded = false;
+    this._positionHistory = [];
+    this._boundEditorKeyDown = null;
   }
 
   async connectedCallback() {
     this._boundPositionHandler = (e) => {
       if (e.detail && e.detail.editorId === this._editorId && e.detail.positions) {
+        this._pushPositionHistory();
         if (!this._config.positions) this._config.positions = {};
         this._config.positions = e.detail.positions;
         this._fireConfigChanged();
       }
     };
     window.addEventListener('spatial-card-positions-changed', this._boundPositionHandler);
+
+    this._boundEditorKeyDown = (e) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === 'z' && !e.shiftKey) {
+        if (this._positionHistory.length > 0) {
+          e.preventDefault();
+          e.stopPropagation();
+          this._undoPositions();
+        }
+      }
+    };
+    // Use capture so we intercept before the card's own handler
+    window.addEventListener('keydown', this._boundEditorKeyDown, true);
 
     // Force HA to load lazy custom elements (ha-entity-picker, ha-switch, etc.)
     if (!this._haElementsLoaded) {
@@ -2895,6 +2910,11 @@ class SpatialLightColorCardEditor extends HTMLElement {
       window.removeEventListener('spatial-card-positions-changed', this._boundPositionHandler);
       this._boundPositionHandler = null;
     }
+    if (this._boundEditorKeyDown) {
+      window.removeEventListener('keydown', this._boundEditorKeyDown, true);
+      this._boundEditorKeyDown = null;
+    }
+    this._positionHistory = [];
     if (this._config._edit_positions) {
       delete this._config._edit_positions;
       delete this._config._editor_id;
@@ -2925,6 +2945,22 @@ class SpatialLightColorCardEditor extends HTMLElement {
       composed: true,
     }));
     requestAnimationFrame(() => { this._configFromEditor = false; });
+  }
+
+  _pushPositionHistory() {
+    const snapshot = JSON.parse(JSON.stringify(this._config.positions || {}));
+    // Avoid duplicate consecutive snapshots
+    const last = this._positionHistory[this._positionHistory.length - 1];
+    if (last && JSON.stringify(last) === JSON.stringify(snapshot)) return;
+    this._positionHistory.push(snapshot);
+    // Cap history at 50 entries
+    if (this._positionHistory.length > 50) this._positionHistory.shift();
+  }
+
+  _undoPositions() {
+    if (this._positionHistory.length === 0) return;
+    this._config.positions = this._positionHistory.pop();
+    this._fireConfigChanged();
   }
 
   _setupEntityPickers() {
@@ -3291,7 +3327,8 @@ class SpatialLightColorCardEditor extends HTMLElement {
                 </select>
               </div>
               <div class="input-row">
-                <ha-entity-picker id="cfgDefaultEntity" label="Default entity" allow-custom-entity></ha-entity-picker>
+                <label>Default Entity</label>
+                <ha-entity-picker id="cfgDefaultEntity" allow-custom-entity></ha-entity-picker>
               </div>
             </div>
           </div>
@@ -3531,6 +3568,7 @@ class SpatialLightColorCardEditor extends HTMLElement {
       rearrangeBtn.addEventListener('click', () => {
         const entities = this._config.entities || [];
         if (entities.length === 0) return;
+        this._pushPositionHistory();
         const cols = Math.ceil(Math.sqrt(entities.length * 1.5));
         const rows = Math.ceil(entities.length / cols);
         const spacing = 100 / (cols + 1);
@@ -3554,6 +3592,7 @@ class SpatialLightColorCardEditor extends HTMLElement {
       snapBtn.addEventListener('click', () => {
         const entities = this._config.entities || [];
         if (entities.length === 0) return;
+        this._pushPositionHistory();
         const positions = this._config.positions || {};
         const gridSize = this._config.grid_size || 25;
         const canvasHeight = this._config.canvas_height || 450;

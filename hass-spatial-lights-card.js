@@ -186,6 +186,7 @@ class SpatialLightColorCard extends HTMLElement {
       color_presets: Array.isArray(config.color_presets)
         ? config.color_presets.filter(c => typeof c === 'string' && c.trim()).map(c => c.trim())
         : [],
+      show_live_colors: config.show_live_colors !== false,
     };
 
     this._gridSize = this._config.grid_size;
@@ -922,6 +923,11 @@ class SpatialLightColorCard extends HTMLElement {
       .canvas.has-selection .light:not(.selected) { filter: brightness(0.55) saturate(0.6); }
       .canvas.has-selection .light.off:not(.selected) { filter: brightness(0.45) saturate(0.5); }
 
+      .light.preset-highlight::before {
+        box-shadow: 0 0 0 2.5px rgba(255,255,255,0.7), 0 0 16px rgba(255,255,255,0.35) !important;
+      }
+      .light.preset-highlight { z-index: 4; filter: brightness(1.2) !important; }
+
       .light.dragging { cursor: grabbing; z-index: 6; transform: translate(-50%,-50%) scale(1.04); }
 
       .selection-box {
@@ -956,17 +962,45 @@ class SpatialLightColorCard extends HTMLElement {
       }
 
       .color-presets {
-        display: flex; flex-wrap: wrap; gap: 6px; justify-content: center; max-width: 164px;
+        display: flex; flex-wrap: wrap; gap: 2px; justify-content: center; max-width: 164px;
       }
       .color-preset {
-        width: 28px; height: 28px; border-radius: 9999px; cursor: pointer; border: 2px solid rgba(255,255,255,0.15);
-        box-shadow: var(--shadow-sm); transition: transform var(--transition-fast), border-color var(--transition-fast), box-shadow var(--transition-fast);
-        flex-shrink: 0; position: relative;
+        width: 36px; height: 36px; border-radius: 9999px; cursor: pointer;
+        flex-shrink: 0; position: relative; background: transparent !important;
+        /* Stable hit area - visual is rendered via ::after */
       }
-      .color-preset:hover { transform: scale(1.15); border-color: rgba(255,255,255,0.5); box-shadow: 0 0 8px rgba(255,255,255,0.2); }
-      .color-preset:active { transform: scale(0.95); }
-      .color-preset.live-color { border-style: dashed; border-color: rgba(255,255,255,0.3); }
-      .color-preset.live-color:hover { border-color: rgba(255,255,255,0.6); }
+      .color-preset::after {
+        content: ''; position: absolute; inset: 4px; border-radius: 9999px;
+        background: var(--preset-color); border: 2px solid rgba(255,255,255,0.15);
+        box-shadow: var(--shadow-sm);
+        transition: transform var(--transition-fast), border-color var(--transition-fast), box-shadow var(--transition-fast);
+      }
+      .color-preset:hover::after { transform: scale(1.15); border-color: rgba(255,255,255,0.5); box-shadow: 0 0 8px rgba(255,255,255,0.2); }
+      .color-preset:active::after { transform: scale(0.92); }
+      .color-preset.live-color::after { border-style: dashed; border-color: rgba(255,255,255,0.3); }
+      .color-preset.live-color:hover::after { border-color: rgba(255,255,255,0.6); }
+
+      .temp-presets {
+        display: flex; flex-wrap: wrap; gap: 2px; align-items: center;
+      }
+      .temp-preset {
+        width: 36px; height: 36px; border-radius: 9999px; cursor: pointer;
+        flex-shrink: 0; position: relative; background: transparent !important;
+      }
+      .temp-preset::after {
+        content: ''; position: absolute; inset: 4px; border-radius: 9999px;
+        background: var(--preset-color); border: 2px dashed rgba(255,255,255,0.3);
+        box-shadow: var(--shadow-sm);
+        transition: transform var(--transition-fast), border-color var(--transition-fast), box-shadow var(--transition-fast);
+      }
+      .temp-preset:hover::after { transform: scale(1.15); border-color: rgba(255,255,255,0.6); box-shadow: 0 0 8px rgba(255,255,255,0.2); }
+      .temp-preset:active::after { transform: scale(0.92); }
+      .temp-preset .temp-label {
+        position: absolute; top: calc(100% + 2px); left: 50%; transform: translateX(-50%);
+        font-size: 9px; color: var(--text-tertiary); white-space: nowrap; pointer-events: none;
+        opacity: 0; transition: opacity var(--transition-fast);
+      }
+      .temp-preset:hover .temp-label { opacity: 1; }
 
       .slider-group { display:flex; flex-direction:column; gap:10px; min-width: 240px; flex:1; width:100%; }
       .slider-row { display:flex; align-items:center; gap:8px; width:100%; padding: 2px 0; }
@@ -1265,6 +1299,7 @@ class SpatialLightColorCard extends HTMLElement {
             <input type="range" class="slider temperature" id="temperatureSlider" min="${tempRange.min}" max="${tempRange.max}" value="${clampedTemp}" aria-label="Color temperature" style="--slider-percent:${tempPercent}%;--slider-ratio:${tempPercent/100};">
             <span class="slider-value" id="temperatureValue">${clampedTemp}K</span>
           </div>
+          ${this._renderTemperaturePresets()}
         </div>
       </div>
     `;
@@ -1293,6 +1328,7 @@ class SpatialLightColorCard extends HTMLElement {
             <input type="range" class="slider temperature" id="temperatureSlider" min="${tempRange.min}" max="${tempRange.max}" value="${clampedTemp}" aria-label="Color temperature" style="--slider-percent:${tempPercent}%;--slider-ratio:${tempPercent/100};">
             <span class="slider-value" id="temperatureValue">${clampedTemp}K</span>
           </div>
+          ${this._renderTemperaturePresets()}
         </div>
       </div>
     `;
@@ -1317,6 +1353,10 @@ class SpatialLightColorCard extends HTMLElement {
           <div class="settings-option">
             <span>Icon-Only Mode</span>
             <button class="toggle ${this._config.icon_only_mode ? 'on' : ''}" id="iconOnlyToggle" role="switch" aria-checked="${this._config.icon_only_mode}" aria-label="Show icons only without filled circles"></button>
+          </div>
+          <div class="settings-option">
+            <span>Show Live Colors</span>
+            <button class="toggle ${this._config.show_live_colors ? 'on' : ''}" id="liveColorsToggle" role="switch" aria-checked="${this._config.show_live_colors}" aria-label="Show live colors as presets"></button>
           </div>
           <div class="settings-option settings-size-row">
             <span>Light Size</span>
@@ -1656,6 +1696,16 @@ class SpatialLightColorCard extends HTMLElement {
       });
     }
 
+    const liveColorsToggle = this.shadowRoot.getElementById('liveColorsToggle');
+    if (liveColorsToggle) {
+      liveColorsToggle.addEventListener('click', () => {
+        this._config.show_live_colors = !this._config.show_live_colors;
+        liveColorsToggle.classList.toggle('on', this._config.show_live_colors);
+        liveColorsToggle.setAttribute('aria-checked', String(this._config.show_live_colors));
+        this._refreshColorPresets();
+      });
+    }
+
     if (this._els.lightSizeSlider) {
       this._els.lightSizeSlider.addEventListener('input', (e) => {
         const newSize = parseInt(e.target.value, 10);
@@ -1776,20 +1826,8 @@ class SpatialLightColorCard extends HTMLElement {
         this._colorWheelGesture = null;
       });
     }
-    // Color preset click handlers
-    this.shadowRoot.querySelectorAll('.color-preset').forEach(el => {
-      el.addEventListener('click', (e) => {
-        e.stopPropagation();
-        const rgbAttr = el.dataset.presetRgb;
-        let rgb;
-        if (rgbAttr) {
-          rgb = rgbAttr.split(',').map(Number);
-        } else {
-          rgb = this._hexToRgb(el.dataset.presetColor);
-        }
-        if (rgb) this._applyColorWheelSelection(rgb);
-      });
-    });
+    // Preset click and highlight handlers (color + temperature)
+    this._bindPresetHandlers();
     if (this._els.brightnessSlider) {
       // Input/Change listeners kept for keyboard support but logic dominated by pointer events
       this._els.brightnessSlider.addEventListener('input', (e) => this._handleBrightnessInput(e));
@@ -2288,48 +2326,139 @@ class SpatialLightColorCard extends HTMLElement {
     return null;
   }
 
+  _rgbDistance(a, b) {
+    const dr = a[0] - b[0], dg = a[1] - b[1], db = a[2] - b[2];
+    return Math.sqrt(dr * dr + dg * dg + db * db);
+  }
+
   _getLiveColors() {
-    const seen = new Set();
+    const COLOR_TOLERANCE = 30;
     const colors = [];
+    // Color modes that indicate an actual RGB color choice (not temperature)
+    const rgbModes = new Set(['hs', 'rgb', 'xy', 'rgbw', 'rgbww']);
+
     this._config.entities.forEach(id => {
       const st = this._hass?.states?.[id];
       if (!st || st.state !== 'on') return;
       if (!Array.isArray(st.attributes.rgb_color)) return;
-      const [r, g, b] = st.attributes.rgb_color;
-      const hex = '#' + [r, g, b].map(v => v.toString(16).padStart(2, '0')).join('');
-      if (!seen.has(hex)) {
-        seen.add(hex);
-        colors.push({ hex, rgb: [r, g, b] });
+
+      // Skip lights in temperature mode - their rgb_color is just the temp rendered as RGB
+      const colorMode = st.attributes.color_mode;
+      if (colorMode && !rgbModes.has(colorMode)) return;
+
+      const rgb = [st.attributes.rgb_color[0], st.attributes.rgb_color[1], st.attributes.rgb_color[2]];
+
+      // Deduplicate with tolerance against already-collected colors
+      const isDupe = colors.some(c => this._rgbDistance(c.rgb, rgb) < COLOR_TOLERANCE);
+      if (!isDupe) {
+        const hex = '#' + rgb.map(v => v.toString(16).padStart(2, '0')).join('');
+        colors.push({ hex, rgb, entities: [id] });
+      } else {
+        // Add entity to the matching color's list
+        const match = colors.find(c => this._rgbDistance(c.rgb, rgb) < COLOR_TOLERANCE);
+        if (match) match.entities.push(id);
       }
     });
     return colors;
   }
 
-  _refreshColorPresets() {
-    if (!this.shadowRoot) return;
-    const wraps = this.shadowRoot.querySelectorAll('.color-wheel-presets-wrap');
-    if (!wraps.length) return;
+  _getLiveTemperatures() {
+    const TEMP_TOLERANCE = 100; // Kelvin
+    const temps = [];
+    this._config.entities.forEach(id => {
+      const st = this._hass?.states?.[id];
+      if (!st || st.state !== 'on') return;
+      const colorMode = st.attributes.color_mode;
+      // Only include lights actually in temperature mode
+      if (colorMode !== 'color_temp') return;
+      if (st.attributes.color_temp == null) return;
+      const kelvin = Math.round(1000000 / st.attributes.color_temp);
+      if (!Number.isFinite(kelvin)) return;
 
-    const presetsHtml = this._renderColorPresets();
-
-    wraps.forEach(wrap => {
-      let existing = wrap.querySelector('.color-presets');
-      if (presetsHtml) {
-        if (existing) {
-          // Create a temp container to parse the new HTML
-          const temp = document.createElement('div');
-          temp.innerHTML = presetsHtml;
-          const newPresets = temp.firstElementChild;
-          wrap.replaceChild(newPresets, existing);
-        } else {
-          wrap.insertAdjacentHTML('beforeend', presetsHtml);
-        }
-      } else if (existing) {
-        existing.remove();
+      const isDupe = temps.some(t => Math.abs(t.kelvin - kelvin) < TEMP_TOLERANCE);
+      if (!isDupe) {
+        temps.push({ kelvin, entities: [id] });
+      } else {
+        const match = temps.find(t => Math.abs(t.kelvin - kelvin) < TEMP_TOLERANCE);
+        if (match) match.entities.push(id);
       }
     });
+    return temps;
+  }
+
+  _replaceOrInsert(parent, selector, html, insertPosition = 'beforeend') {
+    const existing = parent.querySelector(selector);
+    if (html) {
+      const temp = document.createElement('div');
+      temp.innerHTML = html;
+      const newEl = temp.firstElementChild;
+      if (existing) {
+        parent.replaceChild(newEl, existing);
+      } else {
+        parent.insertAdjacentHTML(insertPosition, html);
+      }
+    } else if (existing) {
+      existing.remove();
+    }
+  }
+
+  _refreshColorPresets() {
+    if (!this.shadowRoot) return;
+
+    // Refresh color presets in .color-wheel-presets-wrap
+    const colorWraps = this.shadowRoot.querySelectorAll('.color-wheel-presets-wrap');
+    const presetsHtml = this._renderColorPresets();
+    colorWraps.forEach(wrap => this._replaceOrInsert(wrap, '.color-presets', presetsHtml));
+
+    // Refresh temperature presets in .slider-group
+    const sliderGroups = this.shadowRoot.querySelectorAll('.slider-group');
+    const tempHtml = this._renderTemperaturePresets();
+    sliderGroups.forEach(group => this._replaceOrInsert(group, '.temp-presets', tempHtml));
 
     // Re-bind click handlers for new preset elements
+    this._bindPresetHandlers();
+  }
+
+  _highlightEntities(entityList) {
+    if (!this.shadowRoot) return;
+    this.shadowRoot.querySelectorAll('.light.preset-highlight').forEach(l => l.classList.remove('preset-highlight'));
+    if (!entityList) return;
+    const entities = typeof entityList === 'string' ? entityList.split(',') : entityList;
+    entities.forEach(id => {
+      const el = this.shadowRoot.querySelector(`.light[data-entity="${id}"]`);
+      if (el) el.classList.add('preset-highlight');
+    });
+  }
+
+  _bindPresetHighlight(el) {
+    const entities = el.dataset.presetEntities;
+    if (!entities) return;
+
+    // Desktop: hover
+    el.addEventListener('mouseenter', () => this._highlightEntities(entities));
+    el.addEventListener('mouseleave', () => this._highlightEntities(null));
+
+    // Mobile: long-press (300ms) to highlight, release to clear
+    let holdTimer = null;
+    el.addEventListener('pointerdown', (e) => {
+      if (e.pointerType === 'mouse') return; // handled by mouseenter
+      holdTimer = setTimeout(() => {
+        holdTimer = null;
+        this._highlightEntities(entities);
+        if (typeof navigator !== 'undefined' && navigator.vibrate) navigator.vibrate(15);
+      }, 300);
+    });
+    const clearHold = () => {
+      if (holdTimer) { clearTimeout(holdTimer); holdTimer = null; }
+      this._highlightEntities(null);
+    };
+    el.addEventListener('pointerup', clearHold);
+    el.addEventListener('pointercancel', clearHold);
+    el.addEventListener('pointerleave', clearHold);
+  }
+
+  _bindPresetHandlers() {
+    if (!this.shadowRoot) return;
     this.shadowRoot.querySelectorAll('.color-preset').forEach(el => {
       if (el._presetBound) return;
       el._presetBound = true;
@@ -2344,16 +2473,32 @@ class SpatialLightColorCard extends HTMLElement {
         }
         if (rgb) this._applyColorWheelSelection(rgb);
       });
+      this._bindPresetHighlight(el);
+    });
+    this.shadowRoot.querySelectorAll('.temp-preset').forEach(el => {
+      if (el._presetBound) return;
+      el._presetBound = true;
+      el.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const kelvin = parseInt(el.dataset.presetKelvin, 10);
+        if (Number.isFinite(kelvin)) this._applyTemperaturePreset(kelvin);
+      });
+      this._bindPresetHighlight(el);
     });
   }
 
   _renderColorPresets() {
     const configPresets = this._config.color_presets || [];
-    const liveColors = this._getLiveColors();
+    const showLive = this._config.show_live_colors !== false;
 
-    // Deduplicate: config presets first, then live colors not already in config
-    const configSet = new Set(configPresets.map(c => c.toLowerCase()));
-    const filteredLive = liveColors.filter(lc => !configSet.has(lc.hex.toLowerCase()));
+    // Always fetch live colors for entity matching (config presets need it too for highlight)
+    const allLiveColors = this._getLiveColors();
+
+    // Deduplicate live colors against config presets using RGB distance tolerance
+    const configRgbs = configPresets.map(c => this._hexToRgb(c)).filter(Boolean);
+    const filteredLive = showLive
+      ? allLiveColors.filter(lc => !configRgbs.some(cr => this._rgbDistance(cr, lc.rgb) < 30))
+      : [];
 
     if (configPresets.length === 0 && filteredLive.length === 0) return '';
 
@@ -2362,14 +2507,53 @@ class SpatialLightColorCard extends HTMLElement {
     let html = '';
     configPresets.forEach(color => {
       if (!isValidColor(color)) return;
-      html += `<div class="color-preset" data-preset-color="${color}" style="background:${color};" title="${color}"></div>`;
+      const rgb = this._hexToRgb(color);
+      const matchingEntities = rgb ? allLiveColors
+        .filter(lc => this._rgbDistance(lc.rgb, rgb) < 30)
+        .flatMap(lc => lc.entities) : [];
+      const entitiesAttr = matchingEntities.length ? ` data-preset-entities="${matchingEntities.join(',')}"` : '';
+      html += `<div class="color-preset" data-preset-color="${color}"${entitiesAttr} style="--preset-color:${color};" title="${color}"></div>`;
     });
     filteredLive.forEach(lc => {
-      html += `<div class="color-preset live-color" data-preset-color="${lc.hex}" data-preset-rgb="${lc.rgb.join(',')}" style="background:${lc.hex};" title="Current: ${lc.hex}"></div>`;
+      html += `<div class="color-preset live-color" data-preset-color="${lc.hex}" data-preset-rgb="${lc.rgb.join(',')}" data-preset-entities="${lc.entities.join(',')}" style="--preset-color:${lc.hex};" title="Current: ${lc.hex}"></div>`;
     });
 
     if (!html) return '';
     return `<div class="color-presets">${html}</div>`;
+  }
+
+  _kelvinToRgb(kelvin) {
+    // Attempt Tanner Helland approximation
+    const temp = kelvin / 100;
+    let r, g, b;
+    if (temp <= 66) {
+      r = 255;
+      g = 99.4708025861 * Math.log(temp) - 161.1195681661;
+      b = temp <= 19 ? 0 : 138.5177312231 * Math.log(temp - 10) - 305.0447927307;
+    } else {
+      r = 329.698727446 * Math.pow(temp - 60, -0.1332047592);
+      g = 288.1221695283 * Math.pow(temp - 60, -0.0755148492);
+      b = 255;
+    }
+    return [Math.max(0, Math.min(255, Math.round(r))),
+            Math.max(0, Math.min(255, Math.round(g))),
+            Math.max(0, Math.min(255, Math.round(b)))];
+  }
+
+  _renderTemperaturePresets() {
+    if (this._config.show_live_colors === false) return '';
+    const temps = this._getLiveTemperatures();
+    if (temps.length === 0) return '';
+
+    let html = '';
+    temps.forEach(t => {
+      const rgb = this._kelvinToRgb(t.kelvin);
+      const hex = '#' + rgb.map(v => v.toString(16).padStart(2, '0')).join('');
+      const entities = t.entities.join(',');
+      html += `<div class="temp-preset" data-preset-kelvin="${t.kelvin}" data-preset-entities="${entities}" style="--preset-color:${hex};" title="${t.kelvin}K"><span class="temp-label">${t.kelvin}K</span></div>`;
+    });
+
+    return `<div class="temp-presets">${html}</div>`;
   }
 
   _applyColorWheelSelection(rgb) {
@@ -2386,6 +2570,27 @@ class SpatialLightColorCard extends HTMLElement {
       });
     });
     this._pendingColor = null;
+  }
+
+  _applyTemperaturePreset(kelvin) {
+    const controlled = this._selectedLights.size > 0
+      ? [...this._selectedLights]
+      : (this._config.default_entity ? [this._config.default_entity] : []);
+    if (controlled.length === 0 || !Number.isFinite(kelvin)) return;
+
+    const mireds = Math.round(1000000 / kelvin);
+    controlled.forEach(entity_id => {
+      this._hass.callService('light', 'turn_on', { entity_id, color_temp: mireds });
+    });
+
+    // Update slider to reflect the new temp
+    if (this._els.temperatureSlider) {
+      this._els.temperatureSlider.value = String(kelvin);
+      this._updateSliderVisual(this._els.temperatureSlider);
+    }
+    if (this._els.temperatureValue) {
+      this._els.temperatureValue.textContent = `${kelvin}K`;
+    }
   }
 
   _handleBrightnessInput(e) {
@@ -2690,6 +2895,7 @@ class SpatialLightColorCard extends HTMLElement {
         yamlLines.push(`${indent}- "${color}"`);
       });
     }
+    if (this._config.show_live_colors === false) yamlLines.push(`show_live_colors: false`);
 
     if (this._config.label_overrides && Object.keys(this._config.label_overrides).length) {
       yamlLines.push('label_overrides:');
@@ -2735,6 +2941,7 @@ class SpatialLightColorCard extends HTMLElement {
       light_size: 56, icon_only_mode: false, size_overrides: {}, icon_only_overrides: {},
       switch_on_color: '#ffa500', switch_off_color: '#2a2a2a', scene_color: '#6366f1',
       color_presets: [],
+      show_live_colors: true,
     };
   }
 }

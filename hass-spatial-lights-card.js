@@ -3007,11 +3007,10 @@ class SpatialLightColorCardEditor extends HTMLElement {
     if (defPicker) {
       defPicker.value = this._config.default_entity || '';
     }
-    // Set hass on background image selector
-    const bgSelector = this.shadowRoot.getElementById('cfgBgImageSelector');
-    if (bgSelector) {
-      bgSelector.hass = this._hass;
-      if (!bgSelector.selector) bgSelector.selector = { image: {} };
+    // Set hass on background image uploader
+    const bgUpload = this.shadowRoot.getElementById('cfgBgImage');
+    if (bgUpload) {
+      bgUpload.hass = this._hass;
     }
   }
 
@@ -3171,7 +3170,7 @@ class SpatialLightColorCardEditor extends HTMLElement {
         min-width: 44px; text-align: right; font-variant-numeric: tabular-nums;
       }
       ha-switch { --mdc-theme-secondary: var(--primary-color, #03a9f4); }
-      ha-selector { display: block; width: 100%; }
+      ha-picture-upload { display: block; width: 100%; }
 
       .edit-positions-banner {
         padding: 10px 14px; border-radius: 8px;
@@ -3362,7 +3361,7 @@ class SpatialLightColorCardEditor extends HTMLElement {
             </div>
             <div class="input-row">
               <label>Background Image</label>
-              <ha-selector id="cfgBgImageSelector"></ha-selector>
+              <ha-picture-upload id="cfgBgImage" select-media></ha-picture-upload>
             </div>
             <div class="two-col">
               <div class="input-row">
@@ -3542,11 +3541,10 @@ class SpatialLightColorCardEditor extends HTMLElement {
     if (c.background_image) {
       bgUrl = typeof c.background_image === 'string' ? c.background_image : (c.background_image.url || '');
     }
-    const bgSelector = root.getElementById('cfgBgImageSelector');
-    if (bgSelector) {
-      bgSelector.selector = { image: {} };
-      bgSelector.value = bgUrl || '';
-      if (this._hass) bgSelector.hass = this._hass;
+    const bgUpload = root.getElementById('cfgBgImage');
+    if (bgUpload) {
+      bgUpload.value = bgUrl || null;
+      if (this._hass) bgUpload.hass = this._hass;
     }
 
     // Colors
@@ -3816,10 +3814,10 @@ class SpatialLightColorCardEditor extends HTMLElement {
       });
     }
 
-    const bgImageSelector = root.getElementById('cfgBgImageSelector');
-    if (bgImageSelector) {
-      bgImageSelector.addEventListener('value-changed', (ev) => {
-        const val = ev.detail.value || '';
+    const bgUpload = root.getElementById('cfgBgImage');
+    if (bgUpload) {
+      bgUpload.addEventListener('change', () => {
+        const val = bgUpload.value || '';
         if (val) {
           if (this._config.background_image && typeof this._config.background_image === 'object') {
             this._config.background_image.url = val;

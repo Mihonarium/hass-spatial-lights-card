@@ -2935,6 +2935,11 @@ class SpatialLightColorCardEditor extends HTMLElement {
         picker.includeDomains = ['light', 'switch', 'scene', 'input_boolean'];
       }
     });
+    // Set default entity picker value
+    const defPicker = this.shadowRoot.getElementById('cfgDefaultEntity');
+    if (defPicker) {
+      defPicker.value = this._config.default_entity || '';
+    }
   }
 
   _getEntityName(entityId) {
@@ -3246,6 +3251,7 @@ class SpatialLightColorCardEditor extends HTMLElement {
             </div>
             ${editPositions ? '<div class="edit-positions-banner">Position editing is active. Drag lights on the card preview above to reposition them. Changes are saved automatically.</div>' : ''}
             <button class="action-btn" id="rearrangeBtn">Rearrange All in Grid</button>
+            <button class="action-btn" id="snapToGridBtn">Snap All to Grid</button>
           </div>
         </div>
 
@@ -3285,8 +3291,8 @@ class SpatialLightColorCardEditor extends HTMLElement {
                 </select>
               </div>
               <div class="input-row">
-                <label for="cfgDefaultEntity">Default Entity</label>
-                <input type="text" id="cfgDefaultEntity" placeholder="e.g. light.living_room">
+                <label>Default Entity</label>
+                <ha-entity-picker id="cfgDefaultEntity" label="Default entity" allow-custom-entity></ha-entity-picker>
               </div>
             </div>
           </div>
@@ -3441,7 +3447,6 @@ class SpatialLightColorCardEditor extends HTMLElement {
     setVal('cfgTitle', c.title || '');
     setVal('cfgCanvasHeight', c.canvas_height || 450);
     setVal('cfgGridSize', c.grid_size || 25);
-    setVal('cfgDefaultEntity', c.default_entity || '');
     setVal('cfgLabelMode', c.label_mode || 'smart');
     setVal('cfgLightSize', c.light_size || 56);
 
@@ -3537,6 +3542,40 @@ class SpatialLightColorCardEditor extends HTMLElement {
           newPositions[entity] = {
             x: spacing * (col + 1),
             y: (100 / (rows + 1)) * (row + 1),
+          };
+        });
+        this._config.positions = newPositions;
+        this._fireConfigChanged();
+      });
+    }
+
+    // --- Snap to grid ---
+    const snapBtn = root.getElementById('snapToGridBtn');
+    if (snapBtn) {
+      snapBtn.addEventListener('click', () => {
+        const entities = this._config.entities || [];
+        if (entities.length === 0) return;
+        const positions = this._config.positions || {};
+        const gridSize = this._config.grid_size || 25;
+        const canvasHeight = this._config.canvas_height || 450;
+        // Assume a roughly square-ish canvas; use height for both axes as an approximation.
+        // Grid snapping works in pixel space, so we convert % -> px, snap, convert back.
+        // We don't have the actual canvas width, so estimate from a typical card (~450px wide).
+        const canvasWidth = canvasHeight; // reasonable default; grid is square anyway
+        const newPositions = {};
+        entities.forEach((entity) => {
+          const pos = positions[entity];
+          if (!pos) {
+            newPositions[entity] = { x: 50, y: 50 };
+            return;
+          }
+          const px = (pos.x / 100) * canvasWidth;
+          const py = (pos.y / 100) * canvasHeight;
+          const sx = Math.round(px / gridSize) * gridSize;
+          const sy = Math.round(py / gridSize) * gridSize;
+          newPositions[entity] = {
+            x: Math.max(0, Math.min(100, (sx / canvasWidth) * 100)),
+            y: Math.max(0, Math.min(100, (sy / canvasHeight) * 100)),
           };
         });
         this._config.positions = newPositions;
@@ -3655,7 +3694,18 @@ class SpatialLightColorCardEditor extends HTMLElement {
     this._bindTextInput('cfgTitle', (val) => { this._config.title = val; });
     this._bindNumberInput('cfgCanvasHeight', (val) => { if (val >= 100 && val <= 2000) this._config.canvas_height = val; });
     this._bindNumberInput('cfgGridSize', (val) => { if (val >= 5 && val <= 100) this._config.grid_size = val; });
-    this._bindTextInput('cfgDefaultEntity', (val) => { this._config.default_entity = val || null; });
+    // Default entity picker
+    const defEntityPicker = root.getElementById('cfgDefaultEntity');
+    if (defEntityPicker) {
+      defEntityPicker.addEventListener('value-changed', (ev) => {
+        this._config.default_entity = ev.detail.value || null;
+        this._fireConfigChanged();
+      });
+      defEntityPicker.addEventListener('change', () => {
+        this._config.default_entity = defEntityPicker.value || null;
+        this._fireConfigChanged();
+      });
+    }
 
     const labelModeEl = root.getElementById('cfgLabelMode');
     if (labelModeEl) {

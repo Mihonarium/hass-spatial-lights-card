@@ -802,8 +802,9 @@ class SpatialLightColorCard extends HTMLElement {
         transform: translate(-50%,-50%); cursor: ${this._lockPositions ? 'pointer' : 'grab'};
         display:flex; align-items:center; justify-content:center; flex-direction:column;
         will-change: transform, left, top, background; z-index: 1;
+        transition: opacity 200ms ease, filter 200ms ease;
       }
-      .light::before { content:''; position:absolute; inset:0; border-radius:inherit; background:inherit; box-shadow: var(--shadow-sm); }
+      .light::before { content:''; position:absolute; inset:0; border-radius:inherit; background:inherit; box-shadow: var(--shadow-sm); transition: box-shadow 200ms ease, border-color 200ms ease, border-width 200ms ease, background-color 200ms ease, inset 200ms ease; }
       .light.on::after {
         content:''; position:absolute; inset:-6px; border-radius:inherit; background:inherit; filter: blur(10px);
         opacity: 0.22; z-index: -1;
@@ -844,12 +845,14 @@ class SpatialLightColorCard extends HTMLElement {
       /* Selection indicator for icon-only mode */
       .light.icon-only.selected::before {
         border-color: var(--accent-primary);
-        border-width: 2px;
-        box-shadow: 0 0 8px rgba(99,102,241,0.5);
+        border-width: 2.5px;
+        background: rgba(99,102,241,0.1);
+        box-shadow: 0 0 0 1px rgba(99,102,241,0.3), 0 0 12px rgba(99,102,241,0.55);
       }
       .light.icon-only.selected.on::before {
         border-color: var(--accent-primary);
-        box-shadow: 0 0 8px rgba(99,102,241,0.5), 0 0 8px var(--light-color, #ffa500);
+        background: rgba(99,102,241,0.08);
+        box-shadow: 0 0 0 1px rgba(99,102,241,0.3), 0 0 12px rgba(99,102,241,0.55), 0 0 8px var(--light-color, #ffa500);
       }
 
       /* Minimal UI mode - hides circles completely, shows only icons */
@@ -877,12 +880,16 @@ class SpatialLightColorCard extends HTMLElement {
       .light.minimal-ui.off {
         opacity: 1;
       }
-      /* Show circle border only when selected in minimal mode - uses light's color */
+      /* Show circle with accent highlight when selected in minimal mode */
       .light.minimal-ui.selected::before {
-        border: 1.5px solid var(--light-color, rgba(255,255,255,0.5));
+        border: 2px solid var(--accent-primary);
+        background: rgba(99,102,241,0.12);
+        box-shadow: 0 0 10px rgba(99,102,241,0.45);
       }
       .light.minimal-ui.selected.on::before {
-        border-color: var(--light-color, #ffa500);
+        border-color: var(--accent-primary);
+        background: rgba(99,102,241,0.08);
+        box-shadow: 0 0 10px rgba(99,102,241,0.45), 0 0 8px var(--light-color, #ffa500);
       }
 
       .light-icon-emoji { font-size: calc(32px * var(--icon-scale, 1)); line-height: 1; filter: drop-shadow(0 1px 2px rgba(0,0,0,0.6)); }
@@ -898,8 +905,18 @@ class SpatialLightColorCard extends HTMLElement {
 
       .light.selected { z-index: 3; }
       .light.selected::before {
-        box-shadow: 0 0 0 2px rgba(99,102,241,0.6), 0 0 10px rgba(99,102,241,0.4);
+        box-shadow: 0 0 0 2.5px rgba(99,102,241,0.9), 0 0 0 5px rgba(99,102,241,0.25), 0 0 15px rgba(99,102,241,0.5);
       }
+      /* Selected off lights should be more visible than normal off lights */
+      .light.selected.off { opacity: 0.82; }
+      .light.selected.off.icon-only { opacity: 0.92; }
+      .light.selected.off.minimal-ui { opacity: 1; }
+      /* Always show label for selected lights */
+      .light.selected .light-label { opacity: 1; }
+      /* Dim unselected lights when a selection is active to increase contrast */
+      .canvas.has-selection .light:not(.selected) { filter: brightness(0.55) saturate(0.6); }
+      .canvas.has-selection .light.off:not(.selected) { filter: brightness(0.45) saturate(0.5); }
+
       .light.dragging { cursor: grabbing; z-index: 6; transform: translate(-50%,-50%) scale(1.04); }
 
       .selection-box {
@@ -2443,6 +2460,11 @@ class SpatialLightColorCard extends HTMLElement {
       const selected = this._selectedLights.has(id);
       light.classList.toggle('selected', selected);
     });
+
+    // Toggle has-selection class on canvas for unselected dimming
+    if (this._els.canvas) {
+      this._els.canvas.classList.toggle('has-selection', this._selectedLights.size > 0);
+    }
 
     // Update controls to reflect averaged state
     const shouldShowControls = this._config.always_show_controls || this._selectedLights.size > 0 || this._config.default_entity;

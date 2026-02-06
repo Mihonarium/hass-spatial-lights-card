@@ -979,6 +979,9 @@ class SpatialLightColorCard extends HTMLElement {
       .color-preset:active::after { transform: scale(0.92); }
       .color-preset.live-color::after { border-style: dashed; border-color: rgba(255,255,255,0.3); }
       .color-preset.live-color:hover::after { border-color: rgba(255,255,255,0.6); }
+      .color-preset.active::after { box-shadow: 0 0 0 2.5px rgba(255,255,255,0.85); border-color: rgba(255,255,255,0.6); }
+      .color-preset.active:hover::after { box-shadow: 0 0 0 2.5px rgba(255,255,255,0.85), 0 0 8px rgba(255,255,255,0.2); }
+      .color-preset.active.live-color::after { border-style: dashed; }
 
       .temp-presets {
         display: flex; flex-wrap: wrap; gap: 2px; align-items: center;
@@ -995,6 +998,8 @@ class SpatialLightColorCard extends HTMLElement {
       }
       .temp-preset:hover::after { transform: scale(1.15); border-color: rgba(255,255,255,0.6); box-shadow: 0 0 8px rgba(255,255,255,0.2); }
       .temp-preset:active::after { transform: scale(0.92); }
+      .temp-preset.active::after { box-shadow: 0 0 0 2.5px rgba(255,255,255,0.85); border-color: rgba(255,255,255,0.6); }
+      .temp-preset.active:hover::after { box-shadow: 0 0 0 2.5px rgba(255,255,255,0.85), 0 0 8px rgba(255,255,255,0.2); }
       .temp-preset .temp-label {
         position: absolute; top: calc(100% + 2px); left: 50%; transform: translateX(-50%);
         font-size: 9px; color: var(--text-tertiary); white-space: nowrap; pointer-events: none;
@@ -2487,6 +2492,65 @@ class SpatialLightColorCard extends HTMLElement {
     });
   }
 
+  _getActivePresetColor() {
+    const controlled = this._getControlledEntities();
+    if (controlled.length === 0) return null;
+
+    const rgbModes = new Set(['hs', 'rgb', 'xy', 'rgbw', 'rgbww']);
+    // When nothing selected, check ALL entities for unanimity; when selected, check only selected
+    const entitiesToCheck = this._selectedLights.size > 0
+      ? controlled
+      : this._config.entities;
+
+    let referenceRgb = null;
+    let anyRgbOn = false;
+
+    for (const id of entitiesToCheck) {
+      const st = this._hass?.states?.[id];
+      if (!st || st.state !== 'on') continue;
+      const colorMode = st.attributes.color_mode;
+      if (colorMode && !rgbModes.has(colorMode)) continue;
+      if (!Array.isArray(st.attributes.rgb_color)) continue;
+      anyRgbOn = true;
+      const rgb = st.attributes.rgb_color;
+      if (!referenceRgb) {
+        referenceRgb = rgb;
+      } else if (this._rgbDistance(referenceRgb, rgb) >= 30) {
+        return null;
+      }
+    }
+    if (!anyRgbOn || !referenceRgb) return null;
+    return referenceRgb;
+  }
+
+  _getActivePresetTemp() {
+    const controlled = this._getControlledEntities();
+    if (controlled.length === 0) return null;
+
+    const entitiesToCheck = this._selectedLights.size > 0
+      ? controlled
+      : this._config.entities;
+
+    let referenceKelvin = null;
+    let anyTempOn = false;
+
+    for (const id of entitiesToCheck) {
+      const st = this._hass?.states?.[id];
+      if (!st || st.state !== 'on') continue;
+      if (st.attributes.color_mode !== 'color_temp') continue;
+      if (st.attributes.color_temp == null) continue;
+      anyTempOn = true;
+      const kelvin = Math.round(1000000 / st.attributes.color_temp);
+      if (referenceKelvin === null) {
+        referenceKelvin = kelvin;
+      } else if (Math.abs(referenceKelvin - kelvin) >= 100) {
+        return null;
+      }
+    }
+    if (!anyTempOn || referenceKelvin === null) return null;
+    return referenceKelvin;
+  }
+
   _renderColorPresets() {
     const configPresets = this._config.color_presets || [];
     const showLive = this._config.show_live_colors !== false;
@@ -2503,6 +2567,7 @@ class SpatialLightColorCard extends HTMLElement {
     if (configPresets.length === 0 && filteredLive.length === 0) return '';
 
     const isValidColor = (c) => /^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/.test(c);
+    const activeRgb = this._getActivePresetColor();
 
     let html = '';
     configPresets.forEach(color => {
@@ -2512,10 +2577,12 @@ class SpatialLightColorCard extends HTMLElement {
         .filter(lc => this._rgbDistance(lc.rgb, rgb) < 30)
         .flatMap(lc => lc.entities) : [];
       const entitiesAttr = matchingEntities.length ? ` data-preset-entities="${matchingEntities.join(',')}"` : '';
-      html += `<div class="color-preset" data-preset-color="${color}"${entitiesAttr} style="--preset-color:${color};" title="${color}"></div>`;
+      const isActive = activeRgb && rgb && this._rgbDistance(rgb, activeRgb) < 30;
+      html += `<div class="color-preset${isActive ? ' active' : ''}" data-preset-color="${color}"${entitiesAttr} style="--preset-color:${color};" title="${color}"></div>`;
     });
     filteredLive.forEach(lc => {
-      html += `<div class="color-preset live-color" data-preset-color="${lc.hex}" data-preset-rgb="${lc.rgb.join(',')}" data-preset-entities="${lc.entities.join(',')}" style="--preset-color:${lc.hex};" title="Current: ${lc.hex}"></div>`;
+      const isActive = activeRgb && this._rgbDistance(lc.rgb, activeRgb) < 30;
+      html += `<div class="color-preset live-color${isActive ? ' active' : ''}" data-preset-color="${lc.hex}" data-preset-rgb="${lc.rgb.join(',')}" data-preset-entities="${lc.entities.join(',')}" style="--preset-color:${lc.hex};" title="Current: ${lc.hex}"></div>`;
     });
 
     if (!html) return '';
@@ -2545,12 +2612,15 @@ class SpatialLightColorCard extends HTMLElement {
     const temps = this._getLiveTemperatures();
     if (temps.length === 0) return '';
 
+    const activeKelvin = this._getActivePresetTemp();
+
     let html = '';
     temps.forEach(t => {
       const rgb = this._kelvinToRgb(t.kelvin);
       const hex = '#' + rgb.map(v => v.toString(16).padStart(2, '0')).join('');
       const entities = t.entities.join(',');
-      html += `<div class="temp-preset" data-preset-kelvin="${t.kelvin}" data-preset-entities="${entities}" style="--preset-color:${hex};" title="${t.kelvin}K"><span class="temp-label">${t.kelvin}K</span></div>`;
+      const isActive = activeKelvin !== null && Math.abs(t.kelvin - activeKelvin) < 100;
+      html += `<div class="temp-preset${isActive ? ' active' : ''}" data-preset-kelvin="${t.kelvin}" data-preset-entities="${entities}" style="--preset-color:${hex};" title="${t.kelvin}K"><span class="temp-label">${t.kelvin}K</span></div>`;
     });
 
     return `<div class="temp-presets">${html}</div>`;

@@ -144,7 +144,7 @@ class SpatialLightColorCard extends HTMLElement {
       always_show_controls: config.always_show_controls || false,
       default_entity: config.default_entity || null,
       controls_below: config.controls_below !== false,
-      show_entity_icons: config.show_entity_icons || false,
+      show_entity_icons: config.show_entity_icons !== false,
       switch_single_tap: config.switch_single_tap || false,
       icon_style: config.icon_style || 'mdi', // 'mdi' or 'emoji' (emoji kept as fallback only)
       temperature_min: Number.isFinite(tempMin) ? tempMin : null,
@@ -2815,7 +2815,7 @@ class SpatialLightColorCard extends HTMLElement {
       entities: [], positions: {}, title: '',
       canvas_height: 450, grid_size: 25, label_mode: 'smart',
       always_show_controls: false, controls_below: true,
-      default_entity: null, show_entity_icons: false, icon_style: 'mdi',
+      default_entity: null, show_entity_icons: true, icon_style: 'mdi',
       light_size: 56, icon_only_mode: false, size_overrides: {}, icon_only_overrides: {},
       switch_on_color: '#ffa500', switch_off_color: '#2a2a2a', scene_color: '#6366f1',
       color_presets: [],
@@ -3116,7 +3116,8 @@ class SpatialLightColorCardEditor extends HTMLElement {
     const labelOverride = (this._config.label_overrides && this._config.label_overrides[entity]) || '';
     const sizeOverride = (this._config.size_overrides && this._config.size_overrides[entity]) || '';
     const colorOverride = this._config.color_overrides && this._config.color_overrides[entity];
-    const colorVal = typeof colorOverride === 'string' ? colorOverride : (colorOverride && colorOverride.state_on ? colorOverride.state_on : '');
+    const colorOn = typeof colorOverride === 'string' ? colorOverride : (colorOverride && (colorOverride.state_on || colorOverride.on) ? (colorOverride.state_on || colorOverride.on) : '');
+    const colorOff = typeof colorOverride === 'object' && colorOverride ? (colorOverride.state_off || colorOverride.off || '') : '';
     const iconOnlyOverride = this._config.icon_only_overrides && this._config.icon_only_overrides[entity];
     const iconOnlyChecked = iconOnlyOverride !== undefined ? iconOnlyOverride : false;
     const hasIconOnlyOverride = iconOnlyOverride !== undefined;
@@ -3142,9 +3143,14 @@ class SpatialLightColorCardEditor extends HTMLElement {
             <input type="number" data-entity="${entity}" data-key="size" value="${sizeOverride}" placeholder="${this._config.light_size || 56}" min="16" max="200">
           </div>
           <div class="override-row">
-            <label>Color</label>
-            <input type="text" data-entity="${entity}" data-key="color" value="${this._esc(colorVal)}" placeholder="#hex or empty">
-            <div class="color-preview" data-entity="${entity}" style="background:${colorVal || 'transparent'};"></div>
+            <label>Color (on)</label>
+            <input type="text" data-entity="${entity}" data-key="color_on" value="${this._esc(colorOn)}" placeholder="#hex or empty">
+            <div class="color-preview" data-entity="${entity}" data-state="on" style="background:${colorOn || 'transparent'};"></div>
+          </div>
+          <div class="override-row">
+            <label>Color (off)</label>
+            <input type="text" data-entity="${entity}" data-key="color_off" value="${this._esc(colorOff)}" placeholder="#hex or empty">
+            <div class="color-preview" data-entity="${entity}" data-state="off" style="background:${colorOff || 'transparent'};"></div>
           </div>
           <div class="override-switch">
             <label>Icon-only override</label>
@@ -3423,7 +3429,7 @@ class SpatialLightColorCardEditor extends HTMLElement {
     const switches = {
       cfgEditPositions: !!c._edit_positions,
       cfgMinimalUI: c.minimal_ui || false,
-      cfgShowIcons: c.show_entity_icons || false,
+      cfgShowIcons: c.show_entity_icons !== false,
       cfgIconOnly: c.icon_only_mode || false,
       cfgLiveColors: c.show_live_colors || false,
       cfgAlwaysControls: c.always_show_controls || false,
@@ -3564,12 +3570,28 @@ class SpatialLightColorCardEditor extends HTMLElement {
       });
     });
 
-    root.querySelectorAll('.entity-overrides input[data-key="color"]').forEach(inp => {
+    root.querySelectorAll('.entity-overrides input[data-key="color_on"]').forEach(inp => {
       this._bindEntityOverride(inp, (entity, val) => {
         if (!this._config.color_overrides) this._config.color_overrides = {};
-        if (val) { this._config.color_overrides[entity] = val; }
+        const existing = this._config.color_overrides[entity];
+        const cur = (existing && typeof existing === 'object') ? existing : {};
+        if (val) { cur.state_on = val; } else { delete cur.state_on; }
+        if (cur.state_on || cur.state_off) { this._config.color_overrides[entity] = cur; }
         else { delete this._config.color_overrides[entity]; }
-        const preview = root.querySelector(`.color-preview[data-entity="${entity}"]`);
+        const preview = root.querySelector(`.color-preview[data-entity="${entity}"][data-state="on"]`);
+        if (preview) preview.style.background = val || 'transparent';
+      });
+    });
+
+    root.querySelectorAll('.entity-overrides input[data-key="color_off"]').forEach(inp => {
+      this._bindEntityOverride(inp, (entity, val) => {
+        if (!this._config.color_overrides) this._config.color_overrides = {};
+        const existing = this._config.color_overrides[entity];
+        const cur = (existing && typeof existing === 'object') ? existing : {};
+        if (val) { cur.state_off = val; } else { delete cur.state_off; }
+        if (cur.state_on || cur.state_off) { this._config.color_overrides[entity] = cur; }
+        else { delete this._config.color_overrides[entity]; }
+        const preview = root.querySelector(`.color-preview[data-entity="${entity}"][data-state="off"]`);
         if (preview) preview.style.background = val || 'transparent';
       });
     });

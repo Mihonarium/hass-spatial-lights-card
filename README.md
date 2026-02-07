@@ -1,3 +1,6 @@
+Made because controlling dozens of lightbulbs became otherwise imossible: it required infinite scrolling to find the right light or group.
+
+This card allows instanteneously selecting and controlling dozens of lights on a 2D canvas.
 
 [![Open your Home Assistant instance and open this repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=Mihonarium&repository=hass-spatial-lights-card)
 

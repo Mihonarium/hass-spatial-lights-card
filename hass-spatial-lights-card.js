@@ -2858,13 +2858,15 @@ class SpatialLightColorCard extends HTMLElement {
     canvas.addEventListener('pointerup', (e) => {
       e.target.releasePointerCapture?.(e.pointerId);
 
-      // Apply the final selected color to lights
+      // Apply the final selected color to lights only if pointer ended inside the wheel
       const gesture = this._largeWheelGesture;
       this._largeWheelGesture = null;
       if (gesture && gesture.pendingColor) {
-        const color = this._getLargeWheelColorAtEvent(e) || gesture.pendingColor;
-        this._applyColorWheelSelection(color);
-        if (swatch) swatch.style.background = `rgb(${color[0]},${color[1]},${color[2]})`;
+        const color = this._getLargeWheelColorAtEvent(e);
+        if (color) {
+          this._applyColorWheelSelection(color);
+          if (swatch) swatch.style.background = `rgb(${color[0]},${color[1]},${color[2]})`;
+        }
       }
 
       // Hide magnifier

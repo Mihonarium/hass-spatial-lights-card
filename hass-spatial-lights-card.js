@@ -3501,6 +3501,7 @@ class SpatialLightColorCardEditor extends HTMLElement {
       .entity-main {
         display: flex; align-items: center; gap: 8px; padding: 6px 8px 6px 12px;
         background: var(--secondary-background-color, #f5f5f5);
+        cursor: pointer;
       }
       .entity-main ha-icon {
         color: var(--secondary-text-color, #727272); --mdc-icon-size: 20px; flex-shrink: 0;
@@ -4118,14 +4119,23 @@ class SpatialLightColorCardEditor extends HTMLElement {
     }
 
     // --- Entity expand/collapse ---
+    const toggleExpand = (entityItem) => {
+      const entity = entityItem.dataset.entity;
+      this._expandedEntity = (this._expandedEntity === entity) ? null : entity;
+      root.querySelectorAll('.entity-item').forEach(item => {
+        item.classList.toggle('expanded', item.dataset.entity === this._expandedEntity);
+      });
+    };
+    root.querySelectorAll('.entity-main').forEach(main => {
+      main.addEventListener('click', (e) => {
+        if (e.target.closest('.entity-btn')) return;
+        toggleExpand(main.closest('.entity-item'));
+      });
+    });
     root.querySelectorAll('.entity-btn.expand').forEach(btn => {
       btn.addEventListener('click', (e) => {
         e.stopPropagation();
-        const entity = btn.closest('.entity-item').dataset.entity;
-        this._expandedEntity = (this._expandedEntity === entity) ? null : entity;
-        root.querySelectorAll('.entity-item').forEach(item => {
-          item.classList.toggle('expanded', item.dataset.entity === this._expandedEntity);
-        });
+        toggleExpand(btn.closest('.entity-item'));
       });
     });
 

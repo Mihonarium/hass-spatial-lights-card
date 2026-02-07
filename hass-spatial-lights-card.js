@@ -2243,15 +2243,16 @@ class SpatialLightColorCard extends HTMLElement {
     const entities = el.dataset.presetEntities;
     if (!entities) return;
 
-    // Desktop: hover
-    el.addEventListener('mouseenter', () => this._highlightEntities(entities));
-    el.addEventListener('mouseleave', () => this._highlightEntities(null));
+    // Desktop: hover (use pointer events with pointerType check to avoid
+    // synthetic mouse events fired by mobile browsers after touch taps)
+    el.addEventListener('pointerenter', (e) => { if (e.pointerType === 'mouse') this._highlightEntities(entities); });
+    el.addEventListener('pointerleave', (e) => { if (e.pointerType === 'mouse') this._highlightEntities(null); });
 
     // Mobile: long-press (300ms) to highlight, release to clear
     // Uses document-level listeners so highlight clears even if DOM is replaced mid-touch
     let holdTimer = null;
     el.addEventListener('pointerdown', (e) => {
-      if (e.pointerType === 'mouse') return; // handled by mouseenter
+      if (e.pointerType === 'mouse') return; // handled by pointerenter
       holdTimer = setTimeout(() => {
         holdTimer = null;
         this._highlightEntities(entities);

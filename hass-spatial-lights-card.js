@@ -216,6 +216,9 @@ class SpatialLightColorCard extends HTMLElement {
 
     this._initializePositions();
 
+    // Clear sensor cache on config change
+    this._canvasElementCache = null;
+
     // Re-render if hass is already available (config changed after first render)
     if (this._hass) {
       this._renderAll();
@@ -3801,22 +3804,27 @@ class SpatialLightColorCard extends HTMLElement {
   /** ---------- Canvas element live updates ---------- */
   _updateCanvasElements() {
     if (!this._hass || !this._config.canvas_elements) return;
-    this._config.canvas_elements.forEach(el => {
-      const domEl = this.shadowRoot.querySelector(`.canvas-element[data-element-id="${el.id}"]`);
-      if (!domEl) return;
 
+    // Use a cache to skip DOM updates when values haven't changed
+    if (!this._canvasElementCache) this._canvasElementCache = new Map();
+
+    this._config.canvas_elements.forEach(el => {
       if (el.type === 'sensor' && el.entity) {
         const st = this._hass.states[el.entity];
         const value = st ? st.state : '—';
         const unit = el.suffix !== null ? el.suffix : (st?.attributes?.unit_of_measurement || '');
         const displayValue = `${el.prefix}${value}${unit}`;
+
+        // Skip DOM update if value hasn't changed
+        if (this._canvasElementCache.get(el.id) === displayValue) return;
+        this._canvasElementCache.set(el.id, displayValue);
+
+        const domEl = this.shadowRoot.querySelector(`.canvas-element[data-element-id="${el.id}"]`);
+        if (!domEl) return;
         const valueEl = domEl.querySelector('.ce-value');
         if (valueEl) valueEl.textContent = displayValue;
-      } else if (el.type === 'template') {
-        const rendered = this._templateResults.get(el.id) || '';
-        const valueEl = domEl.querySelector('.ce-value');
-        if (valueEl) valueEl.textContent = rendered;
       }
+      // Template updates are push-based via _updateCanvasElement(), no polling needed
     });
   }
 
@@ -4045,6 +4053,7 @@ class SpatialLightColorCardEditor extends HTMLElement {
     this._configFromEditor = false;
     this._editorId = Math.random().toString(36).substr(2, 9);
     this._expandedEntity = null;
+    this._expandedCanvasElement = null;
     this._boundPositionHandler = null;
     this._haElementsLoaded = false;
     this._positionHistory = [];
@@ -4054,10 +4063,16 @@ class SpatialLightColorCardEditor extends HTMLElement {
 
   async connectedCallback() {
     this._boundPositionHandler = (e) => {
-      if (e.detail && e.detail.editorId === this._editorId && e.detail.positions) {
-        this._pushPositionHistory();
-        if (!this._config.positions) this._config.positions = {};
-        this._config.positions = e.detail.positions;
+      if (e.detail && e.detail.editorId === this._editorId) {
+        if (e.detail.positions) {
+          this._pushPositionHistory();
+          if (!this._config.positions) this._config.positions = {};
+          this._config.positions = e.detail.positions;
+        }
+        // Also handle canvas element position changes from drag
+        if (e.detail.canvas_elements && Array.isArray(e.detail.canvas_elements)) {
+          this._config.canvas_elements = e.detail.canvas_elements;
+        }
         this._fireConfigChanged();
       }
     };
@@ -4516,6 +4531,69 @@ class SpatialLightColorCardEditor extends HTMLElement {
         display: flex; align-items: center; justify-content: center; font-size: 16px;
       }
       .add-preset-btn:hover { border-color: var(--primary-color, #03a9f4); color: var(--primary-color, #03a9f4); }
+
+      /* Canvas element editor styles */
+      .ce-list { display: flex; flex-direction: column; gap: 4px; }
+      .ce-item {
+        border: 1px solid var(--divider-color, rgba(0,0,0,0.08));
+        border-radius: 8px; overflow: hidden;
+      }
+      .ce-item.expanded { border-color: var(--primary-color, #03a9f4); }
+      .ce-main {
+        display: flex; align-items: center; gap: 8px; padding: 6px 8px 6px 12px;
+        background: var(--secondary-background-color, #f5f5f5); cursor: pointer;
+      }
+      .ce-main ha-icon {
+        color: var(--secondary-text-color, #727272); --mdc-icon-size: 20px; flex-shrink: 0;
+      }
+      .ce-main .ce-info { flex: 1; min-width: 0; }
+      .ce-main .ce-name {
+        font-size: 13px; color: var(--primary-text-color, #212121);
+        white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: block;
+      }
+      .ce-main .ce-type-badge {
+        font-size: 10px; color: var(--secondary-text-color, #727272);
+        text-transform: uppercase; letter-spacing: 0.5px; font-weight: 600;
+      }
+      .ce-settings {
+        padding: 10px 12px; display: none; flex-direction: column; gap: 10px;
+        border-top: 1px solid var(--divider-color, rgba(0,0,0,0.08));
+        background: var(--card-background-color, #fff);
+      }
+      .ce-item.expanded .ce-settings { display: flex; }
+      .ce-settings .override-row {
+        display: flex; align-items: center; gap: 8px;
+      }
+      .ce-settings .override-row label {
+        font-size: 12px; color: var(--secondary-text-color, #727272);
+        min-width: 70px; flex-shrink: 0;
+      }
+      .ce-settings .override-row input,
+      .ce-settings .override-row select {
+        flex: 1; padding: 5px 8px; border: 1px solid var(--divider-color, rgba(0,0,0,0.12));
+        border-radius: 4px; font-size: 13px; color: var(--primary-text-color, #212121);
+        background: var(--card-background-color, #fff); box-sizing: border-box; outline: none;
+        min-width: 0;
+      }
+      .ce-settings .override-row input:focus,
+      .ce-settings .override-row select:focus { border-color: var(--primary-color, #03a9f4); }
+      .ce-settings .ce-section-label {
+        font-size: 11px; font-weight: 600; color: var(--secondary-text-color, #727272);
+        text-transform: uppercase; letter-spacing: 0.5px; margin-top: 4px;
+        padding-bottom: 2px; border-bottom: 1px solid var(--divider-color, rgba(0,0,0,0.06));
+      }
+      .add-ce-row { display: flex; gap: 6px; }
+      .add-ce-btn {
+        flex: 1; padding: 8px 12px; border-radius: 6px; cursor: pointer;
+        font-size: 12px; font-weight: 500; text-align: center;
+        border: 1px dashed var(--divider-color, rgba(0,0,0,0.2));
+        background: transparent; color: var(--primary-text-color, #212121);
+        transition: border-color 150ms ease, background 150ms ease;
+      }
+      .add-ce-btn:hover {
+        border-color: var(--primary-color, #03a9f4);
+        background: color-mix(in srgb, var(--primary-color, #03a9f4) 6%, transparent);
+      }
     `;
   }
 
@@ -4588,11 +4666,144 @@ class SpatialLightColorCardEditor extends HTMLElement {
     `;
   }
 
+  _renderCanvasElementItem(el, index) {
+    const isExpanded = this._expandedCanvasElement === el.id;
+    const typeIcons = { link: 'mdi:link', sensor: 'mdi:eye', template: 'mdi:code-braces' };
+    const icon = el.icon || typeIcons[el.type] || 'mdi:shape';
+    const name = el.label || el.entity || el.id;
+    const s = el.style || {};
+
+    // Build action option HTML helper
+    const actionSelect = (key, action) => {
+      const a = action || { action: 'none' };
+      return `
+        <div class="override-row">
+          <label>${key === 'tap_action' ? 'Tap' : key === 'hold_action' ? 'Hold' : 'Double-tap'}</label>
+          <select data-ce-index="${index}" data-ce-key="${key}.action">
+            <option value="none"${a.action === 'none' ? ' selected' : ''}>None</option>
+            <option value="navigate"${a.action === 'navigate' ? ' selected' : ''}>Navigate</option>
+            <option value="url"${a.action === 'url' ? ' selected' : ''}>URL</option>
+            <option value="more-info"${a.action === 'more-info' ? ' selected' : ''}>More Info</option>
+            <option value="call-service"${a.action === 'call-service' ? ' selected' : ''}>Call Service</option>
+            <option value="toggle"${a.action === 'toggle' ? ' selected' : ''}>Toggle</option>
+          </select>
+        </div>
+        ${a.action === 'navigate' ? `<div class="override-row"><label>Path</label><input type="text" data-ce-index="${index}" data-ce-key="${key}.navigation_path" value="${this._esc(a.navigation_path || '')}" placeholder="/lovelace/0"></div>` : ''}
+        ${a.action === 'url' ? `<div class="override-row"><label>URL</label><input type="text" data-ce-index="${index}" data-ce-key="${key}.url_path" value="${this._esc(a.url_path || '')}" placeholder="https://..."></div>` : ''}
+        ${a.action === 'more-info' || a.action === 'toggle' ? `<div class="override-row"><label>Entity</label><input type="text" data-ce-index="${index}" data-ce-key="${key}.entity" value="${this._esc(a.entity || el.entity || '')}" placeholder="sensor.xxx"></div>` : ''}
+        ${a.action === 'call-service' ? `<div class="override-row"><label>Service</label><input type="text" data-ce-index="${index}" data-ce-key="${key}.service" value="${this._esc(a.service || '')}" placeholder="light.turn_on"></div>` : ''}
+      `;
+    };
+
+    return `
+      <div class="ce-item ${isExpanded ? 'expanded' : ''}" data-ce-id="${el.id}" data-ce-index="${index}">
+        <div class="ce-main">
+          <ha-icon icon="${icon}"></ha-icon>
+          <div class="ce-info">
+            <span class="ce-name">${this._esc(name)}</span>
+            <span class="ce-type-badge">${el.type}</span>
+          </div>
+          <button class="entity-btn expand" data-ce-index="${index}" title="Settings">&#9660;</button>
+          <button class="entity-btn remove" data-ce-index="${index}" title="Remove">&times;</button>
+        </div>
+        <div class="ce-settings">
+          ${el.type === 'link' ? `
+            <div class="override-row">
+              <label>Icon</label>
+              <input type="text" data-ce-index="${index}" data-ce-key="icon" value="${this._esc(el.icon || '')}" placeholder="mdi:link">
+            </div>
+            <div class="override-row">
+              <label>Label</label>
+              <input type="text" data-ce-index="${index}" data-ce-key="label" value="${this._esc(el.label || '')}" placeholder="Optional">
+            </div>
+            <div class="override-row">
+              <label>Size (px)</label>
+              <input type="number" data-ce-index="${index}" data-ce-key="size" value="${el.size || 40}" min="20" max="100">
+            </div>
+          ` : ''}
+          ${el.type === 'sensor' ? `
+            <div class="override-row">
+              <label>Entity</label>
+              <input type="text" data-ce-index="${index}" data-ce-key="entity" value="${this._esc(el.entity || '')}" placeholder="sensor.xxx">
+            </div>
+            <div class="override-row">
+              <label>Label</label>
+              <input type="text" data-ce-index="${index}" data-ce-key="label" value="${this._esc(el.label || '')}" placeholder="Auto (friendly name)">
+            </div>
+            <div class="override-row">
+              <label>Prefix</label>
+              <input type="text" data-ce-index="${index}" data-ce-key="prefix" value="${this._esc(el.prefix || '')}" placeholder="None">
+            </div>
+            <div class="override-row">
+              <label>Suffix</label>
+              <input type="text" data-ce-index="${index}" data-ce-key="suffix" value="${this._esc(el.suffix != null ? el.suffix : '')}" placeholder="Auto (unit)">
+            </div>
+            <div class="override-row">
+              <label>Icon</label>
+              <input type="text" data-ce-index="${index}" data-ce-key="icon" value="${this._esc(el.icon || '')}" placeholder="Auto (entity icon)">
+            </div>
+          ` : ''}
+          ${el.type === 'template' ? `
+            <div class="override-row">
+              <label>Template</label>
+              <input type="text" data-ce-index="${index}" data-ce-key="content" value="${this._esc(el.content || '')}" placeholder="{{ states('sensor.xxx') }}">
+            </div>
+            <div class="override-row">
+              <label>Label</label>
+              <input type="text" data-ce-index="${index}" data-ce-key="label" value="${this._esc(el.label || '')}" placeholder="Optional">
+            </div>
+            <div class="override-row">
+              <label>Icon</label>
+              <input type="text" data-ce-index="${index}" data-ce-key="icon" value="${this._esc(el.icon || '')}" placeholder="None">
+            </div>
+          ` : ''}
+          <div class="ce-section-label">Style</div>
+          <div class="override-row">
+            <label>Color</label>
+            <input type="text" data-ce-index="${index}" data-ce-key="style.color" value="${this._esc(s.color || '')}" placeholder="#ffffff">
+            <div class="color-preview" style="background:${s.color || 'transparent'};"></div>
+          </div>
+          <div class="override-row">
+            <label>Font size</label>
+            <input type="number" data-ce-index="${index}" data-ce-key="style.font_size" value="${s.font_size || ''}" placeholder="14" min="8" max="72">
+          </div>
+          <div class="override-row">
+            <label>Font weight</label>
+            <select data-ce-index="${index}" data-ce-key="style.font_weight">
+              <option value=""${!s.font_weight ? ' selected' : ''}>Default</option>
+              <option value="normal"${s.font_weight === 'normal' ? ' selected' : ''}>Normal</option>
+              <option value="bold"${s.font_weight === 'bold' ? ' selected' : ''}>Bold</option>
+              <option value="300"${s.font_weight === '300' ? ' selected' : ''}>Light (300)</option>
+              <option value="600"${s.font_weight === '600' ? ' selected' : ''}>Semi-bold (600)</option>
+            </select>
+          </div>
+          <div class="override-row">
+            <label>Opacity</label>
+            <input type="number" data-ce-index="${index}" data-ce-key="style.opacity" value="${s.opacity != null ? s.opacity : ''}" placeholder="1.0" min="0" max="1" step="0.1">
+          </div>
+          <div class="override-row">
+            <label>Background</label>
+            <input type="text" data-ce-index="${index}" data-ce-key="style.background" value="${this._esc(s.background || '')}" placeholder="none">
+          </div>
+          <div class="override-row">
+            <label>Border radius</label>
+            <input type="text" data-ce-index="${index}" data-ce-key="style.border_radius" value="${this._esc(s.border_radius || '')}" placeholder="e.g. 8px">
+          </div>
+          <div class="ce-section-label">Actions</div>
+          ${actionSelect('tap_action', el.tap_action)}
+          ${actionSelect('hold_action', el.hold_action)}
+          ${actionSelect('double_tap_action', el.double_tap_action)}
+        </div>
+      </div>
+    `;
+  }
+
   _render() {
     const config = this._config;
     const entities = config.entities || [];
     const editPositions = !!config._edit_positions;
     const presets = Array.isArray(config.color_presets) ? config.color_presets : [];
+    const canvasElements = Array.isArray(config.canvas_elements) ? config.canvas_elements : [];
 
     // Clear reference since innerHTML will destroy it
     this._bgUploadEl = null;
@@ -4618,6 +4829,25 @@ class SpatialLightColorCardEditor extends HTMLElement {
           </div>
         </div>
 
+        <!-- Canvas Elements Section -->
+        <div class="section${canvasElements.length === 0 ? ' collapsed' : ''}" id="section-canvas-elements">
+          <div class="section-header" data-section="canvas-elements">
+            <h3>Canvas Elements${canvasElements.length > 0 ? ` (${canvasElements.length})` : ''}</h3>
+            <span class="chevron">&#9660;</span>
+          </div>
+          <div class="section-body">
+            ${canvasElements.length > 0
+              ? `<div class="ce-list">${canvasElements.map((el, i) => this._renderCanvasElementItem(el, i)).join('')}</div>`
+              : '<div class="empty-entities">No canvas elements. Add links, sensors, or templates to display on the canvas.</div>'
+            }
+            <div class="add-ce-row">
+              <button class="add-ce-btn" data-ce-type="link" title="Icon button with tap/hold actions">+ Link</button>
+              <button class="add-ce-btn" data-ce-type="sensor" title="Live entity state display">+ Sensor</button>
+              <button class="add-ce-btn" data-ce-type="template" title="HA template text">+ Template</button>
+            </div>
+          </div>
+        </div>
+
         <!-- Positions Section -->
         <div class="section" id="section-positions">
           <div class="section-header" data-section="positions">
@@ -4633,7 +4863,7 @@ class SpatialLightColorCardEditor extends HTMLElement {
               <ha-switch id="cfgEditPositions"></ha-switch>
             </div>
             ${editPositions ? `
-              <div class="edit-positions-banner">Position editing is active. Drag lights on the card preview above to reposition them. Changes are saved automatically.</div>
+              <div class="edit-positions-banner">Position editing is active. Drag lights and canvas elements on the card preview above to reposition them. Changes are saved automatically.</div>
               <div class="undo-redo-row">
                 <button class="action-btn" id="undoPositionsBtn" disabled title="Undo (Ctrl+Z)">&#8592; Undo</button>
                 <button class="action-btn" id="redoPositionsBtn" disabled title="Redo (Ctrl+Shift+Z)">Redo &#8594;</button>
@@ -5400,6 +5630,128 @@ class SpatialLightColorCardEditor extends HTMLElement {
         this._render();
       });
     }
+
+    // --- Canvas Elements ---
+    // Add canvas element buttons
+    root.querySelectorAll('.add-ce-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const type = btn.dataset.ceType;
+        if (!type) return;
+        if (!Array.isArray(this._config.canvas_elements)) this._config.canvas_elements = [];
+        const idx = this._config.canvas_elements.length;
+        const newEl = { type, position: { x: 50, y: 50 }, id: `canvas_el_${idx}` };
+        if (type === 'link') { newEl.icon = 'mdi:link'; }
+        if (type === 'sensor') { newEl.entity = ''; newEl.show_icon = true; }
+        if (type === 'template') { newEl.content = ''; }
+        this._config.canvas_elements.push(newEl);
+        this._expandedCanvasElement = newEl.id;
+        this._fireConfigChanged();
+        this._render();
+      });
+    });
+
+    // Canvas element expand/collapse
+    root.querySelectorAll('.ce-main').forEach(main => {
+      main.addEventListener('click', (e) => {
+        if (e.target.closest('.entity-btn')) return;
+        const item = main.closest('.ce-item');
+        const ceId = item.dataset.ceId;
+        this._expandedCanvasElement = (this._expandedCanvasElement === ceId) ? null : ceId;
+        root.querySelectorAll('.ce-item').forEach(it => {
+          it.classList.toggle('expanded', it.dataset.ceId === this._expandedCanvasElement);
+        });
+      });
+    });
+    root.querySelectorAll('.ce-item .entity-btn.expand').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const item = btn.closest('.ce-item');
+        const ceId = item.dataset.ceId;
+        this._expandedCanvasElement = (this._expandedCanvasElement === ceId) ? null : ceId;
+        root.querySelectorAll('.ce-item').forEach(it => {
+          it.classList.toggle('expanded', it.dataset.ceId === this._expandedCanvasElement);
+        });
+      });
+    });
+
+    // Canvas element remove
+    root.querySelectorAll('.ce-item .entity-btn.remove').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const idx = parseInt(btn.dataset.ceIndex, 10);
+        if (!Array.isArray(this._config.canvas_elements)) return;
+        const removed = this._config.canvas_elements[idx];
+        this._config.canvas_elements.splice(idx, 1);
+        if (removed && this._expandedCanvasElement === removed.id) this._expandedCanvasElement = null;
+        this._fireConfigChanged();
+        this._render();
+      });
+    });
+
+    // Canvas element field editing
+    root.querySelectorAll('.ce-settings input, .ce-settings select').forEach(inp => {
+      const ceIndex = parseInt(inp.dataset.ceIndex, 10);
+      const key = inp.dataset.ceKey;
+      if (isNaN(ceIndex) || !key) return;
+
+      let timer = null;
+      const apply = () => {
+        clearTimeout(timer);
+        if (!Array.isArray(this._config.canvas_elements) || !this._config.canvas_elements[ceIndex]) return;
+        const el = this._config.canvas_elements[ceIndex];
+        const val = inp.value;
+
+        // Handle nested keys like "style.color" or "tap_action.action"
+        const parts = key.split('.');
+        if (parts.length === 1) {
+          // Simple field
+          if (key === 'size') {
+            const num = parseInt(val, 10);
+            el[key] = Number.isFinite(num) && num > 0 ? num : 40;
+          } else if (key === 'show_icon') {
+            el[key] = inp.checked;
+          } else {
+            el[key] = val;
+          }
+        } else if (parts[0] === 'style') {
+          if (!el.style) el.style = {};
+          const styleProp = parts[1];
+          if (val === '' || val === undefined) {
+            delete el.style[styleProp];
+          } else if (styleProp === 'font_size') {
+            const n = parseFloat(val);
+            if (Number.isFinite(n)) el.style[styleProp] = n;
+            else delete el.style[styleProp];
+          } else if (styleProp === 'opacity') {
+            const n = parseFloat(val);
+            if (Number.isFinite(n)) el.style[styleProp] = Math.max(0, Math.min(1, n));
+            else delete el.style[styleProp];
+          } else {
+            el.style[styleProp] = val;
+          }
+        } else if (parts[0] === 'tap_action' || parts[0] === 'hold_action' || parts[0] === 'double_tap_action') {
+          const actionKey = parts[0];
+          if (!el[actionKey]) el[actionKey] = { action: 'none' };
+          if (parts[1] === 'action') {
+            el[actionKey] = { action: val };
+            // Re-render to show/hide action-specific fields
+            this._fireConfigChanged();
+            this._render();
+            return;
+          } else {
+            el[actionKey][parts[1]] = val;
+          }
+        }
+        this._fireConfigChanged();
+      };
+
+      if (inp.tagName === 'SELECT') {
+        inp.addEventListener('change', apply);
+      } else {
+        inp.addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(apply, 400); });
+        inp.addEventListener('change', apply);
+      }
+    });
 
     // --- Temperature inputs ---
     this._bindNumberInput('cfgTempMin', (val) => {

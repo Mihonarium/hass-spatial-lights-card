@@ -68,6 +68,8 @@ resources:
 2. Edit a dashboard.
 3. Choose **Add card → Spatial Lights Color Card**.
 
+**You're all set!** 🎉
+
 ---
 
 ## 🎨 Usage
@@ -280,6 +282,4 @@ always_show_controls: true
 ## ToDo
 - [ ] Think about adding arbitraryhe sensors display
 - [ ] Think about adding arbitrary templates/HTML
-- [ ] Fix t bug where too many preset/live lights on the desktop get displayed under the color wheel in a way that enlarges the color wheel area and makes the sliders smaller
-
-**You're all set!** 🎉
+- [ ] Fix the bug where too many preset/live lights on the desktop get displayed under the color wheel in a way that enlarges the color wheel area and makes the sliders smaller

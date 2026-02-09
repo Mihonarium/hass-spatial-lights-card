@@ -299,7 +299,7 @@ It also has color presets (for quickly setting lights to a specific color) and a
 This card made turn dozens of lights to nice colors in arbitrary ways much easier.
 
 ## ToDo
-- [ ] Think about adding arbitraryhe sensors display
+- [ ] Think about adding arbitrary sensors display
 - [ ] Think about adding arbitrary templates/HTML
 - [ ] Color effects (not just colors) among presets (with icons?)
 - [ ] Think about placing links to other Home Assistant things on the canvas

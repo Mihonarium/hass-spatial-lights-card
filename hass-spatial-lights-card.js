@@ -991,7 +991,8 @@ class SpatialLightColorCard extends HTMLElement {
         position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%);
         background: rgba(20,20,20,0.95); backdrop-filter: blur(16px) saturate(160%);
         border: 1px solid var(--border-medium); border-radius: 12px; padding: 16px 20px;
-        display: flex; gap: 20px; align-items: center; box-shadow: var(--shadow-md);
+        display: grid; grid-template-columns: auto 1fr; grid-template-rows: auto auto;
+        gap: 12px 20px; align-items: start; box-shadow: var(--shadow-md);
         opacity: 0; pointer-events: none; transition: opacity var(--transition-base);
         z-index: 50;
       }
@@ -1000,21 +1001,24 @@ class SpatialLightColorCard extends HTMLElement {
       .controls-below {
         padding: 20px; border-top: 1px solid var(--border-subtle); background: var(--surface-secondary);
         display: none;
-        gap: 24px; align-items: center; justify-content: center;
+        grid-template-columns: auto 1fr; grid-template-rows: auto auto;
+        gap: 12px 24px; align-items: start; justify-content: center;
       }
-      .controls-below.visible { display: flex; }
+      .controls-below.visible { display: grid; }
 
       .color-wheel-mini {
         width: 128px; height: 128px; border-radius: 9999px; cursor: pointer;
         border: 2px solid var(--border-subtle); box-shadow: var(--shadow-sm); flex-shrink: 0;
+        grid-column: 1; grid-row: 1 / 3; align-self: start;
       }
 
-      .color-wheel-presets-wrap {
-        display: flex; flex-direction: column; align-items: center; gap: 8px; flex-shrink: 0;
+      .presets-area {
+        grid-column: 2; grid-row: 2;
+        display: flex; flex-wrap: wrap; gap: 8px; align-items: flex-start;
       }
 
       .color-presets {
-        display: flex; flex-wrap: wrap; gap: 2px; justify-content: center; max-width: 164px;
+        display: flex; flex-wrap: wrap; gap: 2px; justify-content: flex-start;
       }
       .color-preset {
         width: 36px; height: 36px; border-radius: 9999px; cursor: pointer;
@@ -1056,7 +1060,7 @@ class SpatialLightColorCard extends HTMLElement {
       }
       .temp-preset:hover .temp-label { opacity: 1; }
 
-      .slider-group { display:flex; flex-direction:column; gap:10px; min-width: 240px; flex:1; width:100%; }
+      .slider-group { display:flex; flex-direction:column; gap:10px; min-width: 240px; grid-column: 2; grid-row: 1; }
       .slider-row { display:flex; align-items:center; gap:8px; width:100%; padding: 2px 0; }
 
       .slider {
@@ -1147,11 +1151,16 @@ class SpatialLightColorCard extends HTMLElement {
       .modal-hint { margin-top: 8px; font-size:12px; color: var(--text-tertiary); text-align:center; }
 
       @media (max-width: 768px) {
-        .controls-floating, .controls-below { flex-direction:column; gap: 16px; }
+        .controls-floating, .controls-below {
+          grid-template-columns: auto 1fr;
+          grid-template-rows: auto auto;
+          gap: 12px;
+        }
         .controls-floating { left: 16px; right: 16px; width: auto; transform: none; }
         .light { --light-size: ${Math.min(this._config.light_size, 50)}px; }
-        .color-wheel-presets-wrap { flex-direction: row; gap: 12px; }
-        .color-presets { flex-direction: row; flex-wrap: wrap; max-width: none; }
+        .color-wheel-mini { grid-column: 1; grid-row: 1; align-self: start; }
+        .presets-area { grid-column: 2; grid-row: 1; align-self: center; }
+        .slider-group { grid-column: 1 / -1; grid-row: 2; min-width: 0; }
       }
 
       .empty-state {
@@ -1373,10 +1382,7 @@ class SpatialLightColorCard extends HTMLElement {
     const brightnessColor = Array.isArray(avgState.color) ? `rgb(${avgState.color.join(',')})` : 'var(--accent-primary)';
     return `
       <div class="controls-floating ${visible ? 'visible' : ''}" id="controlsFloating" role="region" aria-label="Light controls" aria-live="polite">
-        <div class="color-wheel-presets-wrap">
-          <canvas id="colorWheelMini" class="color-wheel-mini" width="256" height="256" role="img" aria-label="Color picker"></canvas>
-          ${this._renderColorPresets()}
-        </div>
+        <canvas id="colorWheelMini" class="color-wheel-mini" width="256" height="256" role="img" aria-label="Color picker"></canvas>
         <div class="slider-group">
           <div class="slider-row">
             <input type="range" class="slider" id="brightnessSlider" min="0" max="255" value="${avgState.brightness}" aria-label="Brightness" style="--slider-percent:${brightnessPercent}%;--slider-ratio:${brightnessPercent/100};--slider-fill:${brightnessColor};">
@@ -1386,6 +1392,9 @@ class SpatialLightColorCard extends HTMLElement {
             <input type="range" class="slider temperature" id="temperatureSlider" min="${tempRange.min}" max="${tempRange.max}" value="${clampedTemp}" aria-label="Color temperature" style="--slider-percent:${tempPercent}%;--slider-ratio:${tempPercent/100};">
             <span class="slider-value" id="temperatureValue">${clampedTemp}K</span>
           </div>
+        </div>
+        <div class="presets-area">
+          ${this._renderColorPresets()}
           ${this._renderTemperaturePresets()}
         </div>
       </div>
@@ -1402,10 +1411,7 @@ class SpatialLightColorCard extends HTMLElement {
     const brightnessColor = Array.isArray(avgState.color) ? `rgb(${avgState.color.join(',')})` : 'var(--accent-primary)';
     return `
       <div class="controls-below" id="controlsBelow" role="region" aria-label="Light controls" aria-live="polite">
-        <div class="color-wheel-presets-wrap">
-          <canvas id="colorWheelMini" class="color-wheel-mini" width="256" height="256" role="img" aria-label="Color picker"></canvas>
-          ${this._renderColorPresets()}
-        </div>
+        <canvas id="colorWheelMini" class="color-wheel-mini" width="256" height="256" role="img" aria-label="Color picker"></canvas>
         <div class="slider-group">
           <div class="slider-row">
             <input type="range" class="slider" id="brightnessSlider" min="0" max="255" value="${avgState.brightness}" aria-label="Brightness" style="--slider-percent:${brightnessPercent}%;--slider-ratio:${brightnessPercent/100};--slider-fill:${brightnessColor};">
@@ -1415,6 +1421,9 @@ class SpatialLightColorCard extends HTMLElement {
             <input type="range" class="slider temperature" id="temperatureSlider" min="${tempRange.min}" max="${tempRange.max}" value="${clampedTemp}" aria-label="Color temperature" style="--slider-percent:${tempPercent}%;--slider-ratio:${tempPercent/100};">
             <span class="slider-value" id="temperatureValue">${clampedTemp}K</span>
           </div>
+        </div>
+        <div class="presets-area">
+          ${this._renderColorPresets()}
           ${this._renderTemperaturePresets()}
         </div>
       </div>
@@ -2422,15 +2431,15 @@ class SpatialLightColorCard extends HTMLElement {
     // Only replace DOM when content actually changed (prevents hover blink from DOM churn)
     if (presetsHtml !== this._lastPresetsHtml) {
       this._lastPresetsHtml = presetsHtml;
-      const colorWraps = this.shadowRoot.querySelectorAll('.color-wheel-presets-wrap');
-      colorWraps.forEach(wrap => this._replaceOrInsert(wrap, '.color-presets', presetsHtml));
+      const presetsAreas = this.shadowRoot.querySelectorAll('.presets-area');
+      presetsAreas.forEach(area => this._replaceOrInsert(area, '.color-presets', presetsHtml));
       replaced = true;
     }
 
     if (tempHtml !== this._lastTempHtml) {
       this._lastTempHtml = tempHtml;
-      const sliderGroups = this.shadowRoot.querySelectorAll('.slider-group');
-      sliderGroups.forEach(group => this._replaceOrInsert(group, '.temp-presets', tempHtml));
+      const presetsAreas = this.shadowRoot.querySelectorAll('.presets-area');
+      presetsAreas.forEach(area => this._replaceOrInsert(area, '.temp-presets', tempHtml));
       replaced = true;
     }
 

@@ -175,6 +175,12 @@ class SpatialLightColorCard extends HTMLElement {
       icon_only_mode: config.minimal_ui || config.icon_only_mode || false,
       icon_only_overrides: iconOnlyOverrides,
 
+      // Icon rotation (degrees, 0-360) and mirroring (horizontal/vertical/both/none)
+      icon_rotation: Number.isFinite(Number(config.icon_rotation)) ? Number(config.icon_rotation) : 0,
+      icon_rotation_overrides: this._normalizeNumberOverrides(config.icon_rotation_overrides),
+      icon_mirror: ['horizontal', 'vertical', 'both'].includes(config.icon_mirror) ? config.icon_mirror : 'none',
+      icon_mirror_overrides: this._normalizeMirrorOverrides(config.icon_mirror_overrides),
+
       // Color customization
       switch_on_color: config.switch_on_color || '#ffa500',
       switch_off_color: config.switch_off_color || '#3a3a3a',
@@ -202,6 +208,29 @@ class SpatialLightColorCard extends HTMLElement {
     if (this._hass) {
       this._renderAll();
     }
+  }
+
+  _normalizeNumberOverrides(obj) {
+    const result = {};
+    if (obj && typeof obj === 'object') {
+      Object.entries(obj).forEach(([entity, val]) => {
+        const num = Number(val);
+        if (Number.isFinite(num)) result[entity] = num;
+      });
+    }
+    return result;
+  }
+
+  _normalizeMirrorOverrides(obj) {
+    const result = {};
+    if (obj && typeof obj === 'object') {
+      Object.entries(obj).forEach(([entity, val]) => {
+        if (['horizontal', 'vertical', 'both', 'none'].includes(val)) {
+          result[entity] = val;
+        }
+      });
+    }
+    return result;
   }
 
   _normalizeBackgroundImage(value) {
@@ -312,6 +341,21 @@ class SpatialLightColorCard extends HTMLElement {
     if (icon.startsWith('mdi:')) return { type: 'mdi', value: icon };
     // HA sometimes sets arbitrary icon strings; attempt to feed into ha-icon anyway
     return { type: 'mdi', value: icon };
+  }
+
+  _getIconTransform(entity_id) {
+    const rotation = this._config.icon_rotation_overrides[entity_id] !== undefined
+      ? this._config.icon_rotation_overrides[entity_id]
+      : this._config.icon_rotation;
+    const mirror = this._config.icon_mirror_overrides[entity_id] !== undefined
+      ? this._config.icon_mirror_overrides[entity_id]
+      : this._config.icon_mirror;
+    const parts = [];
+    if (rotation) parts.push(`rotate(${rotation}deg)`);
+    if (mirror === 'horizontal') parts.push('scaleX(-1)');
+    else if (mirror === 'vertical') parts.push('scaleY(-1)');
+    else if (mirror === 'both') parts.push('scale(-1,-1)');
+    return parts.length ? parts.join(' ') : '';
   }
 
   _renderIcon(iconData) {
@@ -906,8 +950,8 @@ class SpatialLightColorCard extends HTMLElement {
         box-shadow: 0 0 10px rgba(99,102,241,0.45), 0 0 8px var(--light-color, #ffa500);
       }
 
-      .light-icon-emoji { font-size: calc(32px * var(--icon-scale, 1)); line-height: 1; filter: drop-shadow(0 1px 2px rgba(0,0,0,0.6)); }
-      .light-icon-mdi { --mdc-icon-size: calc(32px * var(--icon-scale, 1)); color: rgba(255,255,255,0.92); filter: drop-shadow(0 1px 2px rgba(0,0,0,0.6)); }
+      .light-icon-emoji { font-size: calc(32px * var(--icon-scale, 1)); line-height: 1; filter: drop-shadow(0 1px 2px rgba(0,0,0,0.6)); transform: var(--icon-transform, none); }
+      .light-icon-mdi { --mdc-icon-size: calc(32px * var(--icon-scale, 1)); color: rgba(255,255,255,0.92); filter: drop-shadow(0 1px 2px rgba(0,0,0,0.6)); transform: var(--icon-transform, none); }
 
       .light-label {
         position: absolute; top: calc(100% + 8px); left: 50%; transform: translateX(-50%);
@@ -1285,6 +1329,12 @@ class SpatialLightColorCard extends HTMLElement {
       const iconScale = lightSize / 56; // 56 is the default size
       if (iconScale !== 1) {
         style += `--icon-scale:${iconScale.toFixed(2)};`;
+      }
+
+      // Icon rotation/mirror transform
+      const iconTransform = this._getIconTransform(entity_id);
+      if (iconTransform) {
+        style += `--icon-transform:${iconTransform};`;
       }
 
       // Set light color CSS variable for icon-only/minimal-ui modes
@@ -3282,6 +3332,7 @@ class SpatialLightColorCard extends HTMLElement {
       always_show_controls: false, controls_below: true,
       default_entity: null, show_entity_icons: true, icon_style: 'mdi',
       light_size: 56, icon_only_mode: false, size_overrides: {}, icon_only_overrides: {},
+      icon_rotation: 0, icon_rotation_overrides: {}, icon_mirror: 'none', icon_mirror_overrides: {},
       switch_on_color: '#ffa500', switch_off_color: '#2a2a2a', scene_color: '#6366f1',
       binary_sensor_on_color: '#4caf50', binary_sensor_off_color: '#2a2a2a',
       color_presets: [],
@@ -3633,6 +3684,13 @@ class SpatialLightColorCardEditor extends HTMLElement {
         min-width: 0;
       }
       .entity-overrides .override-row input:focus { border-color: var(--primary-color, #03a9f4); }
+      .entity-overrides .override-row select {
+        flex: 1; padding: 5px 8px; border: 1px solid var(--divider-color, rgba(0,0,0,0.12));
+        border-radius: 4px; font-size: 13px; color: var(--primary-text-color, #212121);
+        background: var(--card-background-color, #fff); box-sizing: border-box; outline: none;
+        min-width: 0;
+      }
+      .entity-overrides .override-row select:focus { border-color: var(--primary-color, #03a9f4); }
       .entity-overrides .override-switch {
         display: flex; align-items: center; justify-content: space-between; gap: 8px;
       }
@@ -3772,6 +3830,8 @@ class SpatialLightColorCardEditor extends HTMLElement {
     const iconOnlyOverride = this._config.icon_only_overrides && this._config.icon_only_overrides[entity];
     const iconOnlyChecked = iconOnlyOverride !== undefined ? iconOnlyOverride : false;
     const hasIconOnlyOverride = iconOnlyOverride !== undefined;
+    const rotationOverride = (this._config.icon_rotation_overrides && this._config.icon_rotation_overrides[entity] !== undefined) ? this._config.icon_rotation_overrides[entity] : '';
+    const mirrorOverride = (this._config.icon_mirror_overrides && this._config.icon_mirror_overrides[entity]) || '';
 
     return `
       <div class="entity-item ${isExpanded ? 'expanded' : ''}" data-entity="${entity}" data-index="${index}">
@@ -3802,6 +3862,20 @@ class SpatialLightColorCardEditor extends HTMLElement {
             <label>Color (off)</label>
             <input type="text" data-entity="${entity}" data-key="color_off" value="${this._esc(colorOff)}" placeholder="#hex or empty">
             <div class="color-preview" data-entity="${entity}" data-state="off" style="background:${colorOff || 'transparent'};"></div>
+          </div>
+          <div class="override-row">
+            <label>Rotation (°)</label>
+            <input type="number" data-entity="${entity}" data-key="icon_rotation" value="${rotationOverride}" placeholder="Global (${this._config.icon_rotation || 0})" min="0" max="360" step="1">
+          </div>
+          <div class="override-row">
+            <label>Mirror</label>
+            <select data-entity="${entity}" data-key="icon_mirror">
+              <option value=""${mirrorOverride === '' ? ' selected' : ''}>Global (${this._config.icon_mirror || 'none'})</option>
+              <option value="none"${mirrorOverride === 'none' ? ' selected' : ''}>None</option>
+              <option value="horizontal"${mirrorOverride === 'horizontal' ? ' selected' : ''}>Horizontal</option>
+              <option value="vertical"${mirrorOverride === 'vertical' ? ' selected' : ''}>Vertical</option>
+              <option value="both"${mirrorOverride === 'both' ? ' selected' : ''}>Both</option>
+            </select>
           </div>
           <div class="override-switch">
             <label>Icon-only override</label>
@@ -4014,6 +4088,22 @@ class SpatialLightColorCardEditor extends HTMLElement {
                 <span class="slider-value" id="cfgLightSizeValue">56px</span>
               </div>
             </div>
+            <div class="option-row">
+              <div class="label">Icon Rotation</div>
+              <div class="slider-row" style="flex:0 0 auto;">
+                <input type="range" id="cfgIconRotation" min="0" max="360" step="1" style="width:120px;">
+                <span class="slider-value" id="cfgIconRotationValue">0°</span>
+              </div>
+            </div>
+            <div class="option-row">
+              <div><div class="label">Icon Mirror</div><div class="sublabel">Flip all icons horizontally or vertically</div></div>
+              <select id="cfgIconMirror" style="padding:6px 10px; border-radius:6px; border:1px solid var(--divider-color, rgba(0,0,0,0.12)); background:var(--card-background-color, #fff); color:var(--primary-text-color, #212121); font-size:14px;">
+                <option value="none">None</option>
+                <option value="horizontal">Horizontal</option>
+                <option value="vertical">Vertical</option>
+                <option value="both">Both</option>
+              </select>
+            </div>
           </div>
         </div>
 
@@ -4148,6 +4238,11 @@ class SpatialLightColorCardEditor extends HTMLElement {
 
     const lsv = root.getElementById('cfgLightSizeValue');
     if (lsv) lsv.textContent = `${c.light_size || 56}px`;
+
+    setVal('cfgIconRotation', c.icon_rotation || 0);
+    const irv = root.getElementById('cfgIconRotationValue');
+    if (irv) irv.textContent = `${c.icon_rotation || 0}°`;
+    setVal('cfgIconMirror', c.icon_mirror || 'none');
 
     // Background image (ha-picture-upload created programmatically after lazy load)
     let bgUrl = '';
@@ -4353,6 +4448,8 @@ class SpatialLightColorCardEditor extends HTMLElement {
         if (this._config.icon_only_overrides) delete this._config.icon_only_overrides[entity];
         if (this._config.label_overrides) delete this._config.label_overrides[entity];
         if (this._config.color_overrides) delete this._config.color_overrides[entity];
+        if (this._config.icon_rotation_overrides) delete this._config.icon_rotation_overrides[entity];
+        if (this._config.icon_mirror_overrides) delete this._config.icon_mirror_overrides[entity];
         if (this._expandedEntity === entity) this._expandedEntity = null;
         this._fireConfigChanged();
         this._render();
@@ -4433,6 +4530,30 @@ class SpatialLightColorCardEditor extends HTMLElement {
           else { delete this._config.icon_only_overrides[entity]; }
           this._fireConfigChanged();
         });
+      });
+    });
+
+    // Per-entity icon rotation override
+    root.querySelectorAll('.entity-overrides input[data-key="icon_rotation"]').forEach(inp => {
+      this._bindEntityOverride(inp, (entity, val) => {
+        if (!this._config.icon_rotation_overrides) this._config.icon_rotation_overrides = {};
+        const num = parseInt(val, 10);
+        if (Number.isFinite(num)) { this._config.icon_rotation_overrides[entity] = num; }
+        else { delete this._config.icon_rotation_overrides[entity]; }
+      });
+    });
+
+    // Per-entity icon mirror override
+    root.querySelectorAll('.entity-overrides select[data-key="icon_mirror"]').forEach(sel => {
+      sel.addEventListener('change', () => {
+        const entity = sel.dataset.entity;
+        if (!this._config.icon_mirror_overrides) this._config.icon_mirror_overrides = {};
+        if (sel.value && sel.value !== '') {
+          this._config.icon_mirror_overrides[entity] = sel.value;
+        } else {
+          delete this._config.icon_mirror_overrides[entity];
+        }
+        this._fireConfigChanged();
       });
     });
 
@@ -4523,6 +4644,26 @@ class SpatialLightColorCardEditor extends HTMLElement {
       lsSlider.addEventListener('change', () => {
         const v = parseInt(lsSlider.value, 10);
         if (Number.isFinite(v) && v > 0) { this._config.light_size = v; this._fireConfigChanged(); }
+      });
+    }
+
+    // Icon rotation slider
+    const irSlider = root.getElementById('cfgIconRotation');
+    const irVal = root.getElementById('cfgIconRotationValue');
+    if (irSlider) {
+      irSlider.addEventListener('input', () => { if (irVal) irVal.textContent = `${irSlider.value}°`; });
+      irSlider.addEventListener('change', () => {
+        const v = parseInt(irSlider.value, 10);
+        if (Number.isFinite(v)) { this._config.icon_rotation = v; this._fireConfigChanged(); }
+      });
+    }
+
+    // Icon mirror select
+    const mirrorEl = root.getElementById('cfgIconMirror');
+    if (mirrorEl) {
+      mirrorEl.addEventListener('change', () => {
+        this._config.icon_mirror = mirrorEl.value === 'none' ? 'none' : mirrorEl.value;
+        this._fireConfigChanged();
       });
     }
 

@@ -6,7 +6,7 @@ This card allows instanteneously selecting and controlling dozens of lights on a
 
 # Spatial Lights Card for Home Assistant
 
-The Spatial Lights Card lets you place many Home Assistant lights on a 2D canvas, making it easy to control arbitrary groups of entities with very few taps and little attention.
+The Spatial Lights Card lets you place many Home Assistant lights on a 2D canvas, for example, corresponding to their physical locations, making it easy to control arbitrary groups of entities with very few taps and little attention.
 
 You can drag to draw a rectangle around lights, which you'll immediately be able to control as a group. You can toggle individual lights
 
@@ -278,6 +278,25 @@ always_show_controls: true
 - [Submit the issue on GitHub](https://github.com/Mihonarium/hass-spatial-lights-card/issues/new).
 
 ---
+
+## About the design
+The design was somewhat inspired by the Philips Hue light controls, and thinking hard about how to improve over it. I liked about the Philips Hue app the ability to easily grab many lights and make them arbitrary colors, including multiple lights at the same time; and making many lights the same color. However, picking the specific light was still fairly difficult, if you have a lot of lights.
+
+This card solves all of the problems: identifying lights by their position in the physical space is much easier than identifying them by their position on the color wheel or finding them by name.
+
+This allows very fast and easy setting of arbitrary groups of lights to specific color/temperature/brightness; there’s a mode that shows existing colors and presets to easily sync arbitrary lights to the same color.
+
+It’s current state is an enormous improvement over the default ways to have smart home dashboards, which usually have 1D lists with individual controls for each light (and each pre-defined light group) which either take space or need to be opened and are also hard to find if you have a lot of lights.
+
+The card allows placing lights and other entities on a 2D canvas to easily control arbitrary lights/groups of lights (that's always a nightmare once you have dozens of devices).
+
+Lights can be placed corresponding to their physical location and can be selected in arbitrary groups by dragging a selection box over them.
+
+The card also supports switches (they can be toggled by a double or a single tap depending on a setting) and binary sensors (it can display on/off states with arbitrary colors).
+
+It also has color presets (for quickly setting lights to a specific color) and a live color mode (for quickly setting ligths to a color that some lights in the card already have).
+
+This card made turn dozens of lights to nice colors in arbitrary ways much easier.
 
 ## ToDo
 - [ ] Think about adding arbitraryhe sensors display

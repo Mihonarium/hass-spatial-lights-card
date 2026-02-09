@@ -3610,7 +3610,15 @@ class SpatialLightColorCardEditor extends HTMLElement {
             this._config.background_image = val;
           }
         } else {
-          this._config.background_image = null;
+          // Preserve non-URL settings (size, position, etc.) so they apply to the next picked image
+          if (this._config.background_image && typeof this._config.background_image === 'object') {
+            delete this._config.background_image.url;
+            if (Object.keys(this._config.background_image).length === 0) {
+              this._config.background_image = null;
+            }
+          } else {
+            this._config.background_image = null;
+          }
         }
         this._fireConfigChanged();
       });

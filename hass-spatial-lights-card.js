@@ -179,6 +179,8 @@ class SpatialLightColorCard extends HTMLElement {
       switch_on_color: config.switch_on_color || '#ffa500',
       switch_off_color: config.switch_off_color || '#3a3a3a',
       scene_color: config.scene_color || '#6366f1',
+      binary_sensor_on_color: config.binary_sensor_on_color || '#4caf50',
+      binary_sensor_off_color: config.binary_sensor_off_color || '#2a2a2a',
       color_overrides: config.color_overrides || {},
 
       // Color presets (array of hex color strings shown as quick-select circles)
@@ -414,6 +416,8 @@ class SpatialLightColorCard extends HTMLElement {
     if (!stateObj) return;
     const [domain] = entity.split('.');
     
+    if (domain === 'binary_sensor') return;
+
     if (domain === 'scene') {
       this._hass.callService('scene', 'turn_on', { entity_id: entity });
       return;
@@ -1201,7 +1205,8 @@ class SpatialLightColorCard extends HTMLElement {
       if (ov) return ov;
 
       if (domain === 'switch' || domain === 'input_boolean') return this._config.switch_on_color;
-      
+      if (domain === 'binary_sensor') return this._config.binary_sensor_on_color;
+
       if (attributes && attributes.rgb_color) {
         const [r, g, b] = attributes.rgb_color;
         return `rgb(${r}, ${g}, ${b})`;
@@ -1212,6 +1217,7 @@ class SpatialLightColorCard extends HTMLElement {
       if (ov) return ov;
 
       if (domain === 'switch' || domain === 'input_boolean') return this._config.switch_off_color;
+      if (domain === 'binary_sensor') return this._config.binary_sensor_off_color;
       return 'transparent';
     }
   }
@@ -3198,6 +3204,8 @@ class SpatialLightColorCard extends HTMLElement {
     if (this._config.switch_on_color !== '#ffa500') yamlLines.push(`switch_on_color: "${this._config.switch_on_color}"`);
     if (this._config.switch_off_color !== '#2a2a2a') yamlLines.push(`switch_off_color: "${this._config.switch_off_color}"`);
     if (this._config.scene_color !== '#6366f1') yamlLines.push(`scene_color: "${this._config.scene_color}"`);
+    if (this._config.binary_sensor_on_color !== '#4caf50') yamlLines.push(`binary_sensor_on_color: "${this._config.binary_sensor_on_color}"`);
+    if (this._config.binary_sensor_off_color !== '#2a2a2a') yamlLines.push(`binary_sensor_off_color: "${this._config.binary_sensor_off_color}"`);
 
     if (this._config.color_overrides && Object.keys(this._config.color_overrides).length) {
       yamlLines.push('color_overrides:');
@@ -3266,6 +3274,7 @@ class SpatialLightColorCard extends HTMLElement {
       default_entity: null, show_entity_icons: true, icon_style: 'mdi',
       light_size: 56, icon_only_mode: false, size_overrides: {}, icon_only_overrides: {},
       switch_on_color: '#ffa500', switch_off_color: '#2a2a2a', scene_color: '#6366f1',
+      binary_sensor_on_color: '#4caf50', binary_sensor_off_color: '#2a2a2a',
       color_presets: [],
       show_live_colors: false,
     };
@@ -3466,7 +3475,7 @@ class SpatialLightColorCardEditor extends HTMLElement {
     this.shadowRoot.querySelectorAll('ha-entity-picker').forEach(picker => {
       picker.hass = this._hass;
       if (!picker.includeDomains || picker.includeDomains.length === 0) {
-        picker.includeDomains = ['light', 'switch', 'scene', 'input_boolean'];
+        picker.includeDomains = ['light', 'switch', 'scene', 'input_boolean', 'binary_sensor'];
       }
     });
     // Set default entity picker value
@@ -3531,7 +3540,7 @@ class SpatialLightColorCardEditor extends HTMLElement {
 
   _getDomainIcon(entityId) {
     const domain = entityId.split('.')[0];
-    const map = { light: 'mdi:lightbulb', switch: 'mdi:toggle-switch', scene: 'mdi:palette', input_boolean: 'mdi:toggle-switch-outline' };
+    const map = { light: 'mdi:lightbulb', switch: 'mdi:toggle-switch', scene: 'mdi:palette', input_boolean: 'mdi:toggle-switch-outline', binary_sensor: 'mdi:eye' };
     return map[domain] || 'mdi:help-circle';
   }
 
@@ -3959,6 +3968,20 @@ class SpatialLightColorCardEditor extends HTMLElement {
               </div>
             </div>
             <div class="input-row">
+              <label>Binary Sensor On Color</label>
+              <div class="color-input-row">
+                <input type="color" id="cfgBinarySensorOnColorPicker" value="${this._esc(config.binary_sensor_on_color || '#4caf50')}">
+                <input type="text" id="cfgBinarySensorOnColor" placeholder="#4caf50">
+              </div>
+            </div>
+            <div class="input-row">
+              <label>Binary Sensor Off Color</label>
+              <div class="color-input-row">
+                <input type="color" id="cfgBinarySensorOffColorPicker" value="${this._esc(config.binary_sensor_off_color || '#2a2a2a')}">
+                <input type="text" id="cfgBinarySensorOffColor" placeholder="#2a2a2a">
+              </div>
+            </div>
+            <div class="input-row">
               <label>Color Presets</label>
               <div class="color-presets-list" id="colorPresetsList">
                 ${presets.map((c, i) => `
@@ -4062,6 +4085,10 @@ class SpatialLightColorCardEditor extends HTMLElement {
     setVal('cfgSwitchOffColorPicker', c.switch_off_color || '#3a3a3a');
     setVal('cfgSceneColor', c.scene_color || '#6366f1');
     setVal('cfgSceneColorPicker', c.scene_color || '#6366f1');
+    setVal('cfgBinarySensorOnColor', c.binary_sensor_on_color || '#4caf50');
+    setVal('cfgBinarySensorOnColorPicker', c.binary_sensor_on_color || '#4caf50');
+    setVal('cfgBinarySensorOffColor', c.binary_sensor_off_color || '#2a2a2a');
+    setVal('cfgBinarySensorOffColorPicker', c.binary_sensor_off_color || '#2a2a2a');
 
     // Temperature
     setVal('cfgTempMin', c.temperature_min != null ? c.temperature_min : '');
@@ -4357,6 +4384,8 @@ class SpatialLightColorCardEditor extends HTMLElement {
     this._bindColorPair('cfgSwitchOnColor', 'cfgSwitchOnColorPicker', 'switch_on_color', '#ffa500');
     this._bindColorPair('cfgSwitchOffColor', 'cfgSwitchOffColorPicker', 'switch_off_color', '#3a3a3a');
     this._bindColorPair('cfgSceneColor', 'cfgSceneColorPicker', 'scene_color', '#6366f1');
+    this._bindColorPair('cfgBinarySensorOnColor', 'cfgBinarySensorOnColorPicker', 'binary_sensor_on_color', '#4caf50');
+    this._bindColorPair('cfgBinarySensorOffColor', 'cfgBinarySensorOffColorPicker', 'binary_sensor_off_color', '#2a2a2a');
 
     // --- Color presets ---
     root.querySelectorAll('.color-preset-chip .remove-preset').forEach(btn => {

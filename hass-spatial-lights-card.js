@@ -782,6 +782,7 @@ class SpatialLightColorCard extends HTMLElement {
     this._syncOverlayState();
     this.updateLights();
     this._refreshEntityIcons();
+    requestAnimationFrame(() => this._updateSeparatorVisibility());
   }
 
   _styles() {
@@ -991,8 +992,8 @@ class SpatialLightColorCard extends HTMLElement {
         position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%);
         background: rgba(20,20,20,0.95); backdrop-filter: blur(16px) saturate(160%);
         border: 1px solid var(--border-medium); border-radius: 12px; padding: 16px 20px;
-        display: grid; grid-template-columns: auto 1fr; grid-template-rows: auto auto;
-        gap: 12px 20px; align-items: start; box-shadow: var(--shadow-md);
+        display: grid; grid-template-columns: auto 1fr; grid-template-rows: 1fr auto;
+        gap: 12px 20px; align-items: center; box-shadow: var(--shadow-md);
         opacity: 0; pointer-events: none; transition: opacity var(--transition-base);
         z-index: 50;
       }
@@ -1001,8 +1002,8 @@ class SpatialLightColorCard extends HTMLElement {
       .controls-below {
         padding: 20px; border-top: 1px solid var(--border-subtle); background: var(--surface-secondary);
         display: none;
-        grid-template-columns: auto 1fr; grid-template-rows: auto auto;
-        gap: 12px 24px; align-items: start; justify-content: center;
+        grid-template-columns: auto 1fr; grid-template-rows: 1fr auto;
+        gap: 12px 24px; align-items: center; justify-content: center;
       }
       .controls-below.visible { display: grid; }
 
@@ -1014,7 +1015,7 @@ class SpatialLightColorCard extends HTMLElement {
 
       .presets-area {
         grid-column: 2; grid-row: 2;
-        display: flex; flex-wrap: wrap; gap: 2px; align-items: center;
+        display: flex; flex-wrap: wrap; gap: 0; align-items: center;
         margin-left: -4px; /* Align visual preset circles with slider left edge */
       }
 
@@ -1165,6 +1166,7 @@ class SpatialLightColorCard extends HTMLElement {
           order: 2; flex: 0 1 auto; align-self: center;
           margin-left: 0; /* Reset desktop alignment offset */
           max-width: calc(100% - 140px); /* 128px wheel + 12px gap */
+          justify-content: center;
         }
         .slider-group { order: 3; flex: 1 1 100%; min-width: 0; }
       }
@@ -2665,13 +2667,13 @@ class SpatialLightColorCard extends HTMLElement {
         sep.style.display = 'none';
         return;
       }
-      // Show separator to measure layout
-      sep.style.display = '';
+      // Hide separator first to measure natural layout without its space influence
+      sep.style.display = 'none';
       const prevTop = prev.getBoundingClientRect().top;
       const nextTop = next.getBoundingClientRect().top;
-      // Hide if the first temp preset isn't on the same row as the last color preset
-      if (Math.abs(prevTop - nextTop) > 2) {
-        sep.style.display = 'none';
+      // Only show if the last color preset and first temp preset are on the same row
+      if (Math.abs(prevTop - nextTop) <= 2) {
+        sep.style.display = '';
       }
     });
   }

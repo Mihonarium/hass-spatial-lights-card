@@ -282,4 +282,5 @@ always_show_controls: true
 ## ToDo
 - [ ] Think about adding arbitraryhe sensors display
 - [ ] Think about adding arbitrary templates/HTML
+- [ ] Color effects in presets
 - [ ] Fix the bug where too many preset/live lights on the desktop get displayed under the color wheel in a way that enlarges the color wheel area and makes the sliders smaller

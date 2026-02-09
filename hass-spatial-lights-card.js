@@ -1150,16 +1150,23 @@ class SpatialLightColorCard extends HTMLElement {
       .modal-hint { margin-top: 8px; font-size:12px; color: var(--text-tertiary); text-align:center; }
 
       @media (max-width: 768px) {
-        .controls-floating, .controls-below {
-          grid-template-columns: auto 1fr;
-          grid-template-rows: auto auto;
+        .controls-floating {
+          display: flex; flex-wrap: wrap; justify-content: center;
+          gap: 12px;
+          left: 16px; right: 16px; width: auto; transform: none;
+        }
+        .controls-below.visible {
+          display: flex; flex-wrap: wrap; justify-content: center;
           gap: 12px;
         }
-        .controls-floating { left: 16px; right: 16px; width: auto; transform: none; }
         .light { --light-size: ${Math.min(this._config.light_size, 50)}px; }
-        .color-wheel-mini { grid-column: 1; grid-row: 1; align-self: start; }
-        .presets-area { grid-column: 2; grid-row: 1; align-self: center; }
-        .slider-group { grid-column: 1 / -1; grid-row: 2; min-width: 0; }
+        .color-wheel-mini { order: 1; flex-shrink: 0; align-self: start; }
+        .presets-area {
+          order: 2; flex: 0 1 auto; align-self: center;
+          margin-left: 0; /* Reset desktop alignment offset */
+          max-width: calc(100% - 140px); /* 128px wheel + 12px gap */
+        }
+        .slider-group { order: 3; flex: 1 1 100%; min-width: 0; }
       }
 
       .empty-state {

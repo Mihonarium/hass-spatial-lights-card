@@ -1015,7 +1015,7 @@ class SpatialLightColorCard extends HTMLElement {
 
       .presets-area {
         grid-column: 2; grid-row: 2;
-        display: flex; flex-wrap: wrap; gap: 2px; align-items: center;
+        display: flex; flex-wrap: wrap; gap: 0; align-items: center;
         margin-left: -4px; /* Align visual preset circles with slider left edge */
       }
 

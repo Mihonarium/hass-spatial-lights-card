@@ -1014,11 +1014,13 @@ class SpatialLightColorCard extends HTMLElement {
 
       .presets-area {
         grid-column: 2; grid-row: 2;
-        display: flex; flex-wrap: wrap; gap: 8px; align-items: flex-start;
+        display: flex; flex-wrap: wrap; gap: 2px; align-items: center;
+        margin-left: -4px; /* Align visual preset circles with slider left edge */
       }
 
-      .color-presets {
-        display: flex; flex-wrap: wrap; gap: 2px; justify-content: flex-start;
+      .preset-separator {
+        width: 1px; height: 20px; background: rgba(255,255,255,0.12);
+        margin: 0 3px; flex-shrink: 0; align-self: center;
       }
       .color-preset {
         width: 36px; height: 36px; border-radius: 9999px; cursor: pointer;
@@ -1036,9 +1038,6 @@ class SpatialLightColorCard extends HTMLElement {
       .color-preset.active::after { box-shadow: 0 0 0 2px rgba(255,255,255,0.5); }
       .color-preset.active:hover::after { box-shadow: 0 0 0 2px rgba(255,255,255,0.5), 0 0 8px rgba(255,255,255,0.2); }
 
-      .temp-presets {
-        display: flex; flex-wrap: wrap; gap: 2px; align-items: center;
-      }
       .temp-preset {
         width: 36px; height: 36px; border-radius: 9999px; cursor: pointer;
         flex-shrink: 0; position: relative; background: transparent !important;
@@ -1394,8 +1393,7 @@ class SpatialLightColorCard extends HTMLElement {
           </div>
         </div>
         <div class="presets-area">
-          ${this._renderColorPresets()}
-          ${this._renderTemperaturePresets()}
+          ${this._renderPresetsContent()}
         </div>
       </div>
     `;
@@ -1423,8 +1421,7 @@ class SpatialLightColorCard extends HTMLElement {
           </div>
         </div>
         <div class="presets-area">
-          ${this._renderColorPresets()}
-          ${this._renderTemperaturePresets()}
+          ${this._renderPresetsContent()}
         </div>
       </div>
     `;
@@ -2424,26 +2421,16 @@ class SpatialLightColorCard extends HTMLElement {
   _refreshColorPresets() {
     if (!this.shadowRoot) return;
 
-    const presetsHtml = this._renderColorPresets();
-    const tempHtml = this._renderTemperaturePresets();
-    let replaced = false;
+    const combinedHtml = this._renderPresetsContent();
 
     // Only replace DOM when content actually changed (prevents hover blink from DOM churn)
-    if (presetsHtml !== this._lastPresetsHtml) {
-      this._lastPresetsHtml = presetsHtml;
+    if (combinedHtml !== this._lastPresetsHtml) {
+      this._lastPresetsHtml = combinedHtml;
       const presetsAreas = this.shadowRoot.querySelectorAll('.presets-area');
-      presetsAreas.forEach(area => this._replaceOrInsert(area, '.color-presets', presetsHtml));
-      replaced = true;
+      presetsAreas.forEach(area => { area.innerHTML = combinedHtml; });
+      this._bindPresetHandlers();
+      requestAnimationFrame(() => this._updateSeparatorVisibility());
     }
-
-    if (tempHtml !== this._lastTempHtml) {
-      this._lastTempHtml = tempHtml;
-      const presetsAreas = this.shadowRoot.querySelectorAll('.presets-area');
-      presetsAreas.forEach(area => this._replaceOrInsert(area, '.temp-presets', tempHtml));
-      replaced = true;
-    }
-
-    if (replaced) this._bindPresetHandlers();
   }
 
   _highlightEntities(entityList) {
@@ -2610,8 +2597,7 @@ class SpatialLightColorCard extends HTMLElement {
       html += `<div class="color-preset${isActive ? ' active' : ''}" data-preset-color="${lc.hex}" data-preset-rgb="${lc.rgb.join(',')}" data-preset-entities="${lc.entities.join(',')}" style="--preset-color:${lc.hex};" title="${lc.hex}"></div>`;
     });
 
-    if (!html) return '';
-    return `<div class="color-presets">${html}</div>`;
+    return html;
   }
 
   _kelvinToRgb(kelvin) {
@@ -2648,7 +2634,39 @@ class SpatialLightColorCard extends HTMLElement {
       html += `<div class="temp-preset${isActive ? ' active' : ''}" data-preset-kelvin="${t.kelvin}" data-preset-entities="${entities}" style="--preset-color:${hex};" title="${t.kelvin}K"><span class="temp-label">${t.kelvin}K</span></div>`;
     });
 
-    return `<div class="temp-presets">${html}</div>`;
+    return html;
+  }
+
+  _renderPresetsContent() {
+    const colorHtml = this._renderColorPresets();
+    const tempHtml = this._renderTemperaturePresets();
+    if (!colorHtml && !tempHtml) return '';
+    let html = colorHtml || '';
+    if (colorHtml && tempHtml) {
+      html += '<div class="preset-separator" aria-hidden="true"></div>';
+    }
+    html += tempHtml || '';
+    return html;
+  }
+
+  _updateSeparatorVisibility() {
+    if (!this.shadowRoot) return;
+    this.shadowRoot.querySelectorAll('.preset-separator').forEach(sep => {
+      const prev = sep.previousElementSibling;
+      const next = sep.nextElementSibling;
+      if (!prev || !next) {
+        sep.style.display = 'none';
+        return;
+      }
+      // Show separator to measure layout
+      sep.style.display = '';
+      const prevTop = prev.getBoundingClientRect().top;
+      const nextTop = next.getBoundingClientRect().top;
+      // Hide if the first temp preset isn't on the same row as the last color preset
+      if (Math.abs(prevTop - nextTop) > 2) {
+        sep.style.display = 'none';
+      }
+    });
   }
 
   _applyColorWheelSelection(rgb) {

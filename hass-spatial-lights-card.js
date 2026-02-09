@@ -216,13 +216,15 @@ class SpatialLightColorCard extends HTMLElement {
       const position = typeof value.position === 'string' ? value.position.trim() : '';
       const repeat = typeof value.repeat === 'string' ? value.repeat.trim() : '';
       const blend = typeof value.blend_mode === 'string' ? value.blend_mode.trim() : '';
-      if (!url && !size && !position && !repeat && !blend) return null;
+      const opacity = typeof value.opacity === 'number' ? value.opacity : (typeof value.opacity === 'string' ? parseFloat(value.opacity) : NaN);
+      if (!url && !size && !position && !repeat && !blend && isNaN(opacity)) return null;
       const normalized = {};
       if (url) normalized.url = url;
       if (size) normalized.size = size;
       if (position) normalized.position = position;
       if (repeat) normalized.repeat = repeat;
       if (blend) normalized.blend_mode = blend;
+      if (!isNaN(opacity)) normalized.opacity = Math.max(0, Math.min(1, opacity));
       return normalized;
     }
     return null;
@@ -240,6 +242,7 @@ class SpatialLightColorCard extends HTMLElement {
     if (bg.position) vars.push(`--canvas-background-position:${bg.position}`);
     if (bg.repeat) vars.push(`--canvas-background-repeat:${bg.repeat}`);
     if (bg.blend_mode) vars.push(`--canvas-background-blend-mode:${bg.blend_mode}`);
+    if (bg.opacity !== undefined && bg.opacity !== null) vars.push(`--canvas-background-opacity:${bg.opacity}`);
     return vars.join('; ');
   }
 
@@ -788,12 +791,17 @@ class SpatialLightColorCard extends HTMLElement {
       .canvas-wrapper { position: relative; }
       .canvas {
         position: relative; width: 100%; height: ${this._config.canvas_height}px; background: var(--surface-primary);
+        overflow: hidden; user-select: none; touch-action: none;
+      }
+      .canvas::before {
+        content: ''; position: absolute; inset: 0;
         background-image: var(--canvas-background-image, none);
         background-size: var(--canvas-background-size, cover);
         background-position: var(--canvas-background-position, center);
         background-repeat: var(--canvas-background-repeat, no-repeat);
-        background-blend-mode: var(--canvas-background-blend-mode, normal);
-        overflow: hidden; user-select: none; touch-action: none;
+        mix-blend-mode: var(--canvas-background-blend-mode, normal);
+        opacity: var(--canvas-background-opacity, 1);
+        pointer-events: none; z-index: 0;
       }
       .grid {
         position: absolute; inset: 0;
@@ -3246,6 +3254,7 @@ class SpatialLightColorCard extends HTMLElement {
         if (bg.position) yamlLines.push(`${indent}position: ${bg.position}`);
         if (bg.repeat) yamlLines.push(`${indent}repeat: ${bg.repeat}`);
         if (bg.blend_mode) yamlLines.push(`${indent}blend_mode: ${bg.blend_mode}`);
+        if (bg.opacity !== undefined) yamlLines.push(`${indent}opacity: ${bg.opacity}`);
       }
     }
 
@@ -3884,6 +3893,75 @@ class SpatialLightColorCardEditor extends HTMLElement {
               <label>Background Image</label>
               <div id="cfgBgImageContainer"></div>
             </div>
+            <div id="bgSettingsGroup" style="display:flex;flex-direction:column;gap:12px;">
+              <div class="two-col">
+                <div class="input-row">
+                  <label for="cfgBgSize">Size</label>
+                  <select id="cfgBgSize">
+                    <option value="">Default (cover)</option>
+                    <option value="cover">Cover</option>
+                    <option value="contain">Contain</option>
+                    <option value="auto">Auto</option>
+                    <option value="100% 100%">Stretch (100% 100%)</option>
+                  </select>
+                </div>
+                <div class="input-row">
+                  <label for="cfgBgPosition">Position</label>
+                  <select id="cfgBgPosition">
+                    <option value="">Default (center)</option>
+                    <option value="center">Center</option>
+                    <option value="top">Top</option>
+                    <option value="bottom">Bottom</option>
+                    <option value="left">Left</option>
+                    <option value="right">Right</option>
+                    <option value="top left">Top Left</option>
+                    <option value="top right">Top Right</option>
+                    <option value="bottom left">Bottom Left</option>
+                    <option value="bottom right">Bottom Right</option>
+                  </select>
+                </div>
+              </div>
+              <div class="two-col">
+                <div class="input-row">
+                  <label for="cfgBgRepeat">Repeat</label>
+                  <select id="cfgBgRepeat">
+                    <option value="">Default (no-repeat)</option>
+                    <option value="no-repeat">No Repeat</option>
+                    <option value="repeat">Repeat</option>
+                    <option value="repeat-x">Repeat X</option>
+                    <option value="repeat-y">Repeat Y</option>
+                  </select>
+                </div>
+                <div class="input-row">
+                  <label for="cfgBgBlendMode">Blend Mode</label>
+                  <select id="cfgBgBlendMode">
+                    <option value="">Default (normal)</option>
+                    <option value="normal">Normal</option>
+                    <option value="multiply">Multiply</option>
+                    <option value="screen">Screen</option>
+                    <option value="overlay">Overlay</option>
+                    <option value="darken">Darken</option>
+                    <option value="lighten">Lighten</option>
+                    <option value="color-dodge">Color Dodge</option>
+                    <option value="color-burn">Color Burn</option>
+                    <option value="hard-light">Hard Light</option>
+                    <option value="soft-light">Soft Light</option>
+                    <option value="difference">Difference</option>
+                    <option value="exclusion">Exclusion</option>
+                    <option value="hue">Hue</option>
+                    <option value="saturation">Saturation</option>
+                    <option value="color">Color</option>
+                    <option value="luminosity">Luminosity</option>
+                  </select>
+                </div>
+              </div>
+              <div class="input-row">
+                <label>Opacity <span id="cfgBgOpacityValue" style="font-weight:400;">100%</span></label>
+                <div class="slider-row">
+                  <input type="range" id="cfgBgOpacity" min="0" max="100" step="1" value="100">
+                </div>
+              </div>
+            </div>
             <div class="two-col">
               <div class="input-row">
                 <label for="cfgLabelMode">Label Mode</label>
@@ -4077,6 +4155,31 @@ class SpatialLightColorCardEditor extends HTMLElement {
       bgUrl = typeof c.background_image === 'string' ? c.background_image : (c.background_image.url || '');
     }
     this._initBgUpload(bgUrl);
+
+    // Background image settings
+    const bgObj = (c.background_image && typeof c.background_image === 'object') ? c.background_image : {};
+    const setSelectVal = (id, val) => {
+      const el = root.getElementById(id);
+      if (!el) return;
+      const targetVal = val || '';
+      let found = false;
+      for (const opt of el.options) { if (opt.value === targetVal) { found = true; break; } }
+      if (!found && targetVal) {
+        const opt = document.createElement('option');
+        opt.value = targetVal;
+        opt.textContent = targetVal;
+        el.appendChild(opt);
+      }
+      el.value = targetVal;
+    };
+    setSelectVal('cfgBgSize', bgObj.size || '');
+    setSelectVal('cfgBgPosition', bgObj.position || '');
+    setSelectVal('cfgBgRepeat', bgObj.repeat || '');
+    setSelectVal('cfgBgBlendMode', bgObj.blend_mode || '');
+    const bgOpacityPct = bgObj.opacity !== undefined ? Math.round(bgObj.opacity * 100) : 100;
+    setVal('cfgBgOpacity', bgOpacityPct);
+    const bgOpacityLabel = root.getElementById('cfgBgOpacityValue');
+    if (bgOpacityLabel) bgOpacityLabel.textContent = `${bgOpacityPct}%`;
 
     // Colors
     setVal('cfgSwitchOnColor', c.switch_on_color || '#ffa500');
@@ -4359,6 +4462,49 @@ class SpatialLightColorCardEditor extends HTMLElement {
     }
 
     // Background image event listener is attached in _initBgUpload()
+
+    // --- Background image settings ---
+    const bgSettingChanged = () => {
+      // Convert string to object if needed
+      if (typeof this._config.background_image === 'string') {
+        this._config.background_image = { url: this._config.background_image };
+      }
+      if (!this._config.background_image) {
+        this._config.background_image = {};
+      }
+      const bg = this._config.background_image;
+      const bgSizeEl = root.getElementById('cfgBgSize');
+      const bgPosEl = root.getElementById('cfgBgPosition');
+      const bgRepeatEl = root.getElementById('cfgBgRepeat');
+      const bgBlendEl = root.getElementById('cfgBgBlendMode');
+      const bgOpacityEl = root.getElementById('cfgBgOpacity');
+      if (bgSizeEl) { if (bgSizeEl.value) bg.size = bgSizeEl.value; else delete bg.size; }
+      if (bgPosEl) { if (bgPosEl.value) bg.position = bgPosEl.value; else delete bg.position; }
+      if (bgRepeatEl) { if (bgRepeatEl.value) bg.repeat = bgRepeatEl.value; else delete bg.repeat; }
+      if (bgBlendEl) { if (bgBlendEl.value) bg.blend_mode = bgBlendEl.value; else delete bg.blend_mode; }
+      if (bgOpacityEl) {
+        const pct = parseInt(bgOpacityEl.value, 10);
+        if (Number.isFinite(pct) && pct < 100) bg.opacity = parseFloat((pct / 100).toFixed(2));
+        else delete bg.opacity;
+      }
+      // If empty object (no url, no settings), set to null
+      if (Object.keys(bg).length === 0) {
+        this._config.background_image = null;
+      }
+      this._fireConfigChanged();
+    };
+    ['cfgBgSize', 'cfgBgPosition', 'cfgBgRepeat', 'cfgBgBlendMode'].forEach(id => {
+      const el = root.getElementById(id);
+      if (el) el.addEventListener('change', bgSettingChanged);
+    });
+    const bgOpacitySlider = root.getElementById('cfgBgOpacity');
+    const bgOpacityValLabel = root.getElementById('cfgBgOpacityValue');
+    if (bgOpacitySlider) {
+      bgOpacitySlider.addEventListener('input', () => {
+        if (bgOpacityValLabel) bgOpacityValLabel.textContent = `${bgOpacitySlider.value}%`;
+      });
+      bgOpacitySlider.addEventListener('change', bgSettingChanged);
+    }
 
     // --- Display/Layout/Interaction toggles ---
     this._bindSwitch('cfgMinimalUI', 'minimal_ui');

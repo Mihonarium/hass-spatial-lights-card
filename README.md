@@ -12,8 +12,8 @@ You can drag to draw a rectangle around lights, which you'll immediately be able
 
 Very useful when you have a lot of lights, and searching for the one you need by name and icon is tiresome; you can position the lights in a layout that corresponds to the physical room layout, making it easy to select the light you need. You can add a background image, e.g., with the room layout.
 
+<img width="494" height="697" alt="image" src="https://github.com/user-attachments/assets/688ac67a-f58f-45e3-9917-88f6c1c4bb02" />
 
-<img height="700" alt="Spatial Lights Card Screenshot" src="https://github.com/user-attachments/assets/01665e89-fe23-4bc2-8aff-517b7e9b0f9b" />
 
 ---
 

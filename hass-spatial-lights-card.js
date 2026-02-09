@@ -297,6 +297,7 @@ class SpatialLightColorCard extends HTMLElement {
         id,
         position: pos,
         label: el.label != null ? String(el.label) : null,
+        show_background: el.show_background !== false,
         tap_action: normalizeAction(el.tap_action),
         hold_action: normalizeAction(el.hold_action),
         double_tap_action: normalizeAction(el.double_tap_action),
@@ -1164,6 +1165,9 @@ class SpatialLightColorCard extends HTMLElement {
       .canvas-element-link .ce-icon-wrap ha-icon {
         --mdc-icon-size: 60%;
         color: var(--ce-color, #ffffff);
+        display: flex;
+        align-items: center;
+        justify-content: center;
       }
       .canvas-element-link .ce-label {
         font-size: 11px; font-weight: 600; color: var(--ce-color, rgba(255,255,255,0.85));
@@ -1190,6 +1194,8 @@ class SpatialLightColorCard extends HTMLElement {
         --mdc-icon-size: 18px;
         color: var(--ce-color, rgba(255,255,255,0.7));
         flex-shrink: 0;
+        display: flex;
+        align-items: center;
       }
       .canvas-element-sensor .ce-value {
         font-size: var(--ce-font-size, 14px);
@@ -1218,6 +1224,8 @@ class SpatialLightColorCard extends HTMLElement {
         --mdc-icon-size: 18px;
         color: var(--ce-color, rgba(255,255,255,0.7));
         flex-shrink: 0;
+        display: flex;
+        align-items: center;
       }
       .canvas-element-template .ce-value {
         font-size: var(--ce-font-size, 14px);
@@ -1235,6 +1243,29 @@ class SpatialLightColorCard extends HTMLElement {
         opacity: 0; transition: opacity 200ms ease;
       }
       .canvas-element-template:hover .ce-label { opacity: 1; }
+
+      /* No-background variants */
+      .canvas-element-link.no-background .ce-icon-wrap {
+        background: transparent;
+        border-color: transparent;
+        box-shadow: none;
+      }
+      .canvas-element-link.no-background:hover .ce-icon-wrap,
+      .canvas-element-link.no-background:active .ce-icon-wrap {
+        background: rgba(255,255,255,0.08);
+        border-color: transparent;
+        box-shadow: none;
+      }
+      .canvas-element-sensor.no-background {
+        background: transparent;
+        backdrop-filter: none;
+        -webkit-backdrop-filter: none;
+        border-color: transparent;
+        padding: 2px 4px;
+      }
+      .canvas-element-sensor.no-background:hover {
+        background: rgba(0,0,0,0.15);
+      }
 
       .controls-floating {
         position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%);
@@ -1658,8 +1689,9 @@ class SpatialLightColorCard extends HTMLElement {
   _renderCanvasLink(el, style) {
     const sizeStyle = `width:${el.size}px; height:${el.size}px;`;
     const label = el.label ? `<div class="ce-label">${this._escapeHtml(el.label)}</div>` : '';
+    const bgClass = el.show_background === false ? ' no-background' : '';
     return `
-      <div class="canvas-element canvas-element-link"
+      <div class="canvas-element canvas-element-link${bgClass}"
            style="${style}"
            data-element-id="${el.id}"
            data-element-type="link"
@@ -1687,8 +1719,9 @@ class SpatialLightColorCard extends HTMLElement {
       : (st?.attributes?.friendly_name
         ? `<div class="ce-label">${this._escapeHtml(st.attributes.friendly_name)}</div>`
         : '');
+    const bgClass = el.show_background === false ? ' no-background' : '';
     return `
-      <div class="canvas-element canvas-element-sensor"
+      <div class="canvas-element canvas-element-sensor${bgClass}"
            style="${style}"
            data-element-id="${el.id}"
            data-element-type="sensor"
@@ -3993,6 +4026,7 @@ class SpatialLightColorCard extends HTMLElement {
         if (el.entity) yamlLines.push(`${indent}${indent}entity: ${el.entity}`);
         if (el.content) yamlLines.push(`${indent}${indent}content: "${el.content}"`);
         if (el.type === 'link' && el.size !== 40) yamlLines.push(`${indent}${indent}size: ${el.size}`);
+        if (el.show_background === false) yamlLines.push(`${indent}${indent}show_background: false`);
         if (el.type === 'sensor') {
           if (el.prefix) yamlLines.push(`${indent}${indent}prefix: "${el.prefix}"`);
           if (el.suffix !== null) yamlLines.push(`${indent}${indent}suffix: "${el.suffix}"`);
@@ -4243,7 +4277,8 @@ class SpatialLightColorCardEditor extends HTMLElement {
     if (!this._hass || !this.shadowRoot) return;
     this.shadowRoot.querySelectorAll('ha-entity-picker').forEach(picker => {
       picker.hass = this._hass;
-      if (!picker.includeDomains || picker.includeDomains.length === 0) {
+      // Canvas element pickers allow all domains
+      if (!picker.hasAttribute('data-no-domain-filter') && (!picker.includeDomains || picker.includeDomains.length === 0)) {
         picker.includeDomains = ['light', 'switch', 'scene', 'input_boolean', 'binary_sensor'];
       }
     });
@@ -4561,6 +4596,10 @@ class SpatialLightColorCardEditor extends HTMLElement {
         background: var(--card-background-color, #fff);
       }
       .ce-item.expanded .ce-settings { display: flex; }
+      .ce-item.expanded .entity-btn.expand { transform: rotate(180deg); }
+      .ce-settings ha-entity-picker {
+        flex: 1; min-width: 0; display: block;
+      }
       .ce-settings .override-row {
         display: flex; align-items: center; gap: 8px;
       }
@@ -4690,7 +4729,7 @@ class SpatialLightColorCardEditor extends HTMLElement {
         </div>
         ${a.action === 'navigate' ? `<div class="override-row"><label>Path</label><input type="text" data-ce-index="${index}" data-ce-key="${key}.navigation_path" value="${this._esc(a.navigation_path || '')}" placeholder="/lovelace/0"></div>` : ''}
         ${a.action === 'url' ? `<div class="override-row"><label>URL</label><input type="text" data-ce-index="${index}" data-ce-key="${key}.url_path" value="${this._esc(a.url_path || '')}" placeholder="https://..."></div>` : ''}
-        ${a.action === 'more-info' || a.action === 'toggle' ? `<div class="override-row"><label>Entity</label><input type="text" data-ce-index="${index}" data-ce-key="${key}.entity" value="${this._esc(a.entity || el.entity || '')}" placeholder="sensor.xxx"></div>` : ''}
+        ${a.action === 'more-info' || a.action === 'toggle' ? `<div class="override-row"><label>Entity</label><ha-entity-picker class="ce-entity-picker" data-ce-index="${index}" data-ce-key="${key}.entity" data-no-domain-filter allow-custom-entity></ha-entity-picker></div>` : ''}
         ${a.action === 'call-service' ? `<div class="override-row"><label>Service</label><input type="text" data-ce-index="${index}" data-ce-key="${key}.service" value="${this._esc(a.service || '')}" placeholder="light.turn_on"></div>` : ''}
       `;
     };
@@ -4724,7 +4763,7 @@ class SpatialLightColorCardEditor extends HTMLElement {
           ${el.type === 'sensor' ? `
             <div class="override-row">
               <label>Entity</label>
-              <input type="text" data-ce-index="${index}" data-ce-key="entity" value="${this._esc(el.entity || '')}" placeholder="sensor.xxx">
+              <ha-entity-picker class="ce-entity-picker" data-ce-index="${index}" data-ce-key="entity" data-no-domain-filter allow-custom-entity></ha-entity-picker>
             </div>
             <div class="override-row">
               <label>Label</label>
@@ -4737,6 +4776,10 @@ class SpatialLightColorCardEditor extends HTMLElement {
             <div class="override-row">
               <label>Suffix</label>
               <input type="text" data-ce-index="${index}" data-ce-key="suffix" value="${this._esc(el.suffix != null ? el.suffix : '')}" placeholder="Auto (unit)">
+            </div>
+            <div class="override-row">
+              <label>Show icon</label>
+              <ha-switch class="ce-show-icon-switch" data-ce-index="${index}" ${el.show_icon !== false ? 'checked' : ''}></ha-switch>
             </div>
             <div class="override-row">
               <label>Icon</label>
@@ -4757,6 +4800,11 @@ class SpatialLightColorCardEditor extends HTMLElement {
               <input type="text" data-ce-index="${index}" data-ce-key="icon" value="${this._esc(el.icon || '')}" placeholder="None">
             </div>
           ` : ''}
+          ${el.type === 'link' || el.type === 'sensor' ? `
+          <div class="override-row">
+            <label>Background</label>
+            <ha-switch class="ce-bg-switch" data-ce-index="${index}" ${el.show_background !== false ? 'checked' : ''}></ha-switch>
+          </div>` : ''}
           <div class="ce-section-label">Style</div>
           <div class="override-row">
             <label>Color</label>
@@ -5361,7 +5409,7 @@ class SpatialLightColorCardEditor extends HTMLElement {
         toggleExpand(main.closest('.entity-item'));
       });
     });
-    root.querySelectorAll('.entity-btn.expand').forEach(btn => {
+    root.querySelectorAll('.entity-item .entity-btn.expand').forEach(btn => {
       btn.addEventListener('click', (e) => {
         e.stopPropagation();
         toggleExpand(btn.closest('.entity-item'));
@@ -5369,7 +5417,7 @@ class SpatialLightColorCardEditor extends HTMLElement {
     });
 
     // --- Entity remove ---
-    root.querySelectorAll('.entity-btn.remove').forEach(btn => {
+    root.querySelectorAll('.entity-item .entity-btn.remove').forEach(btn => {
       btn.addEventListener('click', (e) => {
         e.stopPropagation();
         const idx = parseInt(btn.dataset.index, 10);
@@ -5639,7 +5687,7 @@ class SpatialLightColorCardEditor extends HTMLElement {
         if (!type) return;
         if (!Array.isArray(this._config.canvas_elements)) this._config.canvas_elements = [];
         const idx = this._config.canvas_elements.length;
-        const newEl = { type, position: { x: 50, y: 50 }, id: `canvas_el_${idx}` };
+        const newEl = { type, position: { x: 50, y: 50 }, id: `canvas_el_${idx}`, show_background: true };
         if (type === 'link') { newEl.icon = 'mdi:link'; }
         if (type === 'sensor') { newEl.entity = ''; newEl.show_icon = true; }
         if (type === 'template') { newEl.content = ''; }
@@ -5751,6 +5799,66 @@ class SpatialLightColorCardEditor extends HTMLElement {
         inp.addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(apply, 400); });
         inp.addEventListener('change', apply);
       }
+    });
+
+    // Canvas element entity pickers (ha-entity-picker)
+    requestAnimationFrame(() => {
+      root.querySelectorAll('.ce-entity-picker').forEach(picker => {
+        const ceIndex = parseInt(picker.dataset.ceIndex, 10);
+        const key = picker.dataset.ceKey;
+        if (isNaN(ceIndex) || !key) return;
+        const el = this._config.canvas_elements?.[ceIndex];
+        if (!el) return;
+        // Set initial value
+        const parts = key.split('.');
+        if (parts.length === 1) {
+          picker.value = el[key] || '';
+        } else {
+          picker.value = el[parts[0]]?.[parts[1]] || el.entity || '';
+        }
+        if (this._hass) picker.hass = this._hass;
+        // Listen for value changes
+        picker.addEventListener('value-changed', (e) => {
+          const val = e.detail?.value || '';
+          if (!Array.isArray(this._config.canvas_elements) || !this._config.canvas_elements[ceIndex]) return;
+          const el = this._config.canvas_elements[ceIndex];
+          const parts = key.split('.');
+          if (parts.length === 1) {
+            el[key] = val;
+          } else {
+            const actionKey = parts[0];
+            if (!el[actionKey]) el[actionKey] = { action: 'none' };
+            el[actionKey][parts[1]] = val;
+          }
+          this._fireConfigChanged();
+        });
+      });
+    });
+
+    // Canvas element background toggle
+    requestAnimationFrame(() => {
+      root.querySelectorAll('.ce-bg-switch').forEach(sw => {
+        const ceIndex = parseInt(sw.dataset.ceIndex, 10);
+        if (isNaN(ceIndex)) return;
+        sw.addEventListener('change', () => {
+          if (!Array.isArray(this._config.canvas_elements) || !this._config.canvas_elements[ceIndex]) return;
+          this._config.canvas_elements[ceIndex].show_background = sw.checked;
+          this._fireConfigChanged();
+        });
+      });
+    });
+
+    // Canvas element show_icon toggle (sensor type)
+    requestAnimationFrame(() => {
+      root.querySelectorAll('.ce-show-icon-switch').forEach(sw => {
+        const ceIndex = parseInt(sw.dataset.ceIndex, 10);
+        if (isNaN(ceIndex)) return;
+        sw.addEventListener('change', () => {
+          if (!Array.isArray(this._config.canvas_elements) || !this._config.canvas_elements[ceIndex]) return;
+          this._config.canvas_elements[ceIndex].show_icon = sw.checked;
+          this._fireConfigChanged();
+        });
+      });
     });
 
     // --- Temperature inputs ---

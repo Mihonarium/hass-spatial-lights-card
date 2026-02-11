@@ -568,6 +568,11 @@ class SpatialLightColorCard extends HTMLElement {
     this._hass.callService(domain, service, { entity_id: entity });
   }
 
+  _isSelectableEntity(entity) {
+    const [domain] = entity.split('.');
+    return domain !== 'binary_sensor';
+  }
+
   _openMoreInfo(entity) {
     this._moreInfoOpen = true;
     this._syncOverlayState();
@@ -2446,15 +2451,17 @@ class SpatialLightColorCard extends HTMLElement {
             this._lastTap = { entity, time: now };
             return;
           }
-          const newSelection = new Set(this._selectedLights);
-          if (additive) {
-            if (newSelection.has(entity)) newSelection.delete(entity);
-            else newSelection.add(entity);
-          } else {
-            newSelection.clear();
-            newSelection.add(entity);
+          if (this._isSelectableEntity(entity)) {
+            const newSelection = new Set(this._selectedLights);
+            if (additive) {
+              if (newSelection.has(entity)) newSelection.delete(entity);
+              else newSelection.add(entity);
+            } else {
+              newSelection.clear();
+              newSelection.add(entity);
+            }
+            this._commitSelection(newSelection);
           }
-          this._commitSelection(newSelection);
         }
         return;
       }
@@ -2740,15 +2747,17 @@ class SpatialLightColorCard extends HTMLElement {
           } else {
             this._lastTap = null;
           }
-          const newSelection = this._pendingTap.additive
-            ? new Set(this._selectedLights)
-            : new Set();
-          if (this._pendingTap.additive && newSelection.has(this._pendingTap.entity)) {
-            newSelection.delete(this._pendingTap.entity);
-          } else {
-            newSelection.add(this._pendingTap.entity);
+          if (this._isSelectableEntity(this._pendingTap.entity)) {
+            const newSelection = this._pendingTap.additive
+              ? new Set(this._selectedLights)
+              : new Set();
+            if (this._pendingTap.additive && newSelection.has(this._pendingTap.entity)) {
+              newSelection.delete(this._pendingTap.entity);
+            } else {
+              newSelection.add(this._pendingTap.entity);
+            }
+            this._commitSelection(newSelection);
           }
-          this._commitSelection(newSelection);
         }
       }
       this._pendingTap = null;
@@ -2877,7 +2886,9 @@ class SpatialLightColorCard extends HTMLElement {
       const cx = r.left - rect.left + r.width / 2;
       const cy = r.top - rect.top + r.height / 2;
       if (cx >= left && cx <= left + width && cy >= top && cy <= top + height) {
-        inside.add(light.dataset.entity);
+        if (this._isSelectableEntity(light.dataset.entity)) {
+          inside.add(light.dataset.entity);
+        }
       }
     });
     if (this._selectionModeAdditive && this._selectionBase) {

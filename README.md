@@ -377,3 +377,4 @@ This card made turning dozens of lights to nice colors in arbitrary ways much ea
 - [ ] Add a setting for toggling lights with a single tap
 - [ ] Non-interactive elements should not be selectable
 - [ ] Think about a way to toggle groups of lights/the default entity?
+- [ ] Think about displaying the labels nicely

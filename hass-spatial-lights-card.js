@@ -453,9 +453,10 @@ class SpatialLightColorCard extends HTMLElement {
     // First pass: collect all visible labels that need positioning
     const visibleLabels = lightInfos.filter(l => l.isVisible && l.labelEl);
 
-    // Reset all labels to default (no data-pos attribute)
-    lightInfos.forEach(l => {
-      if (l.labelEl) l.labelEl.removeAttribute('data-pos');
+    // Only reset data-pos for labels we're about to reposition.
+    // Non-visible labels keep their current position so they don't jump during fade-out.
+    visibleLabels.forEach(l => {
+      l.labelEl.removeAttribute('data-pos');
     });
 
     if (visibleLabels.length === 0) return;
@@ -518,9 +519,18 @@ class SpatialLightColorCard extends HTMLElement {
       let score = 0;
 
       // Penalty for overlapping other light circles (excluding own circle)
+      const labelCx = rect.x + rect.w / 2;
+      const labelCy = rect.y + rect.h / 2;
       for (const c of circles) {
         if (c.entityId === light.entityId) continue;
         if (rectCircleOverlap(rect, c)) score += 100;
+        // Proximity penalty: label should stay clearly closer to its own light
+        // than to any neighbor, so it's unambiguous which entity it belongs to
+        const dist = Math.hypot(labelCx - c.cx, labelCy - c.cy);
+        const threshold = c.r * 4;
+        if (dist < threshold) {
+          score += (threshold - dist) * 0.5;
+        }
       }
 
       // Penalty for overlapping already-placed labels

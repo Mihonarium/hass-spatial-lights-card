@@ -453,10 +453,11 @@ class SpatialLightColorCard extends HTMLElement {
     // First pass: collect all visible labels that need positioning
     const visibleLabels = lightInfos.filter(l => l.isVisible && l.labelEl);
 
-    // Only reset data-pos for labels we're about to reposition.
+    // Only reset data-pos and offset for labels we're about to reposition.
     // Non-visible labels keep their current position so they don't jump during fade-out.
     visibleLabels.forEach(l => {
       l.labelEl.removeAttribute('data-pos');
+      l.labelEl.style.removeProperty('--label-offset');
     });
 
     if (visibleLabels.length === 0) return;
@@ -566,8 +567,32 @@ class SpatialLightColorCard extends HTMLElement {
         light.labelEl.setAttribute('data-pos', bestDir);
       }
 
-      // Record the placed rect
-      placedRects.push(getLabelRect(light, bestDir));
+      // Clamp label within canvas bounds via --label-offset.
+      // For below/above the offset shifts horizontally; for left/right vertically.
+      const finalRect = getLabelRect(light, bestDir);
+      let offset = 0;
+      if (bestDir === 'below' || bestDir === 'above') {
+        if (finalRect.x < 0) offset = -finalRect.x;
+        else if (finalRect.x + finalRect.w > canvasRect.width) offset = canvasRect.width - finalRect.x - finalRect.w;
+      } else {
+        if (finalRect.y < 0) offset = -finalRect.y;
+        else if (finalRect.y + finalRect.h > canvasRect.height) offset = canvasRect.height - finalRect.y - finalRect.h;
+      }
+      if (offset !== 0) {
+        light.labelEl.style.setProperty('--label-offset', `${Math.round(offset)}px`);
+      } else {
+        light.labelEl.style.removeProperty('--label-offset');
+      }
+
+      // Record the placed rect (adjusted for clamping)
+      if (offset !== 0) {
+        if (bestDir === 'below' || bestDir === 'above') {
+          finalRect.x += offset;
+        } else {
+          finalRect.y += offset;
+        }
+      }
+      placedRects.push(finalRect);
     }
   }
 
@@ -1252,15 +1277,16 @@ class SpatialLightColorCard extends HTMLElement {
       .light-icon-mdi { --mdc-icon-size: calc(32px * var(--icon-scale, 1)); color: rgba(255,255,255,0.92); filter: drop-shadow(0 1px 2px rgba(0,0,0,0.6)); transform: var(--icon-transform, none); }
 
       .light-label {
-        position: absolute; top: calc(100% + 8px); left: 50%; transform: translateX(-50%);
+        position: absolute; top: calc(100% + 8px); left: 50%;
+        transform: translateX(calc(-50% + var(--label-offset, 0px)));
         padding: 4px 8px; background: var(--surface-elevated); color: var(--text-primary);
         font-size: 11px; font-weight: 600; border-radius: var(--radius-sm); white-space: nowrap; pointer-events: none;
         opacity: 0; transition: opacity var(--transition-fast); z-index: 5; border: 1px solid var(--border-subtle);
       }
       /* Label position variants to avoid overlap with nearby lights */
-      .light-label[data-pos="above"] { top: auto; bottom: calc(100% + 8px); left: 50%; transform: translateX(-50%); }
-      .light-label[data-pos="right"] { top: 50%; left: calc(100% + 8px); transform: translateY(-50%); }
-      .light-label[data-pos="left"] { top: 50%; left: auto; right: calc(100% + 8px); transform: translateY(-50%); }
+      .light-label[data-pos="above"] { top: auto; bottom: calc(100% + 8px); left: 50%; transform: translateX(calc(-50% + var(--label-offset, 0px))); }
+      .light-label[data-pos="right"] { top: 50%; left: calc(100% + 8px); transform: translateY(calc(-50% + var(--label-offset, 0px))); }
+      .light-label[data-pos="left"] { top: 50%; left: auto; right: calc(100% + 8px); transform: translateY(calc(-50% + var(--label-offset, 0px))); }
       .light:hover .light-label { opacity: 1; }
 
       .light.selected { z-index: 3; }
@@ -4010,8 +4036,11 @@ class SpatialLightColorCard extends HTMLElement {
     this._refreshColorPresets();
     this._refreshEntityIcons();
     this._updateCanvasElements();
-    // Reposition labels to avoid overlapping nearby lights
-    requestAnimationFrame(() => this._repositionLabels());
+    // Reposition labels synchronously so they don't flash in the wrong
+    // position for 1 frame before the rAF callback would run.
+    // updateLights() only toggles classes/styles on existing DOM, so layout
+    // is already current and offsetWidth measurements are valid immediately.
+    this._repositionLabels();
   }
 
   /** ---------- Canvas element live updates ---------- */

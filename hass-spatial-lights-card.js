@@ -4104,6 +4104,7 @@ class SpatialLightColorCardEditor extends HTMLElement {
     this._positionHistory = [];
     this._positionRedoStack = [];
     this._boundEditorKeyDown = null;
+    this._ceIdCounter = 0;
   }
 
   async connectedCallback() {
@@ -4225,8 +4226,50 @@ class SpatialLightColorCardEditor extends HTMLElement {
     this._setupEntityPickers();
   }
 
+  _ensureCanvasElementIds() {
+    const els = this._config.canvas_elements;
+    if (!Array.isArray(els)) return;
+    // Find the highest existing numeric suffix to set the counter above it
+    const existingIds = new Set();
+    for (const el of els) {
+      if (el && el.id) {
+        existingIds.add(el.id);
+        const m = /^canvas_el_(\d+)$/.exec(el.id);
+        if (m) {
+          const n = parseInt(m[1], 10) + 1;
+          if (n > this._ceIdCounter) this._ceIdCounter = n;
+        }
+      }
+    }
+    // Assign IDs to elements that don't have one
+    for (const el of els) {
+      if (el && !el.id) {
+        el.id = this._generateCanvasElementId(existingIds);
+      }
+    }
+  }
+
+  _generateCanvasElementId(existingIds) {
+    if (!existingIds) {
+      existingIds = new Set();
+      const els = this._config.canvas_elements;
+      if (Array.isArray(els)) {
+        for (const el of els) {
+          if (el && el.id) existingIds.add(el.id);
+        }
+      }
+    }
+    let id;
+    do {
+      id = `canvas_el_${this._ceIdCounter++}`;
+    } while (existingIds.has(id));
+    existingIds.add(id);
+    return id;
+  }
+
   setConfig(config) {
     this._config = JSON.parse(JSON.stringify(config));
+    this._ensureCanvasElementIds();
     if (this._configFromEditor) {
       this._configFromEditor = false;
       return;
@@ -5697,8 +5740,8 @@ class SpatialLightColorCardEditor extends HTMLElement {
         const type = btn.dataset.ceType;
         if (!type) return;
         if (!Array.isArray(this._config.canvas_elements)) this._config.canvas_elements = [];
-        const idx = this._config.canvas_elements.length;
-        const newEl = { type, position: { x: 50, y: 50 }, id: `canvas_el_${idx}`, show_background: true };
+        const newId = this._generateCanvasElementId();
+        const newEl = { type, position: { x: 50, y: 50 }, id: newId, show_background: true };
         if (type === 'link') { newEl.icon = 'mdi:link'; }
         if (type === 'sensor') { newEl.entity = ''; newEl.show_icon = true; }
         if (type === 'template') { newEl.content = ''; }

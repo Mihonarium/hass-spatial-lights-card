@@ -1287,7 +1287,12 @@ class SpatialLightColorCard extends HTMLElement {
       .light-label[data-pos="above"] { top: auto; bottom: calc(100% + 8px); left: 50%; transform: translateX(calc(-50% + var(--label-offset, 0px))); }
       .light-label[data-pos="right"] { top: 50%; left: calc(100% + 8px); transform: translateY(calc(-50% + var(--label-offset, 0px))); }
       .light-label[data-pos="left"] { top: 50%; left: auto; right: calc(100% + 8px); transform: translateY(calc(-50% + var(--label-offset, 0px))); }
-      .light:hover .light-label { opacity: 1; }
+      /* Only show label on hover for devices with a real pointer (mouse/trackpad).
+         On touch, :hover sticks from pointerdown but _repositionLabels() doesn't
+         run until pointerup (selection), causing a 1-frame flash at the stale position. */
+      @media (hover: hover) {
+        .light:hover .light-label { opacity: 1; }
+      }
 
       .light.selected { z-index: 3; }
       .light.selected::before {

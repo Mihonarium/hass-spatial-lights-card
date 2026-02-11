@@ -22,11 +22,11 @@ Very useful when you have a lot of lights, and searching for the one you need by
 1. [Features](#features)
 2. [Installation](#installation)
 3. [Quick Start](#-quick-start)
-6. [Usage Tips](#-usage)
+4. [Usage](#-usage) — Selecting, toggling, color wheel, sliders, presets, moving lights, keyboard shortcuts
 5. [Configuration Reference](#-all-configuration-options)
-7. [Custom Colors & Backgrounds](#-custom-colors--backgrounds)
-8. [Visual Layout Options](#-visual-options)
-9. [Troubleshooting](#troubleshooting)
+6. [Custom Colors & Backgrounds](#-custom-colors--backgrounds)
+7. [Visual Layout Options](#-visual-options)
+8. [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -74,35 +74,108 @@ resources:
 
 ## 🎨 Usage
 
-### Desktop
-- **Click** to select a light.
-- **Double-click** a light, switch, or scene to toggle/activate it.
-- **Shift+Click** to add to the current selection.
-- **Drag** to create a marquee selection (when nothing is selected).
-- **Unlock** in settings to drag lights around the canvas. **Alt+Drag** a light to snap its position to the grid size.
-- **Long click** to open the details.
+### Selecting Lights
 
-### Mobile
-- **Tap** to select a light.
-- **Double-tap** a light, switch, or scene to toggle/activate it.
-- **Drag** with an empty selection to select an area.
-- **Long tap** to open the details.
+| Action | Desktop | Mobile |
+|--------|---------|--------|
+| Select a single light | Click | Tap |
+| Add/remove from selection | Shift+Click, Ctrl+Click, or Cmd+Click | — |
+| Select area (marquee) | Click and drag on empty canvas | Tap and drag on empty canvas |
+| Add area to selection | Shift/Ctrl/Cmd + drag on empty canvas | — |
+| Select all lights | Ctrl+A / Cmd+A | — |
+| Deselect all | Click/tap empty canvas, or press Escape | Tap empty canvas |
 
-> **Note:** If `switch_single_tap` is enabled, switches and scenes activate immediately on a single tap/click. To move them in this mode, you must unlock positions in settings first.
+When lights are selected, the color wheel, brightness slider, and temperature slider control all selected lights as a group. If you have a **default entity** configured, the controls affect that entity when nothing is selected.
 
-### Controls
-- **Color wheel** — tap anywhere to set hue and saturation.
-- **Brightness slider** — drag horizontally to set brightness. Tap to jump to value.
-- **Temperature slider** — adjust white-temperature capable lights.
-- **Default entity** — when configured, controls this entity if no light is selected.
+### Toggling Lights On/Off
+
+| Action | Desktop | Mobile |
+|--------|---------|--------|
+| Toggle a light | Double-click | Double-tap |
+| Toggle a switch/scene | Double-click (or single click if `switch_single_tap` is on) | Double-tap (or single tap if `switch_single_tap` is on) |
+
+> **Note:** If `switch_single_tap` is enabled, switches and scenes activate immediately on a single tap/click instead of being selected.
+
+### Opening Light Details
+
+| Action | Desktop | Mobile |
+|--------|---------|--------|
+| Open more-info panel | Long-click (~650 ms) or right-click | Long-press (~500 ms) |
+
+The more-info panel is the standard Home Assistant entity dialog where you can see attributes, history, and settings.
+
+### Color Wheel
+
+- **Tap/click** on the mini color wheel to immediately apply that color to selected lights.
+- **Long-press** the mini color wheel (400 ms on touch, 600 ms on mouse) to open a **full-screen color picker** with a magnifier for precise color selection.
+  - Drag around the large wheel to preview colors in the magnifier.
+  - Lift your finger / release the mouse to apply the color.
+  - Close with the **Done** button, by clicking the backdrop, or by pressing **Escape**.
+
+### Brightness & Temperature Sliders
+
+- **Drag** horizontally along a slider to adjust the value smoothly.
+- **Tap/click** anywhere on the slider track to jump to that value.
+- The brightness slider ranges from 0–255 (displayed as a percentage).
+- The temperature slider range depends on the light's capabilities (in Kelvin).
+- On mobile, if you start scrolling vertically while touching a slider, the slider releases so you can scroll the page.
+
+### Color Presets & Live Colors
+
+- **Click/tap** a preset circle to apply that color to all selected lights.
+- **Hover** over a preset (desktop) to temporarily highlight which lights on the canvas currently have that color.
+- **Long-press** a preset (~300 ms, mobile) to highlight which lights have that color. Release to clear the highlight.
+- When all selected lights share the same color as a preset, that preset shows a subtle active ring indicator.
+- **Live colors** (when `show_live_colors` is enabled) show the colors currently in use by your lights, automatically deduplicated.
+- **Live temperatures** appear as a separate group. A thin vertical separator line divides color presets from temperature presets when they are on the same row.
+
+### Moving Lights on the Canvas
+
+Lights are **locked** by default. To reposition them:
+
+1. Open the card editor (pencil icon on the dashboard).
+2. Toggle **Unlock Positions** in the card settings (or use the lock/unlock button if available).
+3. Drag lights to their new positions.
+
+| Action | Desktop | Mobile |
+|--------|---------|--------|
+| Move a light | Drag | Drag |
+| Snap to grid | Hold **Alt** while dragging | — |
+| Nudge selected lights | Arrow keys (moves 0.5% per press) | — |
+| Fine nudge | Alt + Arrow keys (moves 1% per press) | — |
+| Undo move | Ctrl+Z / Cmd+Z | — |
+| Redo move | Ctrl+Y / Cmd+Shift+Z | — |
+
+Position history stores up to 50 steps.
+
+### Keyboard Shortcuts
+
+| Shortcut | Action |
+|----------|--------|
+| Ctrl+A / Cmd+A | Select all lights |
+| Escape | Deselect all / close color wheel / close dialogs |
+| Ctrl+Z / Cmd+Z | Undo position change |
+| Ctrl+Y / Cmd+Shift+Z | Redo position change |
+| Arrow keys | Nudge selected lights (when positions unlocked) |
+| Alt + Arrow keys | Fine-nudge selected lights |
+
+### Desktop vs Mobile Differences
+
+- **Layout:** On screens wider than 768 px, controls use a two-column grid (color wheel + sliders side by side). On mobile (768 px or narrower), controls stack vertically.
+- **Preset highlighting:** On desktop, hovering over a preset highlights matching lights. On mobile, you need to long-press (~300 ms) the preset.
+- **Light size:** On mobile, light circles are capped at 50 px regardless of the configured `light_size`.
+- **Floating controls:** On desktop, floating controls are centered. On mobile, they stretch edge-to-edge with padding.
+- **Multi-select modifiers** (Shift/Ctrl/Cmd) are only available on desktop.
 
 ### 💡 Tips
 
-1. Click/tap away to deselect.
-4. Add a Default Entity with all of a room's lights to control the whole room.
-6. Add color presets to quickly turn the lights a favorite color.
-7. Use live colors to easily set lights to colors already present in the room.
-8. To see what lights are of a color among live colors/presets, hover mouse over it (or tap and hold that color on mobile).
+1. Click/tap empty space on the canvas to deselect all lights.
+2. Add a **Default Entity** containing all of a room's lights to control the whole room when nothing is selected.
+3. Add **color presets** to quickly apply favorite colors with a single tap.
+4. Enable **live colors** to see and reuse colors already present in the room.
+5. Hover over a preset (or long-press on mobile) to see which lights currently have that color.
+6. Use **Ctrl+A** to quickly select all lights for batch adjustments.
+7. Right-click (or long-press on mobile) any light to open its full detail panel.
 
 ---
 

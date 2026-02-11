@@ -379,3 +379,5 @@ This card made turning dozens of lights to nice colors in arbitrary ways much ea
 - [ ] Color effects (not just colors) among presets (with icons?)
 - [ ] Add a setting for toggling lights with a single tap
 - [ ] Think about a way to toggle groups of lights/the default entity?
+- [ ] Allow adding a light glow (directional/non-directional) from the lights? Something like: <img width="739" height="474" alt="image" src="https://github.com/user-attachments/assets/3c2350d9-57de-4928-83fe-d2a3ad21b331" />
+

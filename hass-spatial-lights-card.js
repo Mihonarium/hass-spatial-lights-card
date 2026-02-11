@@ -518,19 +518,20 @@ class SpatialLightColorCard extends HTMLElement {
       const rect = getLabelRect(light, dir);
       let score = 0;
 
-      // Penalty for overlapping other light circles (excluding own circle)
       const labelCx = rect.x + rect.w / 2;
       const labelCy = rect.y + rect.h / 2;
+      const distToOwn = Math.hypot(labelCx - light.cx, labelCy - light.cy);
+
       for (const c of circles) {
         if (c.entityId === light.entityId) continue;
-        if (rectCircleOverlap(rect, c)) score += 100;
-        // Proximity penalty: label should stay clearly closer to its own light
-        // than to any neighbor, so it's unambiguous which entity it belongs to
-        const dist = Math.hypot(labelCx - c.cx, labelCy - c.cy);
-        const threshold = c.r * 4;
-        if (dist < threshold) {
-          score += (threshold - dist) * 0.5;
-        }
+
+        // Hard constraint: label must not appear to belong to another entity.
+        // If label center is closer to a neighbor than to its own light, huge penalty.
+        const distToOther = Math.hypot(labelCx - c.cx, labelCy - c.cy);
+        if (distToOther < distToOwn) score += 1000;
+
+        // Moderate penalty for overlapping another light circle
+        if (rectCircleOverlap(rect, c)) score += 50;
       }
 
       // Penalty for overlapping already-placed labels
@@ -539,10 +540,13 @@ class SpatialLightColorCard extends HTMLElement {
       }
 
       // Penalty for going outside canvas
-      score += outOfBounds(rect) * 2;
+      score += outOfBounds(rect) * 3;
 
-      // Small preference for below (default) position
-      if (dir === 'below') score -= 0.1;
+      // Prefer below > above > right/left.
+      // Below/above keep horizontal centering on the light, maintaining clear association.
+      // Left/right push the label far from center and easily cause ambiguity.
+      if (dir === 'below') score -= 1;
+      else if (dir === 'above') score -= 0.5;
 
       return score;
     };

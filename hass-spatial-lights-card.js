@@ -36,6 +36,7 @@ class SpatialLightColorCard extends HTMLElement {
 
     /** Animation frame / batching */
     this._raf = null;
+    this._labelLayoutRaf = null;
     this._colorWheelActive = false;
     this._colorWheelObserver = null;
     this._colorWheelFrame = null;
@@ -73,6 +74,7 @@ class SpatialLightColorCard extends HTMLElement {
     this._boundKeyDown = null;
     this._boundIconsetAdded = null;
     this._boundMoreInfo = null;
+    this._boundWindowResize = null;
 
     /** Touch affordances */
     this._longPressTimer = null;
@@ -927,6 +929,7 @@ class SpatialLightColorCard extends HTMLElement {
     this.updateLights();
     this._refreshEntityIcons();
     requestAnimationFrame(() => this._updateSeparatorVisibility());
+    this._scheduleLabelLayout();
     this._subscribeTemplates();
   }
 
@@ -1100,10 +1103,26 @@ class SpatialLightColorCard extends HTMLElement {
       .light-icon-mdi { --mdc-icon-size: calc(32px * var(--icon-scale, 1)); color: rgba(255,255,255,0.92); filter: drop-shadow(0 1px 2px rgba(0,0,0,0.6)); transform: var(--icon-transform, none); }
 
       .light-label {
-        position: absolute; top: calc(100% + 8px); left: 50%; transform: translateX(-50%);
+        position: absolute;
+        top: var(--label-offset-y, calc(100% + 8px));
+        left: var(--label-offset-x, 50%);
+        transform: var(--label-transform, translateX(-50%));
         padding: 4px 8px; background: var(--surface-elevated); color: var(--text-primary);
         font-size: 11px; font-weight: 600; border-radius: var(--radius-sm); white-space: nowrap; pointer-events: none;
-        opacity: 0; transition: opacity var(--transition-fast); z-index: 5; border: 1px solid var(--border-subtle);
+        opacity: 0; transition: opacity var(--transition-fast), top var(--transition-fast), left var(--transition-fast), transform var(--transition-fast);
+        z-index: 5; border: 1px solid var(--border-subtle);
+      }
+      .light-label.layout-above {
+        top: auto;
+        bottom: calc(100% + 8px);
+      }
+      .light-label.align-left {
+        left: 0;
+        transform: none;
+      }
+      .light-label.align-right {
+        left: 100%;
+        transform: translateX(-100%);
       }
       .light:hover .light-label { opacity: 1; }
 
@@ -2029,6 +2048,9 @@ class SpatialLightColorCard extends HTMLElement {
         }
       };
       window.addEventListener('hass-more-info', this._boundMoreInfo, { passive: true });
+
+      this._boundWindowResize = () => this._scheduleLabelLayout();
+      window.addEventListener('resize', this._boundWindowResize, { passive: true });
     }
   }
   disconnectedCallback() {
@@ -2037,6 +2059,10 @@ class SpatialLightColorCard extends HTMLElement {
       this._boundKeyDown = null;
     }
     if (this._raf) cancelAnimationFrame(this._raf);
+    if (this._labelLayoutRaf) {
+      cancelAnimationFrame(this._labelLayoutRaf);
+      this._labelLayoutRaf = null;
+    }
     if (this._boundIconsetAdded && typeof window !== 'undefined') {
       window.removeEventListener('iron-iconset-added', this._boundIconsetAdded);
       this._boundIconsetAdded = null;
@@ -2044,6 +2070,10 @@ class SpatialLightColorCard extends HTMLElement {
     if (this._boundMoreInfo && typeof window !== 'undefined') {
       window.removeEventListener('hass-more-info', this._boundMoreInfo);
       this._boundMoreInfo = null;
+    }
+    if (this._boundWindowResize && typeof window !== 'undefined') {
+      window.removeEventListener('resize', this._boundWindowResize);
+      this._boundWindowResize = null;
     }
     if (this._longPressTimer) {
       clearTimeout(this._longPressTimer);
@@ -2635,12 +2665,14 @@ class SpatialLightColorCard extends HTMLElement {
           if (node) {
             node.style.left = `${xPercent}%`;
             node.style.top = `${yPercent}%`;
+            this._scheduleLabelLayout();
           }
         } else {
           const node = this.shadowRoot.querySelector(`.light[data-entity="${this._dragState.entity}"]`);
           if (node) {
             node.style.left = `${xPercent}%`;
             node.style.top = `${yPercent}%`;
+            this._scheduleLabelLayout();
           }
         }
       });
@@ -2713,6 +2745,7 @@ class SpatialLightColorCard extends HTMLElement {
         }
       }
       this._dragState = null;
+      this._scheduleLabelLayout();
     }
 
     if (this._selectionBox) {
@@ -3843,6 +3876,71 @@ class SpatialLightColorCard extends HTMLElement {
     this._refreshColorPresets();
     this._refreshEntityIcons();
     this._updateCanvasElements();
+    this._scheduleLabelLayout();
+  }
+
+  _scheduleLabelLayout() {
+    if (typeof requestAnimationFrame !== 'function') {
+      this._layoutLightLabels();
+      return;
+    }
+    if (this._labelLayoutRaf) return;
+    this._labelLayoutRaf = requestAnimationFrame(() => {
+      this._labelLayoutRaf = null;
+      this._layoutLightLabels();
+    });
+  }
+
+  _layoutLightLabels() {
+    if (!this._els.canvas) return;
+    const lights = [...this.shadowRoot.querySelectorAll('.light')];
+    if (!lights.length) return;
+
+    const canvasRect = this._els.canvas.getBoundingClientRect();
+    const occupied = [];
+
+    lights.forEach(light => {
+      const label = light.querySelector('.light-label');
+      if (!label) return;
+
+      label.classList.remove('layout-above', 'align-left', 'align-right');
+
+      const lightRect = light.getBoundingClientRect();
+      const labelRect = label.getBoundingClientRect();
+
+      const yPadding = 8;
+      const belowTop = lightRect.bottom - canvasRect.top + yPadding;
+      const aboveTop = lightRect.top - canvasRect.top - yPadding - labelRect.height;
+      const prefersAbove = aboveTop >= 0 && (belowTop + labelRect.height > canvasRect.height - 2);
+      if (prefersAbove) label.classList.add('layout-above');
+
+      const lightCenter = (lightRect.left + lightRect.right) / 2 - canvasRect.left;
+      let left = lightCenter - (labelRect.width / 2);
+      left = Math.max(2, Math.min(canvasRect.width - labelRect.width - 2, left));
+
+      const overlap = occupied.find(o => {
+        const verticalGap = Math.abs(o.top - (prefersAbove ? aboveTop : belowTop));
+        const intersectsX = left < o.left + o.width && left + labelRect.width > o.left;
+        return verticalGap < labelRect.height + 4 && intersectsX;
+      });
+
+      if (overlap) {
+        if (left < canvasRect.width / 2) {
+          label.classList.add('align-left');
+          left = Math.max(2, lightRect.left - canvasRect.left);
+        } else {
+          label.classList.add('align-right');
+          left = Math.min(canvasRect.width - labelRect.width - 2, lightRect.right - canvasRect.left - labelRect.width);
+        }
+      }
+
+      const top = prefersAbove ? aboveTop : belowTop;
+      occupied.push({ left, top, width: labelRect.width, height: labelRect.height });
+
+      label.style.setProperty('--label-offset-x', `${left}px`);
+      label.style.setProperty('--label-offset-y', `${Math.max(2, top)}px`);
+      label.style.setProperty('--label-transform', 'none');
+    });
   }
 
   /** ---------- Canvas element live updates ---------- */

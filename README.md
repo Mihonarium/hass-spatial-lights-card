@@ -372,9 +372,8 @@ It also has color presets (for quickly setting lights to a specific color) and a
 This card made turning dozens of lights to nice colors in arbitrary ways much easier.
 
 ## ToDo
-- [x] Think about displaying arbitrary sensors
 - [ ] Think about adding arbitrary templates/HTML
 - [ ] Color effects (not just colors) among presets (with icons?)
-- [x] Think about placing links to other Home Assistant things on the canvas
 - [ ] Add a setting for toggling lights with a single tap
+- [ ] Non-interactive elements should not be selectable
 - [ ] Think about a way to toggle groups of lights/the default entity?

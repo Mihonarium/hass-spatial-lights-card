@@ -419,6 +419,37 @@ class SpatialLightColorCard extends HTMLElement {
     return ws.slice(0, 3).map(w => w[0]).join('').toUpperCase();
   }
 
+  _entityHashSeed(entity_id) {
+    return [...entity_id].reduce((acc, ch) => ((acc * 31) + ch.charCodeAt(0)) % 9973, 7);
+  }
+
+  _getLabelOffset(pos, entity_id, lightSize) {
+    const dx = (Number(pos?.x) || 50) - 50;
+    const dy = (Number(pos?.y) || 50) - 50;
+    const magnitude = Math.hypot(dx, dy) || 1;
+
+    // Push labels away from center so dense middle clusters stay readable.
+    let nx = dx / magnitude;
+    let ny = dy / magnitude;
+    if (Math.abs(dx) < 6 && Math.abs(dy) < 6) {
+      nx = 0;
+      ny = -1;
+    }
+
+    const seed = this._entityHashSeed(entity_id);
+    const radialDistance = Math.max(32, (lightSize / 2) + 12 + ((seed % 3) * 4));
+    const spread = (((seed >> 1) % 5) - 2) * 8;
+
+    // Perpendicular spread gives neighboring labels distinct tracks.
+    const px = -ny;
+    const py = nx;
+
+    return {
+      x: Math.round((nx * radialDistance) + (px * spread)),
+      y: Math.round((ny * radialDistance) + (py * spread)),
+    };
+  }
+
   /** ---------- Icon system (SVG via HA components) ---------- */
   _getEntityIconData(entity_id) {
     const st = this._hass?.states[entity_id];
@@ -1100,14 +1131,49 @@ class SpatialLightColorCard extends HTMLElement {
       .light-icon-mdi { --mdc-icon-size: calc(32px * var(--icon-scale, 1)); color: rgba(255,255,255,0.92); filter: drop-shadow(0 1px 2px rgba(0,0,0,0.6)); transform: var(--icon-transform, none); }
 
       .light-label {
-        position: absolute; top: calc(100% + 8px); left: 50%; transform: translateX(-50%);
-        padding: 4px 8px; background: var(--surface-elevated); color: var(--text-primary);
-        font-size: 11px; font-weight: 600; border-radius: var(--radius-sm); white-space: nowrap; pointer-events: none;
-        opacity: 0; transition: opacity var(--transition-fast); z-index: 5; border: 1px solid var(--border-subtle);
+        position: absolute;
+        top: 50%;
+        left: 50%;
+        transform: translate(calc(-50% + var(--label-offset-x, 0px)), calc(-50% + var(--label-offset-y, -40px)));
+        padding: 5px 8px;
+        background: rgba(18, 18, 20, 0.92);
+        backdrop-filter: blur(4px);
+        color: var(--text-primary);
+        font-size: 11px;
+        font-weight: 600;
+        line-height: 1.25;
+        max-width: min(150px, 42vw);
+        text-align: center;
+        white-space: normal;
+        overflow-wrap: anywhere;
+        pointer-events: none;
+        opacity: 0;
+        transition: opacity var(--transition-fast), transform var(--transition-fast);
+        z-index: 12;
+        border: 1px solid var(--border-medium);
+        border-radius: var(--radius-sm);
+        box-shadow: 0 6px 14px rgba(0,0,0,0.35);
       }
-      .light:hover .light-label { opacity: 1; }
+      .light:hover .light-label,
+      .light:focus-within .light-label { opacity: 1; }
 
-      .light.selected { z-index: 3; }
+      .light-label::after {
+        content: '';
+        position: absolute;
+        width: 8px;
+        height: 8px;
+        left: 50%;
+        top: 50%;
+        background: rgba(18, 18, 20, 0.92);
+        border-left: 1px solid var(--border-medium);
+        border-top: 1px solid var(--border-medium);
+        transform: translate(-50%, -50%) rotate(45deg);
+        z-index: -1;
+      }
+
+      .light.selected { z-index: 7; }
+      .light:hover,
+      .light:focus-within { z-index: 8; }
       .light.selected::before {
         box-shadow: 0 0 0 2.5px rgba(99,102,241,0.9), 0 0 0 5px rgba(99,102,241,0.25), 0 0 15px rgba(99,102,241,0.5);
       }
@@ -1625,6 +1691,9 @@ class SpatialLightColorCard extends HTMLElement {
       if (lightSize !== this._config.light_size) {
         style += `--light-size:${lightSize}px;`;
       }
+
+      const labelOffset = this._getLabelOffset(pos, entity_id, lightSize);
+      style += `--label-offset-x:${labelOffset.x}px;--label-offset-y:${labelOffset.y}px;`;
 
       // Scale icon based on size
       const iconScale = lightSize / 56; // 56 is the default size

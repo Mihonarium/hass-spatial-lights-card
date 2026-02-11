@@ -377,6 +377,3 @@ This card made turn dozens of lights to nice colors in arbitrary ways much easie
 - [ ] Color effects (not just colors) among presets (with icons?)
 - [ ] Think about placing links to other Home Assistant things on the canvas
 - [ ] Add a setting for toggling lights with a single tap
-- [ ] Fix the bug where too many preset/live lights on the desktop get displayed under the color wheel in a way that enlarges the color wheel area and makes the sliders smaller
-- [ ] Fix the bug that on clearing the picture and picking a new one, the previous picture settings don't apply to the new picture
-- [ ] Non-interactive elements should not be selectable

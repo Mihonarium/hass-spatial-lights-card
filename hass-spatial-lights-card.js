@@ -42,6 +42,8 @@ class SpatialLightColorCard extends HTMLElement {
     this._colorWheelLastSize = null;
     this._colorWheelCancel = null;
     this._colorWheelGesture = null;    // { pointerId, isTouch, startScroll: {x,y}, scrolled, pendingColor }
+    this._labelLayoutFrame = null;
+    this._hoveredLight = null;
 
     /** Large color wheel (long-press) */
     this._largeColorWheelOpen = false;
@@ -73,6 +75,7 @@ class SpatialLightColorCard extends HTMLElement {
     this._boundKeyDown = null;
     this._boundIconsetAdded = null;
     this._boundMoreInfo = null;
+    this._boundResize = null;
 
     /** Touch affordances */
     this._longPressTimer = null;
@@ -691,7 +694,111 @@ class SpatialLightColorCard extends HTMLElement {
         }, 250);
       }
     });
+    this._scheduleLabelLayout();
     // Controls may rely on selection state; keep as-is.
+  }
+
+  _scheduleLabelLayout() {
+    if (!this.shadowRoot) return;
+    if (this._labelLayoutFrame) return;
+    const raf = typeof requestAnimationFrame === 'function'
+      ? requestAnimationFrame
+      : (cb) => setTimeout(cb, 16);
+    this._labelLayoutFrame = raf(() => {
+      this._labelLayoutFrame = null;
+      this._updateLabelLayout();
+    });
+  }
+
+  _updateLabelLayout() {
+    if (!this._els.canvas) return;
+    const lights = this.shadowRoot.querySelectorAll('.light');
+    if (!lights.length) return;
+
+    const visibleLights = [];
+    lights.forEach(light => {
+      const shouldShow = light.classList.contains('selected')
+        || light.classList.contains('label-hovered')
+        || light.matches(':hover');
+      if (!shouldShow) {
+        light.style.removeProperty('--label-offset-x');
+        light.style.removeProperty('--label-offset-y');
+        return;
+      }
+      visibleLights.push(light);
+    });
+    if (!visibleLights.length) return;
+
+    const canvasRect = this._els.canvas.getBoundingClientRect();
+    const occupied = [];
+    const baseDirections = [
+      { x: 0, y: 42 },
+      { x: 0, y: -42 },
+      { x: 42, y: 0 },
+      { x: -42, y: 0 },
+      { x: 34, y: 34 },
+      { x: -34, y: 34 },
+      { x: 34, y: -34 },
+      { x: -34, y: -34 },
+    ];
+
+    const sorted = visibleLights.slice().sort((a, b) => {
+      const aIsHovered = a.classList.contains('label-hovered') || a.matches(':hover');
+      const bIsHovered = b.classList.contains('label-hovered') || b.matches(':hover');
+      if (aIsHovered !== bIsHovered) return aIsHovered ? -1 : 1;
+      const aIsSelected = a.classList.contains('selected');
+      const bIsSelected = b.classList.contains('selected');
+      if (aIsSelected !== bIsSelected) return aIsSelected ? -1 : 1;
+      return 0;
+    });
+
+    const clamp = (val, min, max) => Math.max(min, Math.min(max, val));
+    sorted.forEach(light => {
+      const label = light.querySelector('.light-label');
+      if (!label) return;
+
+      const lightRect = light.getBoundingClientRect();
+      const labelRect = label.getBoundingClientRect();
+      const lw = labelRect.width;
+      const lh = labelRect.height;
+
+      let best = null;
+      let bestScore = Number.POSITIVE_INFINITY;
+
+      baseDirections.forEach((base) => {
+        let left = lightRect.left - canvasRect.left + lightRect.width / 2 + base.x - lw / 2;
+        let top = lightRect.top - canvasRect.top + lightRect.height / 2 + base.y - lh / 2;
+
+        left = clamp(left, 2, Math.max(2, canvasRect.width - lw - 2));
+        top = clamp(top, 2, Math.max(2, canvasRect.height - lh - 2));
+
+        const box = { left, top, right: left + lw, bottom: top + lh };
+
+        let overlapArea = 0;
+        occupied.forEach((prev) => {
+          const ox = Math.max(0, Math.min(box.right, prev.right) - Math.max(box.left, prev.left));
+          const oy = Math.max(0, Math.min(box.bottom, prev.bottom) - Math.max(box.top, prev.top));
+          overlapArea += ox * oy;
+        });
+
+        const dx = (box.left + lw / 2) - (lightRect.left - canvasRect.left + lightRect.width / 2);
+        const dy = (box.top + lh / 2) - (lightRect.top - canvasRect.top + lightRect.height / 2);
+        const distancePenalty = Math.hypot(dx, dy);
+        const directionPenalty = Math.hypot(base.x, base.y) * 0.35;
+        const score = overlapArea * 1000 + distancePenalty + directionPenalty;
+
+        if (score < bestScore) {
+          bestScore = score;
+          best = { box, dx, dy };
+        }
+      });
+
+      if (best) {
+        light.style.setProperty('--label-offset-x', `${best.dx}px`);
+        light.style.setProperty('--label-offset-y', `${best.dy}px`);
+        occupied.push(best.box);
+      }
+    });
   }
 
   /** ---------- History ---------- */
@@ -926,7 +1033,10 @@ class SpatialLightColorCard extends HTMLElement {
     this._syncOverlayState();
     this.updateLights();
     this._refreshEntityIcons();
-    requestAnimationFrame(() => this._updateSeparatorVisibility());
+    requestAnimationFrame(() => {
+      this._updateSeparatorVisibility();
+      this._scheduleLabelLayout();
+    });
     this._subscribeTemplates();
   }
 
@@ -1100,12 +1210,23 @@ class SpatialLightColorCard extends HTMLElement {
       .light-icon-mdi { --mdc-icon-size: calc(32px * var(--icon-scale, 1)); color: rgba(255,255,255,0.92); filter: drop-shadow(0 1px 2px rgba(0,0,0,0.6)); transform: var(--icon-transform, none); }
 
       .light-label {
-        position: absolute; top: calc(100% + 8px); left: 50%; transform: translateX(-50%);
+        position: absolute; top: 50%; left: 50%;
+        --label-offset-x: 0px;
+        --label-offset-y: 42px;
+        transform: translate(calc(-50% + var(--label-offset-x)), calc(-50% + var(--label-offset-y)));
         padding: 4px 8px; background: var(--surface-elevated); color: var(--text-primary);
         font-size: 11px; font-weight: 600; border-radius: var(--radius-sm); white-space: nowrap; pointer-events: none;
-        opacity: 0; transition: opacity var(--transition-fast); z-index: 5; border: 1px solid var(--border-subtle);
+        max-width: min(140px, 44vw);
+        overflow: hidden;
+        text-overflow: ellipsis;
+        box-shadow: 0 2px 6px rgba(0,0,0,0.35);
+        opacity: 0;
+        transition: opacity var(--transition-fast), transform 140ms ease;
+        z-index: 5;
+        border: 1px solid var(--border-subtle);
       }
       .light:hover .light-label { opacity: 1; }
+      .light.label-hovered .light-label { opacity: 1; }
 
       .light.selected { z-index: 3; }
       .light.selected::before {
@@ -2029,6 +2150,11 @@ class SpatialLightColorCard extends HTMLElement {
         }
       };
       window.addEventListener('hass-more-info', this._boundMoreInfo, { passive: true });
+
+      if (!this._boundResize) {
+        this._boundResize = () => this._scheduleLabelLayout();
+        window.addEventListener('resize', this._boundResize, { passive: true });
+      }
     }
   }
   disconnectedCallback() {
@@ -2044,6 +2170,10 @@ class SpatialLightColorCard extends HTMLElement {
     if (this._boundMoreInfo && typeof window !== 'undefined') {
       window.removeEventListener('hass-more-info', this._boundMoreInfo);
       this._boundMoreInfo = null;
+    }
+    if (this._boundResize && typeof window !== 'undefined') {
+      window.removeEventListener('resize', this._boundResize);
+      this._boundResize = null;
     }
     if (this._longPressTimer) {
       clearTimeout(this._longPressTimer);
@@ -2066,6 +2196,12 @@ class SpatialLightColorCard extends HTMLElement {
       cancel(this._colorWheelFrame);
       this._colorWheelFrame = null;
     }
+    if (this._labelLayoutFrame) {
+      const cancelFrame = typeof cancelAnimationFrame === 'function' ? cancelAnimationFrame : clearTimeout;
+      cancelFrame(this._labelLayoutFrame);
+      this._labelLayoutFrame = null;
+    }
+    this._hoveredLight = null;
     this._pendingTap = null;
     this._longPressTriggered = false;
     this._moreInfoOpen = false;
@@ -2099,6 +2235,23 @@ class SpatialLightColorCard extends HTMLElement {
       this._els.canvas.addEventListener('pointermove', (e) => this._onPointerMove(e));
       this._els.canvas.addEventListener('pointerup', (e) => this._onPointerUp(e));
       this._els.canvas.addEventListener('pointercancel', (e) => this._onPointerCancel(e));
+      this._els.canvas.addEventListener('pointerover', (e) => {
+        const light = e.target.closest('.light');
+        if (light === this._hoveredLight) return;
+        if (this._hoveredLight) this._hoveredLight.classList.remove('label-hovered');
+        this._hoveredLight = light || null;
+        if (this._hoveredLight) this._hoveredLight.classList.add('label-hovered');
+        this._scheduleLabelLayout();
+      });
+      this._els.canvas.addEventListener('pointerout', (e) => {
+        if (!this._hoveredLight) return;
+        const toEl = e.relatedTarget;
+        if (toEl && this._hoveredLight.contains(toEl)) return;
+        if (toEl && toEl.closest && toEl.closest('.light') === this._hoveredLight) return;
+        this._hoveredLight.classList.remove('label-hovered');
+        this._hoveredLight = null;
+        this._scheduleLabelLayout();
+      });
       this._els.canvas.addEventListener('dblclick', (e) => this._handleCanvasDoubleClick(e));
       this._els.canvas.addEventListener('contextmenu', (e) => this._handleCanvasContextMenu(e));
     }
@@ -3843,6 +3996,7 @@ class SpatialLightColorCard extends HTMLElement {
     this._refreshColorPresets();
     this._refreshEntityIcons();
     this._updateCanvasElements();
+    this._scheduleLabelLayout();
   }
 
   /** ---------- Canvas element live updates ---------- */

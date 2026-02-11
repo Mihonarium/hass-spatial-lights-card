@@ -419,6 +419,158 @@ class SpatialLightColorCard extends HTMLElement {
     return ws.slice(0, 3).map(w => w[0]).join('').toUpperCase();
   }
 
+  /**
+   * Reposition visible labels (selected/hovered lights) to avoid overlapping
+   * nearby light circles and other visible labels, and to stay within canvas bounds.
+   */
+  _repositionLabels() {
+    const canvas = this._els?.canvas;
+    if (!canvas) return;
+    const canvasRect = canvas.getBoundingClientRect();
+    if (canvasRect.width === 0 || canvasRect.height === 0) return;
+
+    // Gather all light elements and their pixel centers
+    const lightEls = canvas.querySelectorAll('.light');
+    const lightInfos = [];
+    lightEls.forEach(el => {
+      const entityId = el.dataset.entity;
+      const pos = this._config.positions[entityId] || { x: 50, y: 50 };
+      const sizeOverride = this._config.size_overrides[entityId] || this._config.light_size;
+      const size = (window.innerWidth <= 768) ? Math.min(sizeOverride, 50) : sizeOverride;
+      const cx = pos.x / 100 * canvasRect.width;
+      const cy = pos.y / 100 * canvasRect.height;
+      const r = size / 2;
+      const labelEl = el.querySelector('.light-label');
+      const isVisible = el.classList.contains('selected') || el.matches(':hover');
+      lightInfos.push({ entityId, el, labelEl, cx, cy, r, size, isVisible });
+    });
+
+    // Estimate label dimensions by measuring (or use a reasonable default)
+    const LABEL_H = 21; // ~11px font + 8px padding + 2px border
+    const GAP = 8;
+
+    // For each visible label, pick the best position
+    // First pass: collect all visible labels that need positioning
+    const visibleLabels = lightInfos.filter(l => l.isVisible && l.labelEl);
+
+    // Only reset data-pos for labels we're about to reposition.
+    // Non-visible labels keep their current position so they don't jump during fade-out.
+    visibleLabels.forEach(l => {
+      l.labelEl.removeAttribute('data-pos');
+    });
+
+    if (visibleLabels.length === 0) return;
+
+    // Measure actual label widths from the DOM (offsetWidth includes padding + border)
+    visibleLabels.forEach(l => {
+      l.labelW = l.labelEl.offsetWidth || 40;
+    });
+
+    // Build the list of all light circle obstacles (all entities, not just visible)
+    const circles = lightInfos.map(l => ({ cx: l.cx, cy: l.cy, r: l.r, entityId: l.entityId }));
+
+    // For each direction, compute the label rect relative to the light center
+    const getLabelRect = (light, dir) => {
+      const w = light.labelW;
+      const h = LABEL_H;
+      switch (dir) {
+        case 'below':
+          return { x: light.cx - w / 2, y: light.cy + light.r + GAP, w, h };
+        case 'above':
+          return { x: light.cx - w / 2, y: light.cy - light.r - GAP - h, w, h };
+        case 'right':
+          return { x: light.cx + light.r + GAP, y: light.cy - h / 2, w, h };
+        case 'left':
+          return { x: light.cx - light.r - GAP - w, y: light.cy - h / 2, w, h };
+      }
+    };
+
+    // Check if a rect overlaps with a circle
+    const rectCircleOverlap = (rect, circle) => {
+      // Find closest point on rect to circle center
+      const closestX = Math.max(rect.x, Math.min(circle.cx, rect.x + rect.w));
+      const closestY = Math.max(rect.y, Math.min(circle.cy, rect.y + rect.h));
+      const dx = circle.cx - closestX;
+      const dy = circle.cy - closestY;
+      return (dx * dx + dy * dy) < (circle.r * circle.r);
+    };
+
+    // Check if two rects overlap
+    const rectsOverlap = (a, b) => {
+      return a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
+    };
+
+    const directions = ['below', 'above', 'right', 'left'];
+    const placedRects = []; // Track already-placed label rects to avoid label-label overlap
+
+    // Score each direction for a given light, considering placed labels
+    const scoreDirection = (light, dir) => {
+      const rect = getLabelRect(light, dir);
+      let score = 0;
+
+      const labelCx = rect.x + rect.w / 2;
+      const labelCy = rect.y + rect.h / 2;
+      const distToOwn = Math.hypot(labelCx - light.cx, labelCy - light.cy);
+
+      for (const c of circles) {
+        if (c.entityId === light.entityId) continue;
+
+        // Hard constraint: label must not appear to belong to another entity.
+        // If label center is closer to a neighbor than to its own light, huge penalty.
+        const distToOther = Math.hypot(labelCx - c.cx, labelCy - c.cy);
+        if (distToOther < distToOwn) score += 1000;
+
+        // Moderate penalty for overlapping another light circle
+        if (rectCircleOverlap(rect, c)) score += 50;
+      }
+
+      // Penalty for overlapping already-placed labels
+      for (const pr of placedRects) {
+        if (rectsOverlap(rect, pr)) score += 50;
+      }
+
+      // Penalty for going outside canvas — an invisible label is worse than any ambiguity
+      const clippedX = Math.max(0, -rect.x) + Math.max(0, rect.x + rect.w - canvasRect.width);
+      const clippedY = Math.max(0, -rect.y) + Math.max(0, rect.y + rect.h - canvasRect.height);
+      if (clippedX > rect.w * 0.3 || clippedY > rect.h * 0.3) {
+        // Label is mostly hidden by canvas overflow:hidden — worst possible outcome
+        score += 2000;
+      } else if (clippedX > 0 || clippedY > 0) {
+        score += (clippedX + clippedY) * 5;
+      }
+
+      // Prefer below > above > right/left.
+      // Below/above keep horizontal centering on the light, maintaining clear association.
+      // Left/right push the label far from center and easily cause ambiguity.
+      if (dir === 'below') score -= 1;
+      else if (dir === 'above') score -= 0.5;
+
+      return score;
+    };
+
+    // Greedy assignment: process labels, picking best direction for each
+    for (const light of visibleLabels) {
+      let bestDir = 'below';
+      let bestScore = Infinity;
+
+      for (const dir of directions) {
+        const s = scoreDirection(light, dir);
+        if (s < bestScore) {
+          bestScore = s;
+          bestDir = dir;
+        }
+      }
+
+      // Apply the chosen position
+      if (bestDir !== 'below') {
+        light.labelEl.setAttribute('data-pos', bestDir);
+      }
+
+      // Record the placed rect
+      placedRects.push(getLabelRect(light, bestDir));
+    }
+  }
+
   /** ---------- Icon system (SVG via HA components) ---------- */
   _getEntityIconData(entity_id) {
     const st = this._hass?.states[entity_id];
@@ -1105,6 +1257,10 @@ class SpatialLightColorCard extends HTMLElement {
         font-size: 11px; font-weight: 600; border-radius: var(--radius-sm); white-space: nowrap; pointer-events: none;
         opacity: 0; transition: opacity var(--transition-fast); z-index: 5; border: 1px solid var(--border-subtle);
       }
+      /* Label position variants to avoid overlap with nearby lights */
+      .light-label[data-pos="above"] { top: auto; bottom: calc(100% + 8px); left: 50%; transform: translateX(-50%); }
+      .light-label[data-pos="right"] { top: 50%; left: calc(100% + 8px); transform: translateY(-50%); }
+      .light-label[data-pos="left"] { top: 50%; left: auto; right: calc(100% + 8px); transform: translateY(-50%); }
       .light:hover .light-label { opacity: 1; }
 
       .light.selected { z-index: 3; }
@@ -1125,8 +1281,11 @@ class SpatialLightColorCard extends HTMLElement {
         box-shadow: 0 0 0 2.5px rgba(255,255,255,0.7), 0 0 16px rgba(255,255,255,0.35) !important;
       }
       .light.preset-highlight { z-index: 4; filter: brightness(1.2) !important; }
+      /* Raise hovered light above siblings so its label isn't hidden behind other lights.
+         Placed after .selected and .preset-highlight so hover z-index wins on same specificity. */
+      .light:hover { z-index: 7; }
 
-      .light.dragging { cursor: grabbing; z-index: 6; transform: translate(-50%,-50%) scale(1.04); }
+      .light.dragging { cursor: grabbing; z-index: 8; transform: translate(-50%,-50%) scale(1.04); }
 
       .selection-box {
         position: absolute; border: 1.5px solid rgba(99,102,241,0.5); background: rgba(99,102,241,0.08);
@@ -2101,6 +2260,14 @@ class SpatialLightColorCard extends HTMLElement {
       this._els.canvas.addEventListener('pointercancel', (e) => this._onPointerCancel(e));
       this._els.canvas.addEventListener('dblclick', (e) => this._handleCanvasDoubleClick(e));
       this._els.canvas.addEventListener('contextmenu', (e) => this._handleCanvasContextMenu(e));
+      // Reposition labels when hovering over lights (delegated, deferred to next frame
+      // so :hover pseudo-class is fully applied before we check it)
+      this._els.canvas.addEventListener('pointerover', (e) => {
+        const light = e.target.closest('.light');
+        if (light && e.pointerType === 'mouse') {
+          requestAnimationFrame(() => this._repositionLabels());
+        }
+      });
     }
 
     // Modal close
@@ -3843,6 +4010,8 @@ class SpatialLightColorCard extends HTMLElement {
     this._refreshColorPresets();
     this._refreshEntityIcons();
     this._updateCanvasElements();
+    // Reposition labels to avoid overlapping nearby lights
+    requestAnimationFrame(() => this._repositionLabels());
   }
 
   /** ---------- Canvas element live updates ---------- */

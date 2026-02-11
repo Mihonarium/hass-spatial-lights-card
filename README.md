@@ -4,6 +4,9 @@ This card allows arbitrary positioning and instant selection and control of doze
 
 [![Open your Home Assistant instance and open this repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=Mihonarium&repository=hass-spatial-lights-card)
 
+<img width="1424" height="752" alt="image" src="https://github.com/user-attachments/assets/5f25c565-1339-4e58-9ee9-4af763e506f7" />
+
+
 # Spatial Lights Card for Home Assistant
 
 The Spatial Lights Card lets you place many Home Assistant lights on a 2D canvas, for example, corresponding to their physical locations, making it easy to control arbitrary groups of entities with very few taps and little attention.

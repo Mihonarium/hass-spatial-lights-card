@@ -1103,7 +1103,28 @@ class SpatialLightColorCard extends HTMLElement {
         position: absolute; top: calc(100% + 8px); left: 50%; transform: translateX(-50%);
         padding: 4px 8px; background: var(--surface-elevated); color: var(--text-primary);
         font-size: 11px; font-weight: 600; border-radius: var(--radius-sm); white-space: nowrap; pointer-events: none;
+        max-width: 140px; overflow: hidden; text-overflow: ellipsis;
         opacity: 0; transition: opacity var(--transition-fast); z-index: 5; border: 1px solid var(--border-subtle);
+        box-shadow: 0 2px 10px rgba(0,0,0,0.28);
+      }
+      .light[data-label-pos="top"] .light-label {
+        top: auto;
+        bottom: calc(100% + 8px);
+        left: 50%;
+        transform: translateX(-50%);
+      }
+      .light[data-label-pos="left"] .light-label {
+        top: 50%;
+        bottom: auto;
+        left: auto;
+        right: calc(100% + 8px);
+        transform: translateY(-50%);
+      }
+      .light[data-label-pos="right"] .light-label {
+        top: 50%;
+        bottom: auto;
+        left: calc(100% + 8px);
+        transform: translateY(-50%);
       }
       .light:hover .light-label { opacity: 1; }
 
@@ -1592,6 +1613,7 @@ class SpatialLightColorCard extends HTMLElement {
   }
 
   _renderLightsHTML() {
+    const labelPlacements = this._computeLabelPlacements();
     return this._config.entities.map(entity_id => {
       const pos = this._config.positions[entity_id] || { x: 50, y: 50 };
       const st = this._hass?.states[entity_id];
@@ -1601,6 +1623,7 @@ class SpatialLightColorCard extends HTMLElement {
       const isOn = st.state === 'on';
       const isSelected = this._selectedLights.has(entity_id);
       const label = this._generateLabel(entity_id);
+      const labelPlacement = labelPlacements[entity_id] || 'bottom';
 
       const color = this._resolveEntityColor(entity_id, isOn, st.attributes);
 
@@ -1653,6 +1676,7 @@ class SpatialLightColorCard extends HTMLElement {
         <div class="light ${stateClass} ${isSelected ? 'selected' : ''} ${iconOnlyClass}"
              style="${style}"
              data-entity="${entity_id}"
+             data-label-pos="${labelPlacement}"
              tabindex="0"
              role="button"
              aria-label="${st.attributes.friendly_name || entity_id}"
@@ -1662,6 +1686,119 @@ class SpatialLightColorCard extends HTMLElement {
         </div>
       `;
     }).join('');
+  }
+
+  _computeLabelPlacements() {
+    const entities = this._config.entities
+      .map(entity_id => ({
+        entity_id,
+        pos: this._config.positions[entity_id] || { x: 50, y: 50 },
+        size: this._config.size_overrides[entity_id] || this._config.light_size,
+        label: this._generateLabel(entity_id),
+        exists: Boolean(this._hass?.states[entity_id]),
+      }))
+      .filter(item => item.exists);
+
+    const canvasHeight = Number(this._config.canvas_height) || 450;
+    const canvasWidth = 1000;
+    const placements = {};
+    const selectedEntities = [...this._selectedLights];
+
+    entities.forEach((item, index) => {
+      const x = (item.pos.x / 100) * canvasWidth;
+      const y = (item.pos.y / 100) * canvasHeight;
+      const labelWidth = Math.min(Math.max((item.label || '').length * 6.5 + 20, 46), 140);
+      const labelHeight = 24;
+      const radius = item.size / 2;
+      const gap = 10;
+
+      const selectedIndex = selectedEntities.indexOf(item.entity_id);
+      const stagger = selectedIndex >= 0 ? ((selectedIndex % 3) - 1) * 8 : ((index % 3) - 1) * 4;
+
+      const candidates = [
+        {
+          pos: 'bottom',
+          rect: {
+            left: x - labelWidth / 2,
+            top: y + radius + gap + stagger,
+            right: x + labelWidth / 2,
+            bottom: y + radius + gap + stagger + labelHeight,
+          },
+        },
+        {
+          pos: 'top',
+          rect: {
+            left: x - labelWidth / 2,
+            top: y - radius - gap - labelHeight + stagger,
+            right: x + labelWidth / 2,
+            bottom: y - radius - gap + stagger,
+          },
+        },
+        {
+          pos: 'right',
+          rect: {
+            left: x + radius + gap,
+            top: y - labelHeight / 2 + stagger,
+            right: x + radius + gap + labelWidth,
+            bottom: y + labelHeight / 2 + stagger,
+          },
+        },
+        {
+          pos: 'left',
+          rect: {
+            left: x - radius - gap - labelWidth,
+            top: y - labelHeight / 2 + stagger,
+            right: x - radius - gap,
+            bottom: y + labelHeight / 2 + stagger,
+          },
+        },
+      ];
+
+      let best = { pos: 'bottom', score: -Infinity };
+
+      candidates.forEach(candidate => {
+        const rect = candidate.rect;
+        let score = 0;
+
+        const outLeft = Math.max(0, -rect.left);
+        const outTop = Math.max(0, -rect.top);
+        const outRight = Math.max(0, rect.right - canvasWidth);
+        const outBottom = Math.max(0, rect.bottom - canvasHeight);
+        const overflowPenalty = (outLeft + outTop + outRight + outBottom) * 2.4;
+        score -= overflowPenalty;
+
+        entities.forEach(other => {
+          if (other.entity_id === item.entity_id) return;
+          const ox = (other.pos.x / 100) * canvasWidth;
+          const oy = (other.pos.y / 100) * canvasHeight;
+          const oradius = other.size / 2;
+
+          const closestX = Math.max(rect.left, Math.min(ox, rect.right));
+          const closestY = Math.max(rect.top, Math.min(oy, rect.bottom));
+          const dx = ox - closestX;
+          const dy = oy - closestY;
+          const distance = Math.hypot(dx, dy) - oradius;
+
+          if (distance < 0) {
+            score += distance * 7;
+          } else {
+            score += Math.min(distance, 48) * 0.35;
+          }
+        });
+
+        if (selectedEntities.length > 0 && selectedEntities.includes(item.entity_id)) {
+          score += candidate.pos === 'top' ? 4 : 0;
+        }
+
+        if (score > best.score) {
+          best = { pos: candidate.pos, score };
+        }
+      });
+
+      placements[item.entity_id] = best.pos;
+    });
+
+    return placements;
   }
 
   _renderCanvasElementsHTML() {

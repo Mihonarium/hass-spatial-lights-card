@@ -4,7 +4,7 @@ This card allows arbitrary positioning and instant selection and control of doze
 
 [![Open your Home Assistant instance and open this repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=Mihonarium&repository=hass-spatial-lights-card)
 
-<img width="1424" height="752" alt="image" src="https://github.com/user-attachments/assets/5f25c565-1339-4e58-9ee9-4af763e506f7" />
+<img width="1424" height="752" alt="image" src="https://github.com/user-attachments/assets/265d75bf-1d08-4ca7-ae54-d16ea9a0e602" />
 
 
 # Spatial Lights Card for Home Assistant

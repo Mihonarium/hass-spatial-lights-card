@@ -500,16 +500,6 @@ class SpatialLightColorCard extends HTMLElement {
       return a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
     };
 
-    // Check if rect is within canvas bounds
-    const outOfBounds = (rect) => {
-      let penalty = 0;
-      if (rect.x < 0) penalty += -rect.x;
-      if (rect.y < 0) penalty += -rect.y;
-      if (rect.x + rect.w > canvasRect.width) penalty += (rect.x + rect.w - canvasRect.width);
-      if (rect.y + rect.h > canvasRect.height) penalty += (rect.y + rect.h - canvasRect.height);
-      return penalty;
-    };
-
     const directions = ['below', 'above', 'right', 'left'];
     const placedRects = []; // Track already-placed label rects to avoid label-label overlap
 
@@ -539,8 +529,15 @@ class SpatialLightColorCard extends HTMLElement {
         if (rectsOverlap(rect, pr)) score += 50;
       }
 
-      // Penalty for going outside canvas
-      score += outOfBounds(rect) * 3;
+      // Penalty for going outside canvas — an invisible label is worse than any ambiguity
+      const clippedX = Math.max(0, -rect.x) + Math.max(0, rect.x + rect.w - canvasRect.width);
+      const clippedY = Math.max(0, -rect.y) + Math.max(0, rect.y + rect.h - canvasRect.height);
+      if (clippedX > rect.w * 0.3 || clippedY > rect.h * 0.3) {
+        // Label is mostly hidden by canvas overflow:hidden — worst possible outcome
+        score += 2000;
+      } else if (clippedX > 0 || clippedY > 0) {
+        score += (clippedX + clippedY) * 5;
+      }
 
       // Prefer below > above > right/left.
       // Below/above keep horizontal centering on the light, maintaining clear association.

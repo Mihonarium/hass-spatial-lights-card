@@ -1,6 +1,6 @@
-Made because controlling dozens of lightbulbs became otherwise imossible: it required infinite scrolling to find the right light or group.
+Made because controlling dozens of lightbulbs became otherwise impossible: it required infinite scrolling to find the right light or group.
 
-This card allows instanteneously selecting and controlling dozens of lights on a 2D canvas.
+This card allows arbitrary positioning and instant selection and control of dozens of lights on a 2D canvas.
 
 [![Open your Home Assistant instance and open this repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=Mihonarium&repository=hass-spatial-lights-card)
 
@@ -353,27 +353,28 @@ always_show_controls: true
 ---
 
 ## About the design
-The design was somewhat inspired by the Philips Hue light controls, and thinking hard about how to improve over it. I liked about the Philips Hue app the ability to easily grab many lights and make them arbitrary colors, including multiple lights at the same time; and making many lights the same color. However, picking the specific light was still fairly difficult, if you have a lot of lights.
+The design was somewhat inspired by the Philips Hue light controls, and thinking hard about how to improve over it. I liked about the Philips Hue app the ability to easily grab many lights and make them arbitrary colors, including multiple lights at the same time; and make many lights the same color. However, picking the specific light was still fairly difficult if you have a lot of lights.
 
 This card solves all of the problems: identifying lights by their position in the physical space is much easier than identifying them by their position on the color wheel or finding them by name.
 
 This allows very fast and easy setting of arbitrary groups of lights to specific color/temperature/brightness; there’s a mode that shows existing colors and presets to easily sync arbitrary lights to the same color.
 
-It’s current state is an enormous improvement over the default ways to have smart home dashboards, which usually have 1D lists with individual controls for each light (and each pre-defined light group) which either take space or need to be opened and are also hard to find if you have a lot of lights.
+Its current state is an enormous improvement over the default ways to have smart home dashboards, which usually have 1D lists with individual controls for each light (and each pre-defined light group) which either take space or need to be opened and are also hard to find if you have a lot of lights.
 
 The card allows placing lights and other entities on a 2D canvas to easily control arbitrary lights/groups of lights (that's always a nightmare once you have dozens of devices).
 
 Lights can be placed corresponding to their physical location and can be selected in arbitrary groups by dragging a selection box over them.
 
-The card also supports switches (they can be toggled by a double or a single tap depending on a setting) and binary sensors (it can display on/off states with arbitrary colors).
+The card also supports switches (they can be toggled by a double or a single tap, depending on a setting) and binary sensors (it can display on/off states with arbitrary colors).
 
-It also has color presets (for quickly setting lights to a specific color) and a live color mode (for quickly setting ligths to a color that some lights in the card already have).
+It also has color presets (for quickly setting lights to a specific color) and a live color mode (for quickly setting lights to a color that some lights in the card already have).
 
-This card made turn dozens of lights to nice colors in arbitrary ways much easier.
+This card made turning dozens of lights to nice colors in arbitrary ways much easier.
 
 ## ToDo
-- [ ] Think about adding arbitrary sensors display
+- [x] Think about displaying arbitrary sensors
 - [ ] Think about adding arbitrary templates/HTML
 - [ ] Color effects (not just colors) among presets (with icons?)
-- [ ] Think about placing links to other Home Assistant things on the canvas
+- [x] Think about placing links to other Home Assistant things on the canvas
 - [ ] Add a setting for toggling lights with a single tap
+- [ ] Think about a way to toggle groups of lights/the default entity?

@@ -216,6 +216,9 @@ class SpatialLightColorCard extends HTMLElement {
 
       // Per-entity inline style overrides (entity_id → CSS properties string)
       style_overrides: this._normalizeStyleOverrides(config.style_overrides),
+
+      // Glow walls — line segments or boxes that block glow from expanding
+      glow_walls: this._normalizeGlowWalls(config.glow_walls),
     };
 
     this._gridSize = this._config.grid_size;
@@ -229,6 +232,7 @@ class SpatialLightColorCard extends HTMLElement {
     // Clear caches on config change
     this._canvasElementCache = null;
     this._customMaskCache = null;
+    this._wallMaskCache = null;
 
     // Re-render if hass is already available (config changed after first render)
     if (this._hass) {
@@ -530,6 +534,135 @@ class SpatialLightColorCard extends HTMLElement {
     return canvas.toDataURL('image/png');
   }
 
+  /**
+   * Test whether a ray from (ox,oy) toward (px,py) is blocked by segment (ax,ay)-(bx,by)
+   * before reaching the target pixel. Uses parametric ray-segment intersection.
+   * Returns true if the segment blocks the line of sight.
+   */
+  _isRayBlockedBySegment(ox, oy, px, py, ax, ay, bx, by) {
+    const dx = px - ox;
+    const dy = py - oy;
+    const ex = bx - ax;
+    const ey = by - ay;
+
+    const denom = dx * ey - dy * ex;
+    if (Math.abs(denom) < 1e-10) return false; // parallel
+
+    const t = ((ax - ox) * ey - (ay - oy) * ex) / denom; // ray parameter
+    const u = ((ax - ox) * dy - (ay - oy) * dx) / denom; // segment parameter
+
+    // t in (0,1): hit is between light and pixel
+    // u in [0,1]: hit is on the wall segment
+    return t > 0.005 && t < 0.995 && u >= 0 && u <= 1;
+  }
+
+  /**
+   * Get a cached wall shadow mask for a specific light + wall configuration.
+   * The mask is white where the light is visible, transparent where walls cast shadows.
+   *
+   * @param {Array} wallSegments - wall segments in mask pixel coordinates [{ax,ay,bx,by}]
+   * @param {number} lightX - light x position in mask pixels
+   * @param {number} lightY - light y position in mask pixels
+   * @param {number} maskSize - mask resolution (pixels)
+   * @param {string} cacheExtra - additional cache key component (e.g., glow element size)
+   * @returns {string} data URL for CSS mask-image
+   */
+  _getWallShadowMaskUrl(wallSegments, lightX, lightY, maskSize, cacheExtra) {
+    if (!this._wallMaskCache) this._wallMaskCache = new Map();
+
+    const key = `${lightX.toFixed(1)},${lightY.toFixed(1)}:${maskSize}:`
+      + wallSegments.map(s => `${s.ax.toFixed(1)},${s.ay.toFixed(1)},${s.bx.toFixed(1)},${s.by.toFixed(1)}`).join('|')
+      + (cacheExtra || '');
+
+    if (this._wallMaskCache.has(key)) {
+      return this._wallMaskCache.get(key);
+    }
+
+    const url = this._generateWallShadowMask(wallSegments, lightX, lightY, maskSize);
+
+    if (this._wallMaskCache.size >= 64) {
+      const firstKey = this._wallMaskCache.keys().next().value;
+      this._wallMaskCache.delete(firstKey);
+    }
+    this._wallMaskCache.set(key, url);
+    return url;
+  }
+
+  /**
+   * Generate a wall shadow mask: for each pixel, cast a ray from the light center
+   * and check if any wall segment blocks the line of sight.
+   * Pixels in shadow are transparent; visible pixels are opaque.
+   */
+  _generateWallShadowMask(wallSegments, lightX, lightY, maskSize) {
+    const canvas = document.createElement('canvas');
+    canvas.width = maskSize;
+    canvas.height = maskSize;
+    const ctx = canvas.getContext('2d');
+
+    const imgData = ctx.createImageData(maskSize, maskSize);
+    const data = imgData.data;
+    const n = wallSegments.length;
+
+    for (let py = 0; py < maskSize; py++) {
+      for (let px = 0; px < maskSize; px++) {
+        let blocked = false;
+
+        for (let i = 0; i < n; i++) {
+          const s = wallSegments[i];
+          if (this._isRayBlockedBySegment(lightX, lightY, px, py, s.ax, s.ay, s.bx, s.by)) {
+            blocked = true;
+            break;
+          }
+        }
+
+        const idx = (py * maskSize + px) * 4;
+        data[idx] = 255;
+        data[idx + 1] = 255;
+        data[idx + 2] = 255;
+        data[idx + 3] = blocked ? 0 : 255;
+      }
+    }
+
+    ctx.putImageData(imgData, 0, 0);
+    return canvas.toDataURL('image/png');
+  }
+
+  /**
+   * Convert wall segments from canvas percentage coordinates to mask pixel coordinates,
+   * relative to a glow element's local coordinate space.
+   *
+   * @param {Array} walls - [{x1,y1,x2,y2}] in canvas %
+   * @param {number} lightXPct - light x position in canvas %
+   * @param {number} lightYPct - light y position in canvas %
+   * @param {number} glowWPx - glow element width in px
+   * @param {number} glowHPx - glow element height in px
+   * @param {number} canvasWPx - canvas width in px
+   * @param {number} canvasHPx - canvas height in px
+   * @param {number} maskSize - mask resolution
+   * @param {number} lightMaskX - light x in mask pixels
+   * @param {number} lightMaskY - light y in mask pixels
+   * @returns {Array} [{ax,ay,bx,by}] in mask pixel coordinates
+   */
+  _convertWallsToMaskCoords(walls, lightXPct, lightYPct, glowWPx, glowHPx, canvasWPx, canvasHPx, maskSize, lightMaskX, lightMaskY) {
+    const result = [];
+    for (const w of walls) {
+      // Wall endpoint in canvas pixels, relative to light
+      const relX1 = (w.x1 - lightXPct) / 100 * canvasWPx;
+      const relY1 = (w.y1 - lightYPct) / 100 * canvasHPx;
+      const relX2 = (w.x2 - lightXPct) / 100 * canvasWPx;
+      const relY2 = (w.y2 - lightYPct) / 100 * canvasHPx;
+
+      // Convert to mask pixel coordinates
+      const ax = lightMaskX + relX1 / glowWPx * maskSize;
+      const ay = lightMaskY + relY1 / glowHPx * maskSize;
+      const bx = lightMaskX + relX2 / glowWPx * maskSize;
+      const by = lightMaskY + relY2 / glowHPx * maskSize;
+
+      result.push({ ax, ay, bx, by });
+    }
+    return result;
+  }
+
   /** Normalize per-entity glow overrides. Each value is a partial glow config. */
   _normalizeGlowOverrides(obj) {
     const result = {};
@@ -571,6 +704,57 @@ class SpatialLightColorCard extends HTMLElement {
       }
     });
     return result;
+  }
+
+  /**
+   * Normalize glow_walls config. Supports line segments and boxes.
+   * Line segment: [x1%, y1%, x2%, y2%] or {x1, y1, x2, y2}
+   * Box: {x, y, width, height} — expanded to 4 line segments.
+   * All coordinates in canvas percentage (0-100).
+   * Returns array of {x1, y1, x2, y2} line segments.
+   */
+  _normalizeGlowWalls(walls) {
+    if (!Array.isArray(walls)) return [];
+    const segments = [];
+    for (const wall of walls) {
+      if (!wall) continue;
+
+      // Array shorthand: [x1, y1, x2, y2]
+      if (Array.isArray(wall)) {
+        if (wall.length >= 4) {
+          const [x1, y1, x2, y2] = wall.map(Number);
+          if ([x1, y1, x2, y2].every(Number.isFinite)) {
+            segments.push({ x1, y1, x2, y2 });
+          }
+        }
+        continue;
+      }
+
+      if (typeof wall !== 'object') continue;
+
+      // Box: {x, y, width, height} → 4 segments
+      if (wall.x != null && wall.y != null && wall.width != null && wall.height != null) {
+        const x = Number(wall.x), y = Number(wall.y);
+        const w = Number(wall.width), h = Number(wall.height);
+        if ([x, y, w, h].every(Number.isFinite)) {
+          segments.push({ x1: x, y1: y, x2: x + w, y2: y });         // top
+          segments.push({ x1: x + w, y1: y, x2: x + w, y2: y + h }); // right
+          segments.push({ x1: x + w, y1: y + h, x2: x, y2: y + h }); // bottom
+          segments.push({ x1: x, y1: y + h, x2: x, y2: y });         // left
+        }
+        continue;
+      }
+
+      // Line segment: {x1, y1, x2, y2}
+      if (wall.x1 != null && wall.y1 != null && wall.x2 != null && wall.y2 != null) {
+        const x1 = Number(wall.x1), y1 = Number(wall.y1);
+        const x2 = Number(wall.x2), y2 = Number(wall.y2);
+        if ([x1, y1, x2, y2].every(Number.isFinite)) {
+          segments.push({ x1, y1, x2, y2 });
+        }
+      }
+    }
+    return segments;
   }
 
   /** Return the effective glow config for a specific entity (global merged with per-entity overrides). */
@@ -4671,6 +4855,79 @@ class SpatialLightColorCard extends HTMLElement {
 
     glowEl.style.filter = `blur(${gc.blur}px)`;
     glowEl.style.opacity = String(opacity);
+
+    // Apply wall shadow occlusion if walls are configured
+    this._applyWallShadows(glowEl, entityId, gc);
+  }
+
+  /**
+   * Apply wall shadow mask to a glow element. Generates a canvas mask where
+   * wall segments block line-of-sight from the light, creating shadow regions.
+   * The mask is layered on top of any existing shape mask or clip-path.
+   */
+  _applyWallShadows(glowEl, entityId, gc) {
+    const walls = this._config.glow_walls;
+    if (!walls || walls.length === 0) {
+      // No walls — clean up any residual wall mask
+      // (only clear if we previously set a wall mask to avoid disturbing shape masks)
+      return;
+    }
+
+    const canvas = this._els.canvas;
+    if (!canvas) return;
+
+    const canvasRect = canvas.getBoundingClientRect();
+    const canvasW = canvasRect.width;
+    const canvasH = canvasRect.height;
+    if (canvasW <= 0 || canvasH <= 0) return;
+
+    // Get light position in canvas %
+    const pos = this._config.positions[entityId] || { x: 50, y: 50 };
+
+    // Get glow element dimensions
+    const glowW = parseFloat(glowEl.style.width) || gc.width;
+    const glowH = parseFloat(glowEl.style.height) || gc.length;
+    if (glowW <= 0 || glowH <= 0) return;
+
+    // Determine where the light is in the glow element's local space.
+    // Centered shapes (round, oval, custom): light is at center (50%, 50%)
+    // Directional shapes (cone, beam, bar, etc.): light is at top-center (50%, 0%)
+    const isCentered = gc.shape === 'round' || gc.shape === 'oval' || gc.shape === 'custom';
+    const maskSize = 128;
+    const lightMaskX = maskSize / 2;
+    const lightMaskY = isCentered ? maskSize / 2 : 0;
+
+    // Convert wall segments from canvas % to mask pixel coordinates
+    const wallSegments = this._convertWallsToMaskCoords(
+      walls, pos.x, pos.y, glowW, glowH, canvasW, canvasH, maskSize, lightMaskX, lightMaskY
+    );
+
+    // Generate (or retrieve cached) wall shadow mask
+    const maskUrl = this._getWallShadowMaskUrl(wallSegments, lightMaskX, lightMaskY, maskSize, gc.shape);
+
+    // Apply the wall mask. We need to combine with any existing mask from
+    // edge_softness or custom shape. Use multiple mask layers with intersect.
+    const existingMask = glowEl.style.maskImage || glowEl.style.webkitMaskImage || '';
+    const wallMask = `url(${maskUrl})`;
+
+    if (existingMask && existingMask !== 'none' && existingMask !== '') {
+      // Combine existing mask with wall mask
+      const combined = `${existingMask}, ${wallMask}`;
+      glowEl.style.maskImage = combined;
+      glowEl.style.webkitMaskImage = combined;
+      glowEl.style.maskSize = '100% 100%, 100% 100%';
+      glowEl.style.webkitMaskSize = '100% 100%, 100% 100%';
+      glowEl.style.maskComposite = 'intersect';
+      glowEl.style.webkitMaskComposite = 'source-in';
+    } else {
+      // Wall mask only
+      glowEl.style.maskImage = wallMask;
+      glowEl.style.webkitMaskImage = wallMask;
+      glowEl.style.maskSize = '100% 100%';
+      glowEl.style.webkitMaskSize = '100% 100%';
+      glowEl.style.maskComposite = '';
+      glowEl.style.webkitMaskComposite = '';
+    }
   }
 
   /** Update glows for all light elements. Called from updateLights(). */

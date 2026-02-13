@@ -1955,8 +1955,9 @@ class SpatialLightColorCard extends HTMLElement {
         }
       }
 
-      // Add glow element for minimal-ui mode when glow is enabled
-      const glowHtml = (isMinimalUI && this._config.glow.enabled)
+      // Add glow element when glow is enabled (works for all entity types
+      // in minimal-ui or icon-only mode)
+      const glowHtml = ((isMinimalUI || isIconOnly) && this._config.glow.enabled)
         ? '<div class="light-glow"></div>'
         : '';
 
@@ -4113,8 +4114,10 @@ class SpatialLightColorCard extends HTMLElement {
     }
 
     const gc = this._getGlowConfig(entityId);
-    const brightness = state.attributes.brightness || 0; // 0-255
-    const ratio = brightness / 255;
+    // Lights have brightness 0-255; switches/binary_sensors don't, so
+    // treat them as full brightness when on.
+    const brightness = state.attributes.brightness;
+    const ratio = brightness != null ? brightness / 255 : 1;
 
     // Determine the glow color
     let rgb = gc.color ? this._parseColorToRGB(gc.color) : null;
@@ -4415,7 +4418,7 @@ class SpatialLightColorCard extends HTMLElement {
 
   /** Update glows for all light elements. Called from updateLights(). */
   _updateAllGlows() {
-    if (!this._config.glow.enabled || !this._config.minimal_ui) return;
+    if (!this._config.glow.enabled) return;
     const lights = this.shadowRoot.querySelectorAll('.light');
     lights.forEach(lightEl => {
       const id = lightEl.dataset.entity;

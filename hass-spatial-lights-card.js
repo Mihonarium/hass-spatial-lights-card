@@ -427,16 +427,22 @@ class SpatialLightColorCard extends HTMLElement {
    * The shape boundary follows the polar coordinates, and the edge_softness controls
    * how gradual the transition is from opaque interior to transparent exterior.
    */
-  _getCustomShapeMaskUrl(customShape, edgeSoftness) {
+  _getCustomShapeMaskUrl(customShape, edgeSoftness, glowSize) {
     if (!this._customMaskCache) this._customMaskCache = new Map();
 
-    // Build cache key from shape + softness
-    const key = JSON.stringify(customShape) + ':' + edgeSoftness.toFixed(3);
+    // Adaptive mask resolution: use smaller canvas for smaller glows
+    const maskRes = glowSize <= 80 ? 128 : glowSize <= 160 ? 192 : 256;
+
+    // Build cache key efficiently — avoid JSON.stringify on every call
+    let key = `${maskRes}:${(edgeSoftness * 1000) | 0}:`;
+    for (let i = 0; i < customShape.length; i++) {
+      key += `${customShape[i][0]},${(customShape[i][1] * 1000) | 0};`;
+    }
     if (this._customMaskCache.has(key)) {
       return this._customMaskCache.get(key);
     }
 
-    const url = this._generateCustomShapeMask(customShape, edgeSoftness);
+    const url = this._generateCustomShapeMask(customShape, edgeSoftness, maskRes);
 
     // Limit cache size to 32 entries
     if (this._customMaskCache.size >= 32) {
@@ -457,8 +463,8 @@ class SpatialLightColorCard extends HTMLElement {
    * @param {number} edgeSoftness - 0-1: how wide the edge fade zone is
    * @returns {string} data URL for use as CSS mask-image
    */
-  _generateCustomShapeMask(customShape, edgeSoftness) {
-    const size = 256;
+  _generateCustomShapeMask(customShape, edgeSoftness, maskRes) {
+    const size = maskRes || 256;
     const canvas = document.createElement('canvas');
     canvas.width = size;
     canvas.height = size;
@@ -570,9 +576,14 @@ class SpatialLightColorCard extends HTMLElement {
   _getWallShadowMaskUrl(wallSegments, lightX, lightY, maskSize, cacheExtra) {
     if (!this._wallMaskCache) this._wallMaskCache = new Map();
 
-    const key = `${lightX.toFixed(1)},${lightY.toFixed(1)}:${maskSize}:`
-      + wallSegments.map(s => `${s.ax.toFixed(1)},${s.ay.toFixed(1)},${s.bx.toFixed(1)},${s.by.toFixed(1)}`).join('|')
-      + (cacheExtra || '');
+    // Build cache key with integer-rounded coordinates to improve hit rate
+    // while maintaining sufficient precision for visual quality
+    let key = `${lightX | 0},${lightY | 0}:${maskSize}:`;
+    for (let i = 0; i < wallSegments.length; i++) {
+      const s = wallSegments[i];
+      key += `${s.ax | 0},${s.ay | 0},${s.bx | 0},${s.by | 0}|`;
+    }
+    if (cacheExtra) key += cacheExtra;
 
     if (this._wallMaskCache.has(key)) {
       return this._wallMaskCache.get(key);
@@ -603,23 +614,39 @@ class SpatialLightColorCard extends HTMLElement {
     const data = imgData.data;
     const n = wallSegments.length;
 
+    // Pre-extract wall segment coordinates into flat arrays for faster access
+    const wax = new Float32Array(n), way = new Float32Array(n);
+    const wex = new Float32Array(n), wey = new Float32Array(n);
+    for (let i = 0; i < n; i++) {
+      const s = wallSegments[i];
+      wax[i] = s.ax; way[i] = s.ay;
+      wex[i] = s.bx - s.ax; wey[i] = s.by - s.ay;
+    }
+
+    // Pre-fill all pixels as white opaque, then zero alpha for blocked pixels
+    for (let i = 0; i < data.length; i += 4) {
+      data[i] = 255; data[i + 1] = 255; data[i + 2] = 255; data[i + 3] = 255;
+    }
+
     for (let py = 0; py < maskSize; py++) {
       for (let px = 0; px < maskSize; px++) {
-        let blocked = false;
+        const dx = px - lightX;
+        const dy = py - lightY;
 
         for (let i = 0; i < n; i++) {
-          const s = wallSegments[i];
-          if (this._isRayBlockedBySegment(lightX, lightY, px, py, s.ax, s.ay, s.bx, s.by)) {
-            blocked = true;
+          // Inlined ray-segment intersection for performance
+          const ex = wex[i], ey = wey[i];
+          const denom = dx * ey - dy * ex;
+          if (Math.abs(denom) < 1e-10) continue; // parallel
+          const fax = wax[i] - lightX, fay = way[i] - lightY;
+          const t = (fax * ey - fay * ex) / denom;
+          if (t <= 0.005 || t >= 0.995) continue;
+          const u = (fax * dy - fay * dx) / denom;
+          if (u >= 0 && u <= 1) {
+            data[(py * maskSize + px) * 4 + 3] = 0; // blocked
             break;
           }
         }
-
-        const idx = (py * maskSize + px) * 4;
-        data[idx] = 255;
-        data[idx + 1] = 255;
-        data[idx + 2] = 255;
-        data[idx + 3] = blocked ? 0 : 255;
       }
     }
 
@@ -4644,7 +4671,7 @@ class SpatialLightColorCard extends HTMLElement {
    * Each shape produces a different visual effect with configurable
    * direction, size, intensity, edge softness, and gradient falloff.
    */
-  _updateGlow(lightEl, entityId, state) {
+  _updateGlow(lightEl, entityId, state, canvasRect) {
     const glowEl = lightEl.querySelector('.light-glow');
     if (!glowEl) return;
 
@@ -4819,7 +4846,7 @@ class SpatialLightColorCard extends HTMLElement {
           // Canvas-generated mask: shape-following soft edges with smooth falloff.
           // The mask defines a solid interior and gradual fade at the shape boundary.
           // This replaces clip-path to avoid hard/sharp polygon edges.
-          const maskUrl = this._getCustomShapeMaskUrl(gc.custom_shape, gc.edge_softness);
+          const maskUrl = this._getCustomShapeMaskUrl(gc.custom_shape, gc.edge_softness, size);
           glowEl.style.clipPath = '';
           glowEl.style.maskImage = `url(${maskUrl})`;
           glowEl.style.webkitMaskImage = `url(${maskUrl})`;
@@ -4857,7 +4884,7 @@ class SpatialLightColorCard extends HTMLElement {
     glowEl.style.opacity = String(opacity);
 
     // Apply wall shadow occlusion if walls are configured
-    this._applyWallShadows(glowEl, entityId, gc);
+    this._applyWallShadows(glowEl, entityId, gc, canvasRect);
   }
 
   /**
@@ -4865,21 +4892,14 @@ class SpatialLightColorCard extends HTMLElement {
    * wall segments block line-of-sight from the light, creating shadow regions.
    * The mask is layered on top of any existing shape mask or clip-path.
    */
-  _applyWallShadows(glowEl, entityId, gc) {
+  _applyWallShadows(glowEl, entityId, gc, canvasRect) {
     const walls = this._config.glow_walls;
-    if (!walls || walls.length === 0) {
-      // No walls — clean up any residual wall mask
-      // (only clear if we previously set a wall mask to avoid disturbing shape masks)
+    if (!walls || walls.length === 0 || !canvasRect) {
       return;
     }
 
-    const canvas = this._els.canvas;
-    if (!canvas) return;
-
-    const canvasRect = canvas.getBoundingClientRect();
     const canvasW = canvasRect.width;
     const canvasH = canvasRect.height;
-    if (canvasW <= 0 || canvasH <= 0) return;
 
     // Get light position in canvas %
     const pos = this._config.positions[entityId] || { x: 50, y: 50 };
@@ -4937,6 +4957,17 @@ class SpatialLightColorCard extends HTMLElement {
     const hasOverrides = Object.keys(this._config.glow_overrides).length > 0;
     if (!hasGlobalGlow && !hasOverrides) return;
 
+    // Pre-compute canvas rect once per frame (avoid reflow per-light)
+    const walls = this._config.glow_walls;
+    let canvasRect = null;
+    if (walls && walls.length > 0) {
+      const canvas = this._els.canvas;
+      if (canvas) {
+        canvasRect = canvas.getBoundingClientRect();
+        if (canvasRect.width <= 0 || canvasRect.height <= 0) canvasRect = null;
+      }
+    }
+
     const lights = this.shadowRoot.querySelectorAll('.light');
     lights.forEach(lightEl => {
       const id = lightEl.dataset.entity;
@@ -4945,7 +4976,7 @@ class SpatialLightColorCard extends HTMLElement {
       // Only update if this entity actually has glow enabled
       const gc = this._getGlowConfig(id);
       if (!gc.enabled) return;
-      this._updateGlow(lightEl, id, st);
+      this._updateGlow(lightEl, id, st, canvasRect);
     });
   }
 
@@ -5288,6 +5319,7 @@ class SpatialLightColorCardEditor extends HTMLElement {
     this._positionRedoStack = [];
     this._boundEditorKeyDown = null;
     this._ceIdCounter = 0;
+    this._collapsedSections = null; // Track section collapsed state across re-renders
   }
 
   async connectedCallback() {
@@ -6239,6 +6271,14 @@ class SpatialLightColorCardEditor extends HTMLElement {
     const glow = config.glow || {};
     const glowWalls = Array.isArray(config.glow_walls) ? config.glow_walls : [];
 
+    // Save section collapsed state before re-render
+    if (this.shadowRoot.querySelector('.section')) {
+      this._collapsedSections = {};
+      this.shadowRoot.querySelectorAll('.section[id]').forEach(s => {
+        this._collapsedSections[s.id] = s.classList.contains('collapsed');
+      });
+    }
+
     // Clear reference since innerHTML will destroy it
     this._bgUploadEl = null;
 
@@ -6565,7 +6605,7 @@ class SpatialLightColorCardEditor extends HTMLElement {
         </div>
 
         <!-- Glow Section -->
-        <div class="section collapsed" id="section-glow">
+        <div class="section${glow.enabled ? '' : ' collapsed'}" id="section-glow">
           <div class="section-header" data-section="glow">
             <h3>Glow</h3>
             <span class="chevron">&#9660;</span>
@@ -6671,7 +6711,7 @@ class SpatialLightColorCardEditor extends HTMLElement {
         </div>
 
         <!-- Glow Walls Section -->
-        <div class="section collapsed" id="section-glow-walls">
+        <div class="section${glowWalls.length === 0 ? ' collapsed' : ''}" id="section-glow-walls">
           <div class="section-header" data-section="glow-walls">
             <h3>Glow Walls${glowWalls.length > 0 ? ` (${glowWalls.length})` : ''}</h3>
             <span class="chevron">&#9660;</span>
@@ -6704,7 +6744,7 @@ class SpatialLightColorCardEditor extends HTMLElement {
         </div>
 
         <!-- Custom CSS Section -->
-        <div class="section collapsed" id="section-custom-css">
+        <div class="section${config.custom_css ? '' : ' collapsed'}" id="section-custom-css">
           <div class="section-header" data-section="custom-css">
             <h3>Custom CSS</h3>
             <span class="chevron">&#9660;</span>
@@ -6723,6 +6763,15 @@ class SpatialLightColorCardEditor extends HTMLElement {
 
     this._setDOMValues();
     this._attachEditorListeners();
+
+    // Restore section collapsed/expanded state from before re-render
+    if (this._collapsedSections) {
+      Object.entries(this._collapsedSections).forEach(([id, wasCollapsed]) => {
+        const el = this.shadowRoot.getElementById(id);
+        if (el) el.classList.toggle('collapsed', wasCollapsed);
+      });
+    }
+
     // Setup entity pickers after DOM is ready
     requestAnimationFrame(() => {
       this._setupEntityPickers();

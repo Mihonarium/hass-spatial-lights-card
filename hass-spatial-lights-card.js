@@ -600,9 +600,11 @@ class SpatialLightColorCard extends HTMLElement {
   }
 
   /**
-   * Generate a wall shadow mask: for each pixel, cast a ray from the light center
-   * and check if any wall segment blocks the line of sight.
-   * Pixels in shadow are transparent; visible pixels are opaque.
+   * Generate a wall shadow mask using polygon-based shadow casting.
+   * For each wall segment, computes a shadow trapezoid extending away from
+   * the light and fills it using Canvas 2D's GPU-accelerated, anti-aliased
+   * path rendering. This replaces per-pixel ray casting for much better
+   * performance and smooth diagonal shadow edges.
    */
   _generateWallShadowMask(wallSegments, lightX, lightY, maskSize) {
     const canvas = document.createElement('canvas');
@@ -610,48 +612,58 @@ class SpatialLightColorCard extends HTMLElement {
     canvas.height = maskSize;
     const ctx = canvas.getContext('2d');
 
-    const imgData = ctx.createImageData(maskSize, maskSize);
-    const data = imgData.data;
-    const n = wallSegments.length;
+    // Start fully lit (white opaque)
+    ctx.fillStyle = 'white';
+    ctx.fillRect(0, 0, maskSize, maskSize);
 
-    // Pre-extract wall segment coordinates into flat arrays for faster access
-    const wax = new Float32Array(n), way = new Float32Array(n);
-    const wex = new Float32Array(n), wey = new Float32Array(n);
-    for (let i = 0; i < n; i++) {
+    // Draw shadow polygons: erase where walls block line-of-sight
+    // destination-out compositing removes destination pixels under the filled shape
+    ctx.globalCompositeOperation = 'destination-out';
+    ctx.fillStyle = 'white';
+
+    // Extend shadow rays well beyond the mask boundary
+    const extend = maskSize * 3;
+
+    for (let i = 0; i < wallSegments.length; i++) {
       const s = wallSegments[i];
-      wax[i] = s.ax; way[i] = s.ay;
-      wex[i] = s.bx - s.ax; wey[i] = s.by - s.ay;
+      const ax = s.ax, ay = s.ay, bx = s.bx, by = s.by;
+
+      // Direction vectors from light to each wall endpoint
+      const dax = ax - lightX, day = ay - lightY;
+      const dbx = bx - lightX, dby = by - lightY;
+      const daLen = Math.sqrt(dax * dax + day * day);
+      const dbLen = Math.sqrt(dbx * dbx + dby * dby);
+
+      // Skip degenerate walls where an endpoint is on the light
+      if (daLen < 0.5 || dbLen < 0.5) continue;
+
+      // Extend endpoints away from light to form the far edge of the shadow
+      const ax2 = ax + (dax / daLen) * extend;
+      const ay2 = ay + (day / daLen) * extend;
+      const bx2 = bx + (dbx / dbLen) * extend;
+      const by2 = by + (dby / dbLen) * extend;
+
+      // Shadow trapezoid: wall edge → extended shadow boundary
+      // Canvas 2D automatically anti-aliases these edges
+      ctx.beginPath();
+      ctx.moveTo(ax, ay);
+      ctx.lineTo(ax2, ay2);
+      ctx.lineTo(bx2, by2);
+      ctx.lineTo(bx, by);
+      ctx.closePath();
+      ctx.fill();
     }
 
-    // Pre-fill all pixels as white opaque, then zero alpha for blocked pixels
-    for (let i = 0; i < data.length; i += 4) {
-      data[i] = 255; data[i + 1] = 255; data[i + 2] = 255; data[i + 3] = 255;
-    }
+    // Apply slight Gaussian blur for natural penumbra (soft shadow edges).
+    // This simulates the soft boundary of real-world shadows from area lights.
+    const blurCanvas = document.createElement('canvas');
+    blurCanvas.width = maskSize;
+    blurCanvas.height = maskSize;
+    const blurCtx = blurCanvas.getContext('2d');
+    blurCtx.filter = `blur(${Math.max(1, maskSize / 128)}px)`;
+    blurCtx.drawImage(canvas, 0, 0);
 
-    for (let py = 0; py < maskSize; py++) {
-      for (let px = 0; px < maskSize; px++) {
-        const dx = px - lightX;
-        const dy = py - lightY;
-
-        for (let i = 0; i < n; i++) {
-          // Inlined ray-segment intersection for performance
-          const ex = wex[i], ey = wey[i];
-          const denom = dx * ey - dy * ex;
-          if (Math.abs(denom) < 1e-10) continue; // parallel
-          const fax = wax[i] - lightX, fay = way[i] - lightY;
-          const t = (fax * ey - fay * ex) / denom;
-          if (t <= 0.005 || t >= 0.995) continue;
-          const u = (fax * dy - fay * dx) / denom;
-          if (u >= 0 && u <= 1) {
-            data[(py * maskSize + px) * 4 + 3] = 0; // blocked
-            break;
-          }
-        }
-      }
-    }
-
-    ctx.putImageData(imgData, 0, 0);
-    return canvas.toDataURL('image/png');
+    return blurCanvas.toDataURL('image/png');
   }
 
   /**
@@ -4913,7 +4925,7 @@ class SpatialLightColorCard extends HTMLElement {
     // Centered shapes (round, oval, custom): light is at center (50%, 50%)
     // Directional shapes (cone, beam, bar, etc.): light is at top-center (50%, 0%)
     const isCentered = gc.shape === 'round' || gc.shape === 'oval' || gc.shape === 'custom';
-    const maskSize = 128;
+    const maskSize = 256;
     const lightMaskX = maskSize / 2;
     const lightMaskY = isCentered ? maskSize / 2 : 0;
 

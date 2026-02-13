@@ -29,9 +29,10 @@ Very useful when you have a lot of lights, and searching for the one you need by
 5. [Configuration Reference](#-all-configuration-options)
 6. [Custom Colors & Backgrounds](#-custom-colors--backgrounds)
 7. [Glow Effects](#-glow-effects) — Shapes, walls, custom polar shapes, per-entity overrides
-8. [Custom CSS](#-custom-css) — Global and per-entity style customization
-9. [Visual Layout Options](#-visual-options)
-10. [Troubleshooting](#troubleshooting)
+8. [Canvas Elements](#canvas-elements) — Links, sensors, and template elements on the canvas
+9. [Custom CSS](#-custom-css) — Global and per-entity style customization
+10. [Visual Layout Options](#-visual-options)
+11. [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -39,10 +40,14 @@ Very useful when you have a lot of lights, and searching for the one you need by
 
 - Interactive 2D layout to position lights exactly where they are in a room.
 - Multi-select and batch control color, brightness, and temperature.
-- Support for Scenes, Switches, and Input Booleans, customizable display colors for switches and scenes.
+- Support for Scenes, Switches, Binary Sensors, and Input Booleans with customizable display colors.
 - Background image support (URL, size, blend modes).
 - Optional default entity for whole-room adjustments.
 - Toggleable floating/below controls to match your dashboard style.
+- Glow effects with multiple shapes (cone, round, oval, beam, spotlight, bar, custom polar) and wall occlusion.
+- Canvas elements: place sensor readouts, navigation links, and text labels alongside your lights.
+- Icon rotation, mirroring, and per-entity style customization.
+- Custom CSS injection for full visual control.
 
 ---
 
@@ -199,8 +204,8 @@ Position history stores up to 50 steps.
 | `switch_on_color` | string | `"#ffa500"` | Default color for active switches. |
 | `switch_off_color` | string | `"#2a2a2a"` | Default color for inactive switches. |
 | `scene_color` | string | `"#6366f1"` | Default color for scenes. |
-| `show_settings_button` | boolean | `true` | Display settings gear in card header. |
 | `always_show_controls` | boolean | `false` | Always show color controls even when nothing selected. Use if you prefer persistent sliders that are always there even if nothing is selected and there's no default_entity. |
+| `minimal_ui` | boolean | `false` | Hides light circles; shows only icons. Automatically enables `icon_only_mode`. |
 | `controls_below` | boolean | `true` | Render controls below (`true`) or floating over (`false`). |
 | `default_entity` | string | `null` | Entity to control when nothing is selected. |
 | `switch_single_tap` | boolean | `false` | Toggle switches/scenes with a single tap instead of selecting them. |
@@ -208,16 +213,23 @@ Position history stores up to 50 steps.
 | `icon_style` | string | `"mdi"` | Icon style (`mdi` or `emoji`). |
 | `light_size` | number | `56` | Size of light circles in pixels (24-96). |
 | `icon_only_mode` | boolean | `false` | Display lights as icons only (no filled circles). |
+| `icon_rotation` | number | `0` | Global icon rotation in degrees (0–360). |
+| `icon_rotation_overrides` | map | `{}` | Per-entity icon rotation overrides (e.g., `light.lamp: 90`). |
+| `icon_mirror` | string | `"none"` | Global icon mirroring: `none`, `horizontal`, `vertical`, or `both`. |
+| `icon_mirror_overrides` | map | `{}` | Per-entity icon mirror overrides (e.g., `light.lamp: "horizontal"`). |
 | `size_overrides` | map | `{}` | Per-entity size overrides (e.g., `light.lamp: 40`). |
 | `icon_only_overrides` | map | `{}` | Per-entity icon-only mode overrides (e.g., `light.lamp: true`). |
 | `background_image` | string/map | `null` | URL string or object `{url, size, position, blend_mode}`. |
 | `color_presets` | list | `[]` | Hex color strings to show as quick-select circles (e.g., `["#ff0000", "#00ff00"]`). |
 | `show_live_colors` | boolean | `false` | Show the current colors of your lights as additional preset circles. |
+| `binary_sensor_on_color` | string | `"#4caf50"` | Default color for binary sensors in the `on` state. |
+| `binary_sensor_off_color` | string | `"#2a2a2a"` | Default color for binary sensors in the `off` state. |
 | `temperature_min` | number | `null` | Override minimum Kelvin for temperature slider. |
 | `temperature_max` | number | `null` | Override maximum Kelvin for temperature slider. |
 | `glow` | map | `{}` | Glow effect configuration (see [Glow Effects](#-glow-effects) section). |
 | `glow_overrides` | map | `{}` | Per-entity glow overrides (e.g., `light.lamp: {direction: 180}`). |
 | `glow_walls` | list | `[]` | Line segments or boxes that block glow expansion (see [Glow Walls](#glow-walls)). |
+| `canvas_elements` | list | `[]` | Non-entity elements on the canvas (links, sensors, templates). See [Canvas Elements](#canvas-elements). |
 | `custom_css` | string | `""` | Custom CSS injected into the card's shadow DOM. |
 | `style_overrides` | map | `{}` | Per-entity inline CSS style overrides (e.g., `light.lamp: "filter: blur(2px);"`). |
 
@@ -492,6 +504,79 @@ Glow walls can also be configured in the visual editor's **Glow Walls** section.
 
 ---
 
+## Canvas Elements
+
+Place non-entity elements on the canvas alongside your lights. Useful for navigation links, sensor readouts, or custom labels.
+
+Three element types are supported:
+
+| Type | Description |
+|------|-------------|
+| `link` | An icon button with configurable tap/hold/double-tap actions. |
+| `sensor` | Displays an entity's state value (with optional prefix/suffix) and icon. |
+| `template` | Displays static text content with an optional icon. |
+
+### Element Properties
+
+All element types share these properties:
+
+| Property | Type | Default | Description |
+|----------|------|---------|-------------|
+| `type` | string | **required** | `link`, `sensor`, or `template`. |
+| `position` | map | `{x: 50, y: 50}` | Position on canvas in percentage coordinates. |
+| `label` | string | `null` | Text label displayed on the element. |
+| `show_background` | boolean | `true` | Show a background behind the element. |
+| `tap_action` | map | `null` | Action on tap (see below). |
+| `hold_action` | map | `null` | Action on long-press. |
+| `double_tap_action` | map | `null` | Action on double-tap. |
+| `style` | map | `{}` | Styling: `color`, `font_size`, `font_weight`, `opacity`, `background`, `border_radius`, `letter_spacing`, `text_shadow`. |
+
+**Link** elements also accept `icon` (default `"mdi:link"`) and `size` (default `40`).
+
+**Sensor** elements also accept `entity` (required), `prefix`, `suffix` (default: entity's `unit_of_measurement`), `show_icon` (default `true`), and `icon` (default: entity's icon).
+
+**Template** elements also accept `content` (static text) and `icon`.
+
+### Actions
+
+Actions follow the standard Home Assistant format:
+
+| Action | Description |
+|--------|-------------|
+| `more-info` | Open the entity's more-info dialog. |
+| `toggle` | Toggle the entity. |
+| `navigate` | Navigate to a path (`navigation_path`). |
+| `url` | Open a URL (`url_path`). |
+| `call-service` | Call a service (`service`, `service_data`/`data`). |
+| `none` | Do nothing. |
+
+### Example
+
+```yaml
+canvas_elements:
+  - type: sensor
+    entity: sensor.living_room_temperature
+    position: {x: 80, y: 10}
+    suffix: "°C"
+  - type: link
+    icon: mdi:floor-plan
+    label: "Kitchen"
+    position: {x: 95, y: 50}
+    tap_action:
+      action: navigate
+      navigation_path: /lovelace/kitchen
+  - type: template
+    content: "Living Room"
+    position: {x: 50, y: 5}
+    style:
+      font_size: 16
+      opacity: 0.6
+```
+
+Canvas elements can be configured in the visual editor's **Canvas Elements** section.
+
+---
+
 ## 🔧 Custom CSS
 
 ### Global Custom CSS
@@ -576,10 +661,10 @@ It also has color presets (for quickly setting lights to a specific color) and a
 This card made turning dozens of lights to nice colors in arbitrary ways much easier.
 
 ## ToDo
-- [ ] Think about adding arbitrary templates/HTML
 - [ ] Color effects (not just colors) among presets (with icons?)
-- [ ] Add a setting for toggling lights with a single tap
 - [ ] Think about a way to toggle groups of lights/the default entity?
 - [x] Allow users to add arbitrary css to individual lights and to the whole card.
 - [x] Allow adding a light glow (directional/non-directional) from the lights with multiple shapes, custom polar shapes, soft edges, wall occlusion, and per-entity overrides.
+- [x] Add canvas elements (links, sensors, templates) for non-entity content on the canvas.
+- [x] Add a setting for toggling lights with a single tap (`switch_single_tap`).
 

@@ -254,27 +254,32 @@ class SpatialLightColorCard extends HTMLElement {
 
   /** Normalize a single glow config object, filling in defaults. */
   _normalizeGlowConfig(obj) {
+    const VALID_SHAPES = ['cone', 'circle', 'oval', 'beam', 'semicircle'];
     const defaults = {
       enabled: false,
+      shape: 'cone',          // cone, circle, oval, beam, semicircle
       direction: 0,           // 0=down, 90=right, 180=up, 270=left
-      length: 80,             // max length in px
-      width: 60,              // spread width in px
+      length: 80,             // max length in px (cone/beam height; oval vertical radius)
+      width: 60,              // spread width in px (cone base width; circle/oval diameter)
       intensity: 0.7,         // max opacity (0-1)
-      blur: 12,               // blur radius in px
+      blur: 12,               // overall blur radius in px
+      edge_blur: 0.4,         // edge softness 0-1 (0=hard, 1=very soft)
       offset_x: 0,            // horizontal offset from center
       offset_y: 0,            // vertical offset from center
-      spread: 1.5,            // far-end width multiplier (1=no spread)
+      spread: 1.5,            // cone/beam far-end width multiplier (1=no widening)
       scale_with_brightness: true,
       color: null,            // null = use entity color
     };
     if (!obj || typeof obj !== 'object') return defaults;
     return {
       enabled: obj.enabled === true,
+      shape: VALID_SHAPES.includes(obj.shape) ? obj.shape : defaults.shape,
       direction: Number.isFinite(Number(obj.direction)) ? Number(obj.direction) : defaults.direction,
       length: Number.isFinite(Number(obj.length)) && Number(obj.length) > 0 ? Number(obj.length) : defaults.length,
       width: Number.isFinite(Number(obj.width)) && Number(obj.width) > 0 ? Number(obj.width) : defaults.width,
       intensity: Number.isFinite(Number(obj.intensity)) ? Math.max(0, Math.min(1, Number(obj.intensity))) : defaults.intensity,
       blur: Number.isFinite(Number(obj.blur)) && Number(obj.blur) >= 0 ? Number(obj.blur) : defaults.blur,
+      edge_blur: Number.isFinite(Number(obj.edge_blur)) ? Math.max(0, Math.min(1, Number(obj.edge_blur))) : defaults.edge_blur,
       offset_x: Number.isFinite(Number(obj.offset_x)) ? Number(obj.offset_x) : defaults.offset_x,
       offset_y: Number.isFinite(Number(obj.offset_y)) ? Number(obj.offset_y) : defaults.offset_y,
       spread: Number.isFinite(Number(obj.spread)) && Number(obj.spread) > 0 ? Number(obj.spread) : defaults.spread,
@@ -285,16 +290,19 @@ class SpatialLightColorCard extends HTMLElement {
 
   /** Normalize per-entity glow overrides. Each value is a partial glow config. */
   _normalizeGlowOverrides(obj) {
+    const VALID_SHAPES = ['cone', 'circle', 'oval', 'beam', 'semicircle'];
     const result = {};
     if (!obj || typeof obj !== 'object') return result;
     Object.entries(obj).forEach(([entity, val]) => {
       if (!val || typeof val !== 'object') return;
       const o = {};
+      if (VALID_SHAPES.includes(val.shape)) o.shape = val.shape;
       if (val.direction != null && Number.isFinite(Number(val.direction))) o.direction = Number(val.direction);
       if (val.length != null && Number.isFinite(Number(val.length)) && Number(val.length) > 0) o.length = Number(val.length);
       if (val.width != null && Number.isFinite(Number(val.width)) && Number(val.width) > 0) o.width = Number(val.width);
       if (val.intensity != null && Number.isFinite(Number(val.intensity))) o.intensity = Math.max(0, Math.min(1, Number(val.intensity)));
       if (val.blur != null && Number.isFinite(Number(val.blur)) && Number(val.blur) >= 0) o.blur = Number(val.blur);
+      if (val.edge_blur != null && Number.isFinite(Number(val.edge_blur))) o.edge_blur = Math.max(0, Math.min(1, Number(val.edge_blur)));
       if (val.offset_x != null && Number.isFinite(Number(val.offset_x))) o.offset_x = Number(val.offset_x);
       if (val.offset_y != null && Number.isFinite(Number(val.offset_y))) o.offset_y = Number(val.offset_y);
       if (val.spread != null && Number.isFinite(Number(val.spread)) && Number(val.spread) > 0) o.spread = Number(val.spread);
@@ -1368,13 +1376,13 @@ class SpatialLightColorCard extends HTMLElement {
         position: absolute;
         left: 50%;
         top: 50%;
-        width: 60px;
+        width: 0;
         height: 0;
         transform-origin: 50% 0%;
         pointer-events: none;
         z-index: -1;
         opacity: 0;
-        transition: opacity 400ms ease, height 400ms ease;
+        transition: opacity 400ms ease, width 400ms ease, height 400ms ease;
       }
       /* Reduce glow for unselected lights when a selection is active */
       .canvas.has-selection .light:not(.selected) .light-glow {
@@ -4087,10 +4095,10 @@ class SpatialLightColorCard extends HTMLElement {
   /** ---------- Directional glow updates ---------- */
 
   /**
-   * Update the directional glow element for a single light based on entity state.
-   * The glow is a cone-shaped gradient that emanates from the light icon,
-   * with its direction, size, and intensity driven by configuration and
-   * the entity's brightness/color.
+   * Update the glow element for a single light based on entity state.
+   * Supports multiple glow shapes: cone, circle, oval, beam, semicircle.
+   * Each shape uses a combination of radial/conic gradients and masks
+   * to produce the desired light effect.
    */
   _updateGlow(lightEl, entityId, state) {
     const glowEl = lightEl.querySelector('.light-glow');
@@ -4099,6 +4107,7 @@ class SpatialLightColorCard extends HTMLElement {
     const isOn = state.state === 'on';
     if (!isOn) {
       glowEl.style.opacity = '0';
+      glowEl.style.width = '0';
       glowEl.style.height = '0';
       return;
     }
@@ -4108,45 +4117,218 @@ class SpatialLightColorCard extends HTMLElement {
     const ratio = brightness / 255;
 
     // Determine the glow color
-    let rgb;
-    if (gc.color) {
-      rgb = this._parseColorToRGB(gc.color);
-    }
+    let rgb = gc.color ? this._parseColorToRGB(gc.color) : null;
     if (!rgb) {
       const color = this._resolveEntityColor(entityId, true, state.attributes);
       rgb = this._parseColorToRGB(color);
     }
-    if (!rgb) {
-      rgb = { r: 255, g: 165, b: 0 }; // fallback orange
-    }
+    if (!rgb) rgb = { r: 255, g: 165, b: 0 }; // fallback orange
 
-    // Scale dimensions with brightness if configured
-    const length = gc.scale_with_brightness ? gc.length * Math.max(ratio, 0.1) : gc.length;
     const opacity = gc.scale_with_brightness ? gc.intensity * Math.max(ratio, 0.05) : gc.intensity;
 
-    // Build the cone clip-path using spread
-    // At the top (origin): narrower. At the bottom (far end): wider.
-    // spread=1 means same width top and bottom (cylinder)
-    // spread=2 means twice as wide at the far end
-    const topInset = 50 - (50 / gc.spread);  // % from each side at top
-    const clipPath = `polygon(${topInset}% 0%, ${100 - topInset}% 0%, 100% 100%, 0% 100%)`;
+    // Dispatch to shape-specific renderer
+    switch (gc.shape) {
+      case 'circle':
+        this._applyGlowCircle(glowEl, gc, rgb, ratio);
+        break;
+      case 'oval':
+        this._applyGlowOval(glowEl, gc, rgb, ratio);
+        break;
+      case 'beam':
+        this._applyGlowBeam(glowEl, gc, rgb, ratio);
+        break;
+      case 'semicircle':
+        this._applyGlowSemicircle(glowEl, gc, rgb, ratio);
+        break;
+      case 'cone':
+      default:
+        this._applyGlowCone(glowEl, gc, rgb, ratio);
+        break;
+    }
 
-    // Build radial gradient: concentrated at origin, fading outward
-    const { r, g, b } = rgb;
-    const gradient = `radial-gradient(ellipse at 50% 0%, `
-      + `rgba(${r},${g},${b},0.9) 0%, `
-      + `rgba(${r},${g},${b},0.35) 30%, `
-      + `rgba(${r},${g},${b},0.08) 65%, `
-      + `transparent 100%)`;
-
-    // Apply styles
-    glowEl.style.width = `${gc.width}px`;
-    glowEl.style.height = `${length}px`;
-    glowEl.style.transform = `translateX(-50%) translateY(${gc.offset_y}px) translateX(${gc.offset_x}px) rotate(${gc.direction}deg)`;
-    glowEl.style.clipPath = clipPath;
-    glowEl.style.background = gradient;
     glowEl.style.filter = `blur(${gc.blur}px)`;
     glowEl.style.opacity = String(opacity);
+  }
+
+  /**
+   * Cone shape: a directed light cone emanating from the icon center.
+   * Uses a conic-gradient mask to create the cone boundaries with soft edges,
+   * and a radial gradient for the color falloff along the beam.
+   */
+  _applyGlowCone(el, gc, rgb, ratio) {
+    const length = gc.scale_with_brightness ? gc.length * Math.max(ratio, 0.1) : gc.length;
+    const { r, g, b } = rgb;
+
+    // Compute the cone half-angle from width, spread, and length.
+    // spread multiplies the effective width at the far end.
+    const halfWidth = gc.width * gc.spread / 2;
+    const halfAngle = Math.atan2(halfWidth, length) * 180 / Math.PI;
+
+    // edge_blur (0-1) controls how many degrees the mask transition spans.
+    // At 0 the edges are hard; at 1 the transition equals the half-angle.
+    const edgeBlurDeg = gc.edge_blur * halfAngle;
+
+    // Conic mask centered at top-center, cone opens downward (180° in conic space).
+    // CSS conic-gradient accepts any angle (including negative/> 360), no clamping needed.
+    const mask = `conic-gradient(from 0deg at 50% 0%, `
+      + `transparent ${180 - halfAngle - edgeBlurDeg}deg, `
+      + `black ${180 - halfAngle + edgeBlurDeg}deg, `
+      + `black ${180 + halfAngle - edgeBlurDeg}deg, `
+      + `transparent ${180 + halfAngle + edgeBlurDeg}deg)`;
+
+    // Radial gradient: bright at origin, fading along the length.
+    // Use the full cone width so the gradient fills the masked area.
+    const gradient = `radial-gradient(${halfWidth}px ${length}px at 50% 0%, `
+      + `rgba(${r},${g},${b},0.9) 0%, `
+      + `rgba(${r},${g},${b},0.35) 35%, `
+      + `rgba(${r},${g},${b},0.08) 70%, `
+      + `transparent 100%)`;
+
+    // Element must be wide enough for the full cone + blur overshoot
+    const elWidth = gc.width * gc.spread;
+
+    el.style.width = `${elWidth}px`;
+    el.style.height = `${length}px`;
+    el.style.transformOrigin = '50% 0%';
+    el.style.transform = `translateX(-50%) translateY(${gc.offset_y}px) translateX(${gc.offset_x}px) rotate(${gc.direction}deg)`;
+    el.style.background = gradient;
+    el.style.maskImage = mask;
+    el.style.webkitMaskImage = mask;
+    el.style.clipPath = 'none';
+    el.style.borderRadius = '0';
+  }
+
+  /**
+   * Circle shape: omnidirectional soft glow centered on the icon.
+   * A simple radial gradient; direction is ignored.
+   */
+  _applyGlowCircle(el, gc, rgb, ratio) {
+    const size = gc.scale_with_brightness ? gc.width * Math.max(ratio, 0.15) : gc.width;
+    const { r, g, b } = rgb;
+
+    const gradient = `radial-gradient(circle at 50% 50%, `
+      + `rgba(${r},${g},${b},0.85) 0%, `
+      + `rgba(${r},${g},${b},0.3) 35%, `
+      + `rgba(${r},${g},${b},0.06) 65%, `
+      + `transparent 100%)`;
+
+    el.style.width = `${size}px`;
+    el.style.height = `${size}px`;
+    el.style.transformOrigin = '50% 50%';
+    el.style.transform = `translate(-50%, -50%) translateX(${gc.offset_x}px) translateY(${gc.offset_y}px)`;
+    el.style.background = gradient;
+    el.style.maskImage = 'none';
+    el.style.webkitMaskImage = 'none';
+    el.style.clipPath = 'none';
+    el.style.borderRadius = '50%';
+  }
+
+  /**
+   * Oval shape: elliptical glow centered on the icon, oriented by direction.
+   * Width and length control the two axes of the ellipse.
+   */
+  _applyGlowOval(el, gc, rgb, ratio) {
+    const w = gc.scale_with_brightness ? gc.width * Math.max(ratio, 0.15) : gc.width;
+    const h = gc.scale_with_brightness ? gc.length * Math.max(ratio, 0.15) : gc.length;
+    const { r, g, b } = rgb;
+
+    const gradient = `radial-gradient(ellipse at 50% 50%, `
+      + `rgba(${r},${g},${b},0.85) 0%, `
+      + `rgba(${r},${g},${b},0.3) 35%, `
+      + `rgba(${r},${g},${b},0.06) 65%, `
+      + `transparent 100%)`;
+
+    el.style.width = `${w}px`;
+    el.style.height = `${h}px`;
+    el.style.transformOrigin = '50% 50%';
+    el.style.transform = `translate(-50%, -50%) translateX(${gc.offset_x}px) translateY(${gc.offset_y}px) rotate(${gc.direction}deg)`;
+    el.style.background = gradient;
+    el.style.maskImage = 'none';
+    el.style.webkitMaskImage = 'none';
+    el.style.clipPath = 'none';
+    el.style.borderRadius = '50%';
+  }
+
+  /**
+   * Beam shape: a narrow focused beam from the icon.
+   * Similar to cone but constrained to a narrow angle, creating
+   * a spotlight/laser-like effect. spread controls slight widening.
+   */
+  _applyGlowBeam(el, gc, rgb, ratio) {
+    const length = gc.scale_with_brightness ? gc.length * Math.max(ratio, 0.1) : gc.length;
+    const { r, g, b } = rgb;
+
+    // Beam is a narrow version: use width/3 as the effective beam width,
+    // with spread still applying as a multiplier.
+    const beamWidth = gc.width / 3;
+    const halfWidth = beamWidth * gc.spread / 2;
+    const halfAngle = Math.atan2(halfWidth, length) * 180 / Math.PI;
+    const edgeBlurDeg = gc.edge_blur * halfAngle;
+
+    // Same conic mask approach as cone but with tighter angle
+    const mask = `conic-gradient(from 0deg at 50% 0%, `
+      + `transparent ${180 - halfAngle - edgeBlurDeg}deg, `
+      + `black ${180 - halfAngle + edgeBlurDeg}deg, `
+      + `black ${180 + halfAngle - edgeBlurDeg}deg, `
+      + `transparent ${180 + halfAngle + edgeBlurDeg}deg)`;
+
+    // Brighter gradient for focused beam
+    const gradient = `radial-gradient(${halfWidth}px ${length}px at 50% 0%, `
+      + `rgba(${r},${g},${b},0.95) 0%, `
+      + `rgba(${r},${g},${b},0.45) 30%, `
+      + `rgba(${r},${g},${b},0.1) 70%, `
+      + `transparent 100%)`;
+
+    const elWidth = beamWidth * gc.spread;
+
+    el.style.width = `${elWidth}px`;
+    el.style.height = `${length}px`;
+    el.style.transformOrigin = '50% 0%';
+    el.style.transform = `translateX(-50%) translateY(${gc.offset_y}px) translateX(${gc.offset_x}px) rotate(${gc.direction}deg)`;
+    el.style.background = gradient;
+    el.style.maskImage = mask;
+    el.style.webkitMaskImage = mask;
+    el.style.clipPath = 'none';
+    el.style.borderRadius = '0';
+  }
+
+  /**
+   * Semicircle shape: a half-circle glow emanating in the configured direction.
+   * Useful for wall sconces or other lights that cast light to one side.
+   * Uses a conic mask to clip a circular gradient to a 180° arc.
+   */
+  _applyGlowSemicircle(el, gc, rgb, ratio) {
+    const size = gc.scale_with_brightness ? gc.width * Math.max(ratio, 0.15) : gc.width;
+    const { r, g, b } = rgb;
+
+    // edge_blur controls how soft the straight edges of the semicircle are.
+    // Convert to degrees: max 45° transition at edge_blur=1
+    const edgeBlurDeg = gc.edge_blur * 45;
+
+    // Conic mask centered at element center, semicircle opens downward (180°).
+    // Visible range: 90° to 270° (bottom half).
+    // The element rotation will handle the desired direction.
+    const mask = `conic-gradient(from 0deg at 50% 50%, `
+      + `transparent ${90 - edgeBlurDeg}deg, `
+      + `black ${90 + edgeBlurDeg}deg, `
+      + `black ${270 - edgeBlurDeg}deg, `
+      + `transparent ${270 + edgeBlurDeg}deg)`;
+
+    const gradient = `radial-gradient(circle at 50% 50%, `
+      + `rgba(${r},${g},${b},0.85) 0%, `
+      + `rgba(${r},${g},${b},0.3) 35%, `
+      + `rgba(${r},${g},${b},0.06) 65%, `
+      + `transparent 100%)`;
+
+    el.style.width = `${size}px`;
+    el.style.height = `${size}px`;
+    el.style.transformOrigin = '50% 50%';
+    el.style.transform = `translate(-50%, -50%) translateX(${gc.offset_x}px) translateY(${gc.offset_y}px) rotate(${gc.direction}deg)`;
+    el.style.background = gradient;
+    el.style.maskImage = mask;
+    el.style.webkitMaskImage = mask;
+    el.style.clipPath = 'none';
+    el.style.borderRadius = '50%';
   }
 
   /** Update glows for all light elements. Called from updateLights(). */

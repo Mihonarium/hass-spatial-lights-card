@@ -190,6 +190,10 @@ class SpatialLightColorCard extends HTMLElement {
       icon_mirror: ['horizontal', 'vertical', 'both'].includes(config.icon_mirror) ? config.icon_mirror : 'none',
       icon_mirror_overrides: this._normalizeMirrorOverrides(config.icon_mirror_overrides),
 
+      // Directional glow configuration (minimal-ui mode)
+      glow: this._normalizeGlowConfig(config.glow),
+      glow_overrides: this._normalizeGlowOverrides(config.glow_overrides),
+
       // Color customization
       switch_on_color: config.switch_on_color || '#ffa500',
       switch_off_color: config.switch_off_color || '#3a3a3a',
@@ -246,6 +250,92 @@ class SpatialLightColorCard extends HTMLElement {
       });
     }
     return result;
+  }
+
+  /** Normalize a single glow config object, filling in defaults. */
+  _normalizeGlowConfig(obj) {
+    const defaults = {
+      enabled: false,
+      direction: 0,           // 0=down, 90=right, 180=up, 270=left
+      length: 80,             // max length in px
+      width: 60,              // spread width in px
+      intensity: 0.7,         // max opacity (0-1)
+      blur: 12,               // blur radius in px
+      offset_x: 0,            // horizontal offset from center
+      offset_y: 0,            // vertical offset from center
+      spread: 1.5,            // far-end width multiplier (1=no spread)
+      scale_with_brightness: true,
+      color: null,            // null = use entity color
+    };
+    if (!obj || typeof obj !== 'object') return defaults;
+    return {
+      enabled: obj.enabled === true,
+      direction: Number.isFinite(Number(obj.direction)) ? Number(obj.direction) : defaults.direction,
+      length: Number.isFinite(Number(obj.length)) && Number(obj.length) > 0 ? Number(obj.length) : defaults.length,
+      width: Number.isFinite(Number(obj.width)) && Number(obj.width) > 0 ? Number(obj.width) : defaults.width,
+      intensity: Number.isFinite(Number(obj.intensity)) ? Math.max(0, Math.min(1, Number(obj.intensity))) : defaults.intensity,
+      blur: Number.isFinite(Number(obj.blur)) && Number(obj.blur) >= 0 ? Number(obj.blur) : defaults.blur,
+      offset_x: Number.isFinite(Number(obj.offset_x)) ? Number(obj.offset_x) : defaults.offset_x,
+      offset_y: Number.isFinite(Number(obj.offset_y)) ? Number(obj.offset_y) : defaults.offset_y,
+      spread: Number.isFinite(Number(obj.spread)) && Number(obj.spread) > 0 ? Number(obj.spread) : defaults.spread,
+      scale_with_brightness: obj.scale_with_brightness !== false,
+      color: typeof obj.color === 'string' && obj.color.trim() ? obj.color.trim() : null,
+    };
+  }
+
+  /** Normalize per-entity glow overrides. Each value is a partial glow config. */
+  _normalizeGlowOverrides(obj) {
+    const result = {};
+    if (!obj || typeof obj !== 'object') return result;
+    Object.entries(obj).forEach(([entity, val]) => {
+      if (!val || typeof val !== 'object') return;
+      const o = {};
+      if (val.direction != null && Number.isFinite(Number(val.direction))) o.direction = Number(val.direction);
+      if (val.length != null && Number.isFinite(Number(val.length)) && Number(val.length) > 0) o.length = Number(val.length);
+      if (val.width != null && Number.isFinite(Number(val.width)) && Number(val.width) > 0) o.width = Number(val.width);
+      if (val.intensity != null && Number.isFinite(Number(val.intensity))) o.intensity = Math.max(0, Math.min(1, Number(val.intensity)));
+      if (val.blur != null && Number.isFinite(Number(val.blur)) && Number(val.blur) >= 0) o.blur = Number(val.blur);
+      if (val.offset_x != null && Number.isFinite(Number(val.offset_x))) o.offset_x = Number(val.offset_x);
+      if (val.offset_y != null && Number.isFinite(Number(val.offset_y))) o.offset_y = Number(val.offset_y);
+      if (val.spread != null && Number.isFinite(Number(val.spread)) && Number(val.spread) > 0) o.spread = Number(val.spread);
+      if (val.scale_with_brightness != null) o.scale_with_brightness = val.scale_with_brightness !== false;
+      if (typeof val.color === 'string' && val.color.trim()) o.color = val.color.trim();
+      if (Object.keys(o).length > 0) result[entity] = o;
+    });
+    return result;
+  }
+
+  /** Return the effective glow config for a specific entity (global merged with per-entity overrides). */
+  _getGlowConfig(entity_id) {
+    const base = this._config.glow;
+    const override = this._config.glow_overrides[entity_id];
+    if (!override) return base;
+    return { ...base, ...override };
+  }
+
+  /** Parse a CSS color string to {r, g, b}. Returns null if unparseable. */
+  _parseColorToRGB(color) {
+    if (!color || color === 'transparent') return null;
+
+    // Handle rgb(r, g, b)
+    const rgbMatch = color.match(/^rgb\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*\)$/i);
+    if (rgbMatch) return { r: parseInt(rgbMatch[1]), g: parseInt(rgbMatch[2]), b: parseInt(rgbMatch[3]) };
+
+    // Handle #hex
+    let hex = color;
+    if (hex.startsWith('#')) {
+      hex = hex.slice(1);
+      if (hex.length === 3) hex = hex[0] + hex[0] + hex[1] + hex[1] + hex[2] + hex[2];
+      if (hex.length === 6) {
+        return {
+          r: parseInt(hex.slice(0, 2), 16),
+          g: parseInt(hex.slice(2, 4), 16),
+          b: parseInt(hex.slice(4, 6), 16),
+        };
+      }
+    }
+
+    return null;
   }
 
   _normalizeCanvasElements(elements) {
@@ -1273,6 +1363,24 @@ class SpatialLightColorCard extends HTMLElement {
         box-shadow: 0 0 10px rgba(99,102,241,0.45), 0 0 8px var(--light-color, #ffa500);
       }
 
+      /* Directional glow (minimal-ui mode) */
+      .light-glow {
+        position: absolute;
+        left: 50%;
+        top: 50%;
+        width: 60px;
+        height: 0;
+        transform-origin: 50% 0%;
+        pointer-events: none;
+        z-index: -1;
+        opacity: 0;
+        transition: opacity 400ms ease, height 400ms ease;
+      }
+      /* Reduce glow for unselected lights when a selection is active */
+      .canvas.has-selection .light:not(.selected) .light-glow {
+        filter: brightness(0.4) saturate(0.4);
+      }
+
       .light-icon-emoji { font-size: calc(32px * var(--icon-scale, 1)); line-height: 1; filter: drop-shadow(0 1px 2px rgba(0,0,0,0.6)); transform: var(--icon-transform, none); }
       .light-icon-mdi { --mdc-icon-size: calc(32px * var(--icon-scale, 1)); color: rgba(255,255,255,0.92); filter: drop-shadow(0 1px 2px rgba(0,0,0,0.6)); transform: var(--icon-transform, none); }
 
@@ -1839,6 +1947,11 @@ class SpatialLightColorCard extends HTMLElement {
         }
       }
 
+      // Add glow element for minimal-ui mode when glow is enabled
+      const glowHtml = (isMinimalUI && this._config.glow.enabled)
+        ? '<div class="light-glow"></div>'
+        : '';
+
       return `
         <div class="light ${stateClass} ${isSelected ? 'selected' : ''} ${iconOnlyClass}"
              style="${style}"
@@ -1847,6 +1960,7 @@ class SpatialLightColorCard extends HTMLElement {
              role="button"
              aria-label="${st.attributes.friendly_name || entity_id}"
              aria-pressed="${isSelected}">
+          ${glowHtml}
           ${iconData ? this._renderIcon(iconData) : ''}
           <div class="light-label">${label}</div>
         </div>
@@ -3970,6 +4084,83 @@ class SpatialLightColorCard extends HTMLElement {
     ctx.restore();
   }
 
+  /** ---------- Directional glow updates ---------- */
+
+  /**
+   * Update the directional glow element for a single light based on entity state.
+   * The glow is a cone-shaped gradient that emanates from the light icon,
+   * with its direction, size, and intensity driven by configuration and
+   * the entity's brightness/color.
+   */
+  _updateGlow(lightEl, entityId, state) {
+    const glowEl = lightEl.querySelector('.light-glow');
+    if (!glowEl) return;
+
+    const isOn = state.state === 'on';
+    if (!isOn) {
+      glowEl.style.opacity = '0';
+      glowEl.style.height = '0';
+      return;
+    }
+
+    const gc = this._getGlowConfig(entityId);
+    const brightness = state.attributes.brightness || 0; // 0-255
+    const ratio = brightness / 255;
+
+    // Determine the glow color
+    let rgb;
+    if (gc.color) {
+      rgb = this._parseColorToRGB(gc.color);
+    }
+    if (!rgb) {
+      const color = this._resolveEntityColor(entityId, true, state.attributes);
+      rgb = this._parseColorToRGB(color);
+    }
+    if (!rgb) {
+      rgb = { r: 255, g: 165, b: 0 }; // fallback orange
+    }
+
+    // Scale dimensions with brightness if configured
+    const length = gc.scale_with_brightness ? gc.length * Math.max(ratio, 0.1) : gc.length;
+    const opacity = gc.scale_with_brightness ? gc.intensity * Math.max(ratio, 0.05) : gc.intensity;
+
+    // Build the cone clip-path using spread
+    // At the top (origin): narrower. At the bottom (far end): wider.
+    // spread=1 means same width top and bottom (cylinder)
+    // spread=2 means twice as wide at the far end
+    const topInset = 50 - (50 / gc.spread);  // % from each side at top
+    const clipPath = `polygon(${topInset}% 0%, ${100 - topInset}% 0%, 100% 100%, 0% 100%)`;
+
+    // Build radial gradient: concentrated at origin, fading outward
+    const { r, g, b } = rgb;
+    const gradient = `radial-gradient(ellipse at 50% 0%, `
+      + `rgba(${r},${g},${b},0.9) 0%, `
+      + `rgba(${r},${g},${b},0.35) 30%, `
+      + `rgba(${r},${g},${b},0.08) 65%, `
+      + `transparent 100%)`;
+
+    // Apply styles
+    glowEl.style.width = `${gc.width}px`;
+    glowEl.style.height = `${length}px`;
+    glowEl.style.transform = `translateX(-50%) translateY(${gc.offset_y}px) translateX(${gc.offset_x}px) rotate(${gc.direction}deg)`;
+    glowEl.style.clipPath = clipPath;
+    glowEl.style.background = gradient;
+    glowEl.style.filter = `blur(${gc.blur}px)`;
+    glowEl.style.opacity = String(opacity);
+  }
+
+  /** Update glows for all light elements. Called from updateLights(). */
+  _updateAllGlows() {
+    if (!this._config.glow.enabled || !this._config.minimal_ui) return;
+    const lights = this.shadowRoot.querySelectorAll('.light');
+    lights.forEach(lightEl => {
+      const id = lightEl.dataset.entity;
+      const st = this._hass?.states[id];
+      if (!st) return;
+      this._updateGlow(lightEl, id, st);
+    });
+  }
+
   /** ---------- Light updates ---------- */
   updateLights() {
     if (!this._hass) return;
@@ -4041,6 +4232,7 @@ class SpatialLightColorCard extends HTMLElement {
     this._refreshColorPresets();
     this._refreshEntityIcons();
     this._updateCanvasElements();
+    this._updateAllGlows();
     // Reposition labels synchronously so they don't flash in the wrong
     // position for 1 frame before the rAF callback would run.
     // updateLights() only toggles classes/styles on existing DOM, so layout

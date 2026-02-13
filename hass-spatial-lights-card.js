@@ -190,6 +190,10 @@ class SpatialLightColorCard extends HTMLElement {
       icon_mirror: ['horizontal', 'vertical', 'both'].includes(config.icon_mirror) ? config.icon_mirror : 'none',
       icon_mirror_overrides: this._normalizeMirrorOverrides(config.icon_mirror_overrides),
 
+      // Directional glow configuration (minimal-ui mode)
+      glow: this._normalizeGlowConfig(config.glow),
+      glow_overrides: this._normalizeGlowOverrides(config.glow_overrides),
+
       // Color customization
       switch_on_color: config.switch_on_color || '#ffa500',
       switch_off_color: config.switch_off_color || '#3a3a3a',
@@ -206,7 +210,20 @@ class SpatialLightColorCard extends HTMLElement {
 
       // Canvas elements (non-entity elements: links, sensors, templates)
       canvas_elements: this._normalizeCanvasElements(config.canvas_elements),
+
+      // Custom CSS injection (global string appended to shadow DOM styles)
+      custom_css: typeof config.custom_css === 'string' ? config.custom_css : '',
+
+      // Per-entity inline style overrides (entity_id → CSS properties string)
+      style_overrides: this._normalizeStyleOverrides(config.style_overrides),
+
+      // Glow walls — line segments or boxes that block glow from expanding
+      glow_walls: this._normalizeGlowWalls(config.glow_walls),
     };
+
+    // Bump wall config version to invalidate per-entity wall mask caches
+    this._wallConfigVersion = (this._wallConfigVersion || 0) + 1;
+    this._wallMaskPerEntity = {};
 
     this._gridSize = this._config.grid_size;
 
@@ -216,8 +233,10 @@ class SpatialLightColorCard extends HTMLElement {
 
     this._initializePositions();
 
-    // Clear sensor cache on config change
+    // Clear caches on config change
     this._canvasElementCache = null;
+    this._customMaskCache = null;
+    this._wallMaskCache = null;
 
     // Re-render if hass is already available (config changed after first render)
     if (this._hass) {
@@ -246,6 +265,563 @@ class SpatialLightColorCard extends HTMLElement {
       });
     }
     return result;
+  }
+
+  /** Valid glow shape names. */
+  static get GLOW_SHAPES() {
+    return ['cone', 'semicone', 'round', 'oval', 'beam', 'spotlight', 'bar', 'custom'];
+  }
+
+  /** Valid glow falloff modes. */
+  static get GLOW_FALLOFFS() {
+    return ['smooth', 'linear', 'exponential', 'sharp', 'uniform'];
+  }
+
+  /** Normalize a single glow config object, filling in defaults. */
+  _normalizeGlowConfig(obj) {
+    const defaults = {
+      enabled: false,
+      shape: 'cone',            // cone, semicone, round, oval, beam, spotlight, bar
+      direction: 0,             // 0=down, 90=right, 180=up, 270=left
+      length: 80,               // max length in px (height for directional shapes, diameter for round)
+      width: 60,                // spread width in px
+      intensity: 0.7,           // max opacity (0-1)
+      blur: 12,                 // blur radius in px
+      offset_x: 0,              // horizontal offset from center
+      offset_y: 0,              // vertical offset from center
+      spread: 1.5,              // far-end width multiplier (1=no spread)
+      start_width: 0,           // 0-1: width fraction at origin (0=point, 0.5=half-width) — used by semicone
+      scale_with_brightness: true,
+      color: null,              // null = use entity color
+      edge_softness: 0,         // 0-1: how soft/feathered the edges of the shape are
+      falloff: 'smooth',        // smooth, linear, exponential, sharp — gradient curve
+      gradient_stops: null,     // custom array of [position%, opacity] e.g. [[0, 1], [50, 0.3], [100, 0]]
+      custom_shape: null,       // polar coords: [[angle°, radius 0-1], ...] — used with shape:'custom'
+    };
+    if (!obj || typeof obj !== 'object') return defaults;
+    return {
+      enabled: obj.enabled === true,
+      shape: SpatialLightColorCard.GLOW_SHAPES.includes(obj.shape) ? obj.shape : defaults.shape,
+      direction: Number.isFinite(Number(obj.direction)) ? Number(obj.direction) : defaults.direction,
+      length: Number.isFinite(Number(obj.length)) && Number(obj.length) > 0 ? Number(obj.length) : defaults.length,
+      width: Number.isFinite(Number(obj.width)) && Number(obj.width) > 0 ? Number(obj.width) : defaults.width,
+      intensity: Number.isFinite(Number(obj.intensity)) ? Math.max(0, Math.min(1, Number(obj.intensity))) : defaults.intensity,
+      blur: Number.isFinite(Number(obj.blur)) && Number(obj.blur) >= 0 ? Number(obj.blur) : defaults.blur,
+      offset_x: Number.isFinite(Number(obj.offset_x)) ? Number(obj.offset_x) : defaults.offset_x,
+      offset_y: Number.isFinite(Number(obj.offset_y)) ? Number(obj.offset_y) : defaults.offset_y,
+      spread: Number.isFinite(Number(obj.spread)) && Number(obj.spread) > 0 ? Number(obj.spread) : defaults.spread,
+      start_width: Number.isFinite(Number(obj.start_width)) ? Math.max(0, Math.min(1, Number(obj.start_width))) : defaults.start_width,
+      scale_with_brightness: obj.scale_with_brightness !== false,
+      color: typeof obj.color === 'string' && obj.color.trim() ? obj.color.trim() : null,
+      edge_softness: Number.isFinite(Number(obj.edge_softness)) ? Math.max(0, Math.min(1, Number(obj.edge_softness))) : defaults.edge_softness,
+      falloff: SpatialLightColorCard.GLOW_FALLOFFS.includes(obj.falloff) ? obj.falloff : defaults.falloff,
+      gradient_stops: this._normalizeGradientStops(obj.gradient_stops),
+      custom_shape: this._normalizeCustomShape(obj.custom_shape),
+    };
+  }
+
+  /** Normalize custom gradient stops: array of [position%, opacity] tuples. */
+  _normalizeGradientStops(stops) {
+    if (!Array.isArray(stops) || stops.length < 2) return null;
+    const result = [];
+    for (const stop of stops) {
+      if (!Array.isArray(stop) || stop.length < 2) continue;
+      const pos = Number(stop[0]);
+      const opacity = Number(stop[1]);
+      if (Number.isFinite(pos) && Number.isFinite(opacity)) {
+        result.push([Math.max(0, Math.min(100, pos)), Math.max(0, Math.min(1, opacity))]);
+      }
+    }
+    return result.length >= 2 ? result : null;
+  }
+
+  /**
+   * Normalize custom_shape: array of [angleDeg, radiusFraction] polar points.
+   * Angle 0 = forward direction (down by default), clockwise.
+   * Radius 0 = center, 1 = full extent.
+   * Minimum 3 points required to define a shape.
+   */
+  _normalizeCustomShape(shape) {
+    if (!Array.isArray(shape) || shape.length < 3) return null;
+    const result = [];
+    for (const point of shape) {
+      if (!Array.isArray(point) || point.length < 2) continue;
+      const angle = Number(point[0]);
+      const radius = Number(point[1]);
+      if (Number.isFinite(angle) && Number.isFinite(radius)) {
+        result.push([((angle % 360) + 360) % 360, Math.max(0, Math.min(2, radius))]);
+      }
+    }
+    return result.length >= 3 ? result : null;
+  }
+
+  /**
+   * Build a smooth clip-path polygon string from custom shape polar coordinates.
+   * Interpolates between defined points with cosine smoothing for organic shapes.
+   * Returns a CSS polygon() value string.
+   */
+  _buildCustomShapePolygon(customShape) {
+    const sorted = [...customShape].sort((a, b) => a[0] - b[0]);
+
+    // Generate interpolated points every 5° for a smooth curve (72 points)
+    const numPoints = 72;
+    const points = [];
+
+    for (let i = 0; i < numPoints; i++) {
+      const angleDeg = (i / numPoints) * 360;
+      const radius = this._interpolateCustomRadius(sorted, angleDeg);
+
+      // Convert polar to cartesian percentage coordinates.
+      // Convention: 0° = down (+y), 90° = right (+x), clockwise.
+      const angleRad = (angleDeg * Math.PI) / 180;
+      const x = 50 + radius * 50 * Math.sin(angleRad);
+      const y = 50 + radius * 50 * Math.cos(angleRad);
+      points.push(`${x.toFixed(2)}% ${y.toFixed(2)}%`);
+    }
+
+    return points.join(', ');
+  }
+
+  /**
+   * Cosine-interpolate the radius at a given angle between surrounding
+   * defined points in a sorted polar shape array.
+   */
+  _interpolateCustomRadius(sortedPoints, angleDeg) {
+    const n = sortedPoints.length;
+    const angle = ((angleDeg % 360) + 360) % 360;
+
+    // Find the two points surrounding the target angle
+    let beforeIdx = n - 1;
+    let afterIdx = 0;
+
+    for (let i = 0; i < n; i++) {
+      if (sortedPoints[i][0] > angle) {
+        afterIdx = i;
+        beforeIdx = (i - 1 + n) % n;
+        break;
+      }
+      if (i === n - 1) {
+        beforeIdx = n - 1;
+        afterIdx = 0;
+      }
+    }
+
+    const before = sortedPoints[beforeIdx];
+    const after = sortedPoints[afterIdx];
+
+    // Exact match
+    if (Math.abs(before[0] - angle) < 0.01) return before[1];
+    if (Math.abs(after[0] - angle) < 0.01) return after[1];
+
+    // Interpolation parameter t (handles 360° wrap-around)
+    let range = after[0] - before[0];
+    if (range <= 0) range += 360;
+    let diff = angle - before[0];
+    if (diff < 0) diff += 360;
+    const t = range > 0 ? diff / range : 0;
+
+    // Cosine interpolation for smooth organic curves
+    const t2 = (1 - Math.cos(t * Math.PI)) / 2;
+    return before[1] * (1 - t2) + after[1] * t2;
+  }
+
+  /**
+   * Get a cached canvas-generated mask data URL for a custom shape with soft edges.
+   * The mask is a greyscale image where white = fully opaque, black = fully transparent.
+   * The shape boundary follows the polar coordinates, and the edge_softness controls
+   * how gradual the transition is from opaque interior to transparent exterior.
+   */
+  _getCustomShapeMaskUrl(customShape, edgeSoftness, glowSize) {
+    if (!this._customMaskCache) this._customMaskCache = new Map();
+
+    // Adaptive mask resolution: use smaller canvas for smaller glows
+    const maskRes = glowSize <= 80 ? 128 : glowSize <= 160 ? 192 : 256;
+
+    // Build cache key efficiently — avoid JSON.stringify on every call
+    let key = `${maskRes}:${(edgeSoftness * 1000) | 0}:`;
+    for (let i = 0; i < customShape.length; i++) {
+      key += `${customShape[i][0]},${(customShape[i][1] * 1000) | 0};`;
+    }
+    if (this._customMaskCache.has(key)) {
+      return this._customMaskCache.get(key);
+    }
+
+    const url = this._generateCustomShapeMask(customShape, edgeSoftness, maskRes);
+
+    // Limit cache size to 32 entries
+    if (this._customMaskCache.size >= 32) {
+      const firstKey = this._customMaskCache.keys().next().value;
+      this._customMaskCache.delete(firstKey);
+    }
+    this._customMaskCache.set(key, url);
+    return url;
+  }
+
+  /**
+   * Render a custom shape mask to a canvas and return a data URL.
+   * For each pixel, computes the distance from center as a fraction of the
+   * shape boundary radius at that angle, then applies a smooth fade zone
+   * at the boundary controlled by edge_softness.
+   *
+   * @param {Array} customShape - sorted [angle°, radius 0-1] pairs
+   * @param {number} edgeSoftness - 0-1: how wide the edge fade zone is
+   * @returns {string} data URL for use as CSS mask-image
+   */
+  _generateCustomShapeMask(customShape, edgeSoftness, maskRes) {
+    const size = maskRes || 256;
+    const canvas = document.createElement('canvas');
+    canvas.width = size;
+    canvas.height = size;
+    const ctx = canvas.getContext('2d');
+
+    const sorted = [...customShape].sort((a, b) => a[0] - b[0]);
+    const cx = size / 2;
+    const maxR = size / 2;
+
+    // Pre-compute shape radii every 1° for faster per-pixel lookup
+    const radiusLut = new Float32Array(360);
+    for (let a = 0; a < 360; a++) {
+      radiusLut[a] = this._interpolateCustomRadius(sorted, a) * maxR;
+    }
+
+    // Fade zone: edge_softness controls what fraction of the local radius is transition
+    // 0.1 = very tight edge, 1.0 = fade starts from center
+    const fadeRatio = Math.max(0.02, edgeSoftness * 0.6);
+
+    const imgData = ctx.createImageData(size, size);
+    const data = imgData.data;
+
+    for (let py = 0; py < size; py++) {
+      for (let px = 0; px < size; px++) {
+        const dx = px - cx;
+        const dy = py - cx;
+        const dist = Math.sqrt(dx * dx + dy * dy);
+
+        // Angle: 0° = down (+y), 90° = right (+x), clockwise
+        // atan2(dx, dy) gives angle from +y axis (down), clockwise
+        let angleDeg = Math.atan2(dx, dy) * 180 / Math.PI;
+        if (angleDeg < 0) angleDeg += 360;
+
+        // Look up shape boundary radius (linear interpolation between 1° steps)
+        const aFloor = Math.floor(angleDeg) % 360;
+        const aCeil = (aFloor + 1) % 360;
+        const aFrac = angleDeg - Math.floor(angleDeg);
+        const shapeR = radiusLut[aFloor] * (1 - aFrac) + radiusLut[aCeil] * aFrac;
+
+        // Fade zone width proportional to shape radius at this angle
+        const fadeWidth = shapeR * fadeRatio;
+
+        let alpha;
+        if (fadeWidth < 0.5) {
+          // Essentially no softness — hard edge
+          alpha = dist <= shapeR ? 255 : 0;
+        } else {
+          // Solid interior, smooth fade at boundary, transparent exterior
+          const innerR = shapeR - fadeWidth;
+          const outerR = shapeR + fadeWidth * 0.3; // slight overshoot for very soft look
+
+          if (dist <= innerR) {
+            alpha = 255;
+          } else if (dist >= outerR) {
+            alpha = 0;
+          } else {
+            // Smoothstep (hermite) for organic falloff
+            const t = (dist - innerR) / (outerR - innerR);
+            const s = t * t * (3 - 2 * t);
+            alpha = Math.round(255 * (1 - s));
+          }
+        }
+
+        const idx = (py * size + px) * 4;
+        data[idx] = 255;
+        data[idx + 1] = 255;
+        data[idx + 2] = 255;
+        data[idx + 3] = alpha; // alpha channel controls mask visibility
+      }
+    }
+
+    ctx.putImageData(imgData, 0, 0);
+    return canvas.toDataURL('image/png');
+  }
+
+  /**
+   * Test whether a ray from (ox,oy) toward (px,py) is blocked by segment (ax,ay)-(bx,by)
+   * before reaching the target pixel. Uses parametric ray-segment intersection.
+   * Returns true if the segment blocks the line of sight.
+   */
+  _isRayBlockedBySegment(ox, oy, px, py, ax, ay, bx, by) {
+    const dx = px - ox;
+    const dy = py - oy;
+    const ex = bx - ax;
+    const ey = by - ay;
+
+    const denom = dx * ey - dy * ex;
+    if (Math.abs(denom) < 1e-10) return false; // parallel
+
+    const t = ((ax - ox) * ey - (ay - oy) * ex) / denom; // ray parameter
+    const u = ((ax - ox) * dy - (ay - oy) * dx) / denom; // segment parameter
+
+    // t in (0,1): hit is between light and pixel
+    // u in [0,1]: hit is on the wall segment
+    return t > 0.005 && t < 0.995 && u >= 0 && u <= 1;
+  }
+
+  /**
+   * Get a cached wall shadow mask for a specific light + wall configuration.
+   * The mask is white where the light is visible, transparent where walls cast shadows.
+   *
+   * @param {Array} wallSegments - wall segments in mask pixel coordinates [{ax,ay,bx,by}]
+   * @param {number} lightX - light x position in mask pixels
+   * @param {number} lightY - light y position in mask pixels
+   * @param {number} maskSize - mask resolution (pixels)
+   * @param {string} cacheExtra - additional cache key component (e.g., glow element size)
+   * @returns {string} data URL for CSS mask-image
+   */
+  _getWallShadowMaskUrl(wallSegments, lightX, lightY, maskSize, cacheExtra) {
+    if (!this._wallMaskCache) this._wallMaskCache = new Map();
+
+    // Build cache key with integer-rounded coordinates to improve hit rate
+    // while maintaining sufficient precision for visual quality
+    let key = `${lightX | 0},${lightY | 0}:${maskSize}:`;
+    for (let i = 0; i < wallSegments.length; i++) {
+      const s = wallSegments[i];
+      key += `${s.ax | 0},${s.ay | 0},${s.bx | 0},${s.by | 0}|`;
+    }
+    if (cacheExtra) key += cacheExtra;
+
+    if (this._wallMaskCache.has(key)) {
+      return this._wallMaskCache.get(key);
+    }
+
+    const url = this._generateWallShadowMask(wallSegments, lightX, lightY, maskSize);
+
+    if (this._wallMaskCache.size >= 64) {
+      const firstKey = this._wallMaskCache.keys().next().value;
+      this._wallMaskCache.delete(firstKey);
+    }
+    this._wallMaskCache.set(key, url);
+    return url;
+  }
+
+  /**
+   * Generate a wall shadow mask using polygon-based shadow casting.
+   * For each wall segment, computes a shadow trapezoid extending away from
+   * the light and fills it using Canvas 2D's GPU-accelerated, anti-aliased
+   * path rendering. The glow element's own blur filter provides natural
+   * penumbra, so no additional blur pass is needed on the mask.
+   */
+  _generateWallShadowMask(wallSegments, lightX, lightY, maskSize) {
+    const canvas = document.createElement('canvas');
+    canvas.width = maskSize;
+    canvas.height = maskSize;
+    const ctx = canvas.getContext('2d');
+
+    // Start fully lit (white opaque)
+    ctx.fillStyle = 'white';
+    ctx.fillRect(0, 0, maskSize, maskSize);
+
+    // Draw shadow polygons: erase where walls block line-of-sight
+    // destination-out compositing removes destination pixels under the filled shape
+    ctx.globalCompositeOperation = 'destination-out';
+    ctx.fillStyle = 'white';
+
+    // Extend shadow rays well beyond the mask boundary
+    const extend = maskSize * 3;
+
+    for (let i = 0; i < wallSegments.length; i++) {
+      const s = wallSegments[i];
+      const ax = s.ax, ay = s.ay, bx = s.bx, by = s.by;
+
+      // Direction vectors from light to each wall endpoint
+      const dax = ax - lightX, day = ay - lightY;
+      const dbx = bx - lightX, dby = by - lightY;
+      const daLen = Math.sqrt(dax * dax + day * day);
+      const dbLen = Math.sqrt(dbx * dbx + dby * dby);
+
+      // Skip degenerate walls where an endpoint is on the light
+      if (daLen < 0.5 || dbLen < 0.5) continue;
+
+      // Extend endpoints away from light to form the far edge of the shadow
+      const ax2 = ax + (dax / daLen) * extend;
+      const ay2 = ay + (day / daLen) * extend;
+      const bx2 = bx + (dbx / dbLen) * extend;
+      const by2 = by + (dby / dbLen) * extend;
+
+      // Shadow trapezoid: wall edge → extended shadow boundary
+      // Canvas 2D automatically anti-aliases these edges
+      ctx.beginPath();
+      ctx.moveTo(ax, ay);
+      ctx.lineTo(ax2, ay2);
+      ctx.lineTo(bx2, by2);
+      ctx.lineTo(bx, by);
+      ctx.closePath();
+      ctx.fill();
+    }
+
+    return canvas.toDataURL('image/png');
+  }
+
+  /**
+   * Convert wall segments from canvas percentage coordinates to mask pixel coordinates,
+   * relative to a glow element's local coordinate space.
+   *
+   * @param {Array} walls - [{x1,y1,x2,y2}] in canvas %
+   * @param {number} lightXPct - light x position in canvas %
+   * @param {number} lightYPct - light y position in canvas %
+   * @param {number} glowWPx - glow element width in px
+   * @param {number} glowHPx - glow element height in px
+   * @param {number} canvasWPx - canvas width in px
+   * @param {number} canvasHPx - canvas height in px
+   * @param {number} maskSize - mask resolution
+   * @param {number} lightMaskX - light x in mask pixels
+   * @param {number} lightMaskY - light y in mask pixels
+   * @returns {Array} [{ax,ay,bx,by}] in mask pixel coordinates
+   */
+  _convertWallsToMaskCoords(walls, lightXPct, lightYPct, glowWPx, glowHPx, canvasWPx, canvasHPx, maskSize, lightMaskX, lightMaskY) {
+    const result = [];
+    for (const w of walls) {
+      // Wall endpoint in canvas pixels, relative to light
+      const relX1 = (w.x1 - lightXPct) / 100 * canvasWPx;
+      const relY1 = (w.y1 - lightYPct) / 100 * canvasHPx;
+      const relX2 = (w.x2 - lightXPct) / 100 * canvasWPx;
+      const relY2 = (w.y2 - lightYPct) / 100 * canvasHPx;
+
+      // Convert to mask pixel coordinates
+      const ax = lightMaskX + relX1 / glowWPx * maskSize;
+      const ay = lightMaskY + relY1 / glowHPx * maskSize;
+      const bx = lightMaskX + relX2 / glowWPx * maskSize;
+      const by = lightMaskY + relY2 / glowHPx * maskSize;
+
+      result.push({ ax, ay, bx, by });
+    }
+    return result;
+  }
+
+  /** Normalize per-entity glow overrides. Each value is a partial glow config. */
+  _normalizeGlowOverrides(obj) {
+    const result = {};
+    if (!obj || typeof obj !== 'object') return result;
+    Object.entries(obj).forEach(([entity, val]) => {
+      if (!val || typeof val !== 'object') return;
+      const o = {};
+      if (val.enabled != null) o.enabled = val.enabled === true;
+      if (val.direction != null && Number.isFinite(Number(val.direction))) o.direction = Number(val.direction);
+      if (val.length != null && Number.isFinite(Number(val.length)) && Number(val.length) > 0) o.length = Number(val.length);
+      if (val.width != null && Number.isFinite(Number(val.width)) && Number(val.width) > 0) o.width = Number(val.width);
+      if (val.intensity != null && Number.isFinite(Number(val.intensity))) o.intensity = Math.max(0, Math.min(1, Number(val.intensity)));
+      if (val.blur != null && Number.isFinite(Number(val.blur)) && Number(val.blur) >= 0) o.blur = Number(val.blur);
+      if (val.offset_x != null && Number.isFinite(Number(val.offset_x))) o.offset_x = Number(val.offset_x);
+      if (val.offset_y != null && Number.isFinite(Number(val.offset_y))) o.offset_y = Number(val.offset_y);
+      if (val.spread != null && Number.isFinite(Number(val.spread)) && Number(val.spread) > 0) o.spread = Number(val.spread);
+      if (val.start_width != null && Number.isFinite(Number(val.start_width))) o.start_width = Math.max(0, Math.min(1, Number(val.start_width)));
+      if (val.scale_with_brightness != null) o.scale_with_brightness = val.scale_with_brightness !== false;
+      if (typeof val.color === 'string' && val.color.trim()) o.color = val.color.trim();
+      if (SpatialLightColorCard.GLOW_SHAPES.includes(val.shape)) o.shape = val.shape;
+      if (val.edge_softness != null && Number.isFinite(Number(val.edge_softness))) o.edge_softness = Math.max(0, Math.min(1, Number(val.edge_softness)));
+      if (SpatialLightColorCard.GLOW_FALLOFFS.includes(val.falloff)) o.falloff = val.falloff;
+      const gs = this._normalizeGradientStops(val.gradient_stops);
+      if (gs) o.gradient_stops = gs;
+      const cs = this._normalizeCustomShape(val.custom_shape);
+      if (cs) o.custom_shape = cs;
+      if (Object.keys(o).length > 0) result[entity] = o;
+    });
+    return result;
+  }
+
+  /** Normalize per-entity inline style overrides. Each value is a CSS properties string. */
+  _normalizeStyleOverrides(obj) {
+    const result = {};
+    if (!obj || typeof obj !== 'object') return result;
+    Object.entries(obj).forEach(([entity, val]) => {
+      if (typeof val === 'string' && val.trim()) {
+        result[entity] = val.trim();
+      }
+    });
+    return result;
+  }
+
+  /**
+   * Normalize glow_walls config. Supports line segments and boxes.
+   * Line segment: [x1%, y1%, x2%, y2%] or {x1, y1, x2, y2}
+   * Box: {x, y, width, height} — expanded to 4 line segments.
+   * All coordinates in canvas percentage (0-100).
+   * Returns array of {x1, y1, x2, y2} line segments.
+   */
+  _normalizeGlowWalls(walls) {
+    if (!Array.isArray(walls)) return [];
+    const segments = [];
+    for (const wall of walls) {
+      if (!wall) continue;
+
+      // Array shorthand: [x1, y1, x2, y2]
+      if (Array.isArray(wall)) {
+        if (wall.length >= 4) {
+          const [x1, y1, x2, y2] = wall.map(Number);
+          if ([x1, y1, x2, y2].every(Number.isFinite)) {
+            segments.push({ x1, y1, x2, y2 });
+          }
+        }
+        continue;
+      }
+
+      if (typeof wall !== 'object') continue;
+
+      // Box: {x, y, width, height} → 4 segments
+      if (wall.x != null && wall.y != null && wall.width != null && wall.height != null) {
+        const x = Number(wall.x), y = Number(wall.y);
+        const w = Number(wall.width), h = Number(wall.height);
+        if ([x, y, w, h].every(Number.isFinite)) {
+          segments.push({ x1: x, y1: y, x2: x + w, y2: y });         // top
+          segments.push({ x1: x + w, y1: y, x2: x + w, y2: y + h }); // right
+          segments.push({ x1: x + w, y1: y + h, x2: x, y2: y + h }); // bottom
+          segments.push({ x1: x, y1: y + h, x2: x, y2: y });         // left
+        }
+        continue;
+      }
+
+      // Line segment: {x1, y1, x2, y2}
+      if (wall.x1 != null && wall.y1 != null && wall.x2 != null && wall.y2 != null) {
+        const x1 = Number(wall.x1), y1 = Number(wall.y1);
+        const x2 = Number(wall.x2), y2 = Number(wall.y2);
+        if ([x1, y1, x2, y2].every(Number.isFinite)) {
+          segments.push({ x1, y1, x2, y2 });
+        }
+      }
+    }
+    return segments;
+  }
+
+  /** Return the effective glow config for a specific entity (global merged with per-entity overrides). */
+  _getGlowConfig(entity_id) {
+    const base = this._config.glow;
+    const override = this._config.glow_overrides[entity_id];
+    if (!override) return base;
+    return { ...base, ...override };
+  }
+
+  /** Parse a CSS color string to {r, g, b}. Returns null if unparseable. */
+  _parseColorToRGB(color) {
+    if (!color || color === 'transparent') return null;
+
+    // Handle rgb(r, g, b)
+    const rgbMatch = color.match(/^rgb\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*\)$/i);
+    if (rgbMatch) return { r: parseInt(rgbMatch[1]), g: parseInt(rgbMatch[2]), b: parseInt(rgbMatch[3]) };
+
+    // Handle #hex
+    let hex = color;
+    if (hex.startsWith('#')) {
+      hex = hex.slice(1);
+      if (hex.length === 3) hex = hex[0] + hex[0] + hex[1] + hex[1] + hex[2] + hex[2];
+      if (hex.length === 6) {
+        return {
+          r: parseInt(hex.slice(0, 2), 16),
+          g: parseInt(hex.slice(2, 4), 16),
+          b: parseInt(hex.slice(4, 6), 16),
+        };
+      }
+    }
+
+    return null;
   }
 
   _normalizeCanvasElements(elements) {
@@ -1273,6 +1849,26 @@ class SpatialLightColorCard extends HTMLElement {
         box-shadow: 0 0 10px rgba(99,102,241,0.45), 0 0 8px var(--light-color, #ffa500);
       }
 
+      /* Glow element — works in all display modes (cone, round, oval, beam, spotlight, bar) */
+      .light-glow {
+        position: absolute;
+        left: 50%;
+        top: 50%;
+        width: 60px;
+        height: 0;
+        transform-origin: 50% 0%;
+        pointer-events: none;
+        z-index: -1;
+        opacity: 0;
+        transition: opacity 400ms ease, height 400ms ease;
+      }
+      /* Reduce glow for unselected lights when a selection is active.
+         Note: the parent .light already gets brightness/saturate dimming,
+         so only add extra dimming on the glow itself for stronger visual separation. */
+      .canvas.has-selection .light:not(.selected) .light-glow {
+        opacity: 0.3 !important;
+      }
+
       .light-icon-emoji { font-size: calc(32px * var(--icon-scale, 1)); line-height: 1; filter: drop-shadow(0 1px 2px rgba(0,0,0,0.6)); transform: var(--icon-transform, none); }
       .light-icon-mdi { --mdc-icon-size: calc(32px * var(--icon-scale, 1)); color: rgba(255,255,255,0.92); filter: drop-shadow(0 1px 2px rgba(0,0,0,0.6)); transform: var(--icon-transform, none); }
 
@@ -1715,6 +2311,9 @@ class SpatialLightColorCard extends HTMLElement {
       :host(.overlay-active) .light-label {
         z-index: 1;
       }
+
+      /* User custom CSS */
+      ${this._config.custom_css || ''}
     `;
   }
 
@@ -1839,6 +2438,18 @@ class SpatialLightColorCard extends HTMLElement {
         }
       }
 
+      // Add glow element when glow is enabled (works in all modes)
+      const entityGlow = this._getGlowConfig(entity_id);
+      const glowHtml = entityGlow.enabled
+        ? '<div class="light-glow"></div>'
+        : '';
+
+      // Apply per-entity style overrides
+      const styleOverride = this._config.style_overrides[entity_id];
+      if (styleOverride) {
+        style += styleOverride + (styleOverride.endsWith(';') ? '' : ';');
+      }
+
       return `
         <div class="light ${stateClass} ${isSelected ? 'selected' : ''} ${iconOnlyClass}"
              style="${style}"
@@ -1847,6 +2458,7 @@ class SpatialLightColorCard extends HTMLElement {
              role="button"
              aria-label="${st.attributes.friendly_name || entity_id}"
              aria-pressed="${isSelected}">
+          ${glowHtml}
           ${iconData ? this._renderIcon(iconData) : ''}
           <div class="light-label">${label}</div>
         </div>
@@ -3970,6 +4582,461 @@ class SpatialLightColorCard extends HTMLElement {
     ctx.restore();
   }
 
+  /** ---------- Glow updates ---------- */
+
+  /**
+   * Build gradient stops based on falloff mode and optional custom stops.
+   * Returns a CSS gradient string fragment for rgba(r,g,b,...) stops.
+   */
+  _buildGlowGradientStops(r, g, b, falloff, customStops, origin) {
+    // Custom stops take priority
+    if (customStops && customStops.length >= 2) {
+      return customStops.map(([pos, op]) =>
+        `rgba(${r},${g},${b},${op.toFixed(3)}) ${pos}%`
+      ).join(', ');
+    }
+
+    // Preset falloff curves
+    switch (falloff) {
+      case 'linear':
+        return [
+          `rgba(${r},${g},${b},0.8) 0%`,
+          `rgba(${r},${g},${b},0.4) 50%`,
+          `transparent 100%`,
+        ].join(', ');
+      case 'exponential':
+        return [
+          `rgba(${r},${g},${b},0.95) 0%`,
+          `rgba(${r},${g},${b},0.6) 15%`,
+          `rgba(${r},${g},${b},0.2) 40%`,
+          `rgba(${r},${g},${b},0.04) 70%`,
+          `transparent 100%`,
+        ].join(', ');
+      case 'sharp':
+        return [
+          `rgba(${r},${g},${b},1) 0%`,
+          `rgba(${r},${g},${b},0.8) 20%`,
+          `rgba(${r},${g},${b},0.15) 50%`,
+          `transparent 75%`,
+        ].join(', ');
+      case 'uniform':
+        // Solid fill — constant color everywhere. Edge softness is handled
+        // by the mask (custom shapes) or blur (other shapes).
+        return `rgba(${r},${g},${b},1) 0%, rgba(${r},${g},${b},1) 100%`;
+      default: // 'smooth'
+        return [
+          `rgba(${r},${g},${b},0.9) 0%`,
+          `rgba(${r},${g},${b},0.35) 30%`,
+          `rgba(${r},${g},${b},0.08) 65%`,
+          `transparent 100%`,
+        ].join(', ');
+    }
+  }
+
+  /**
+   * Apply edge softness masking to a glow element.
+   * Uses CSS mask-image gradients to feather the edges of directional shapes.
+   */
+  _applyEdgeSoftness(glowEl, gc, isDirectional) {
+    if (gc.edge_softness <= 0) {
+      glowEl.style.maskImage = '';
+      glowEl.style.webkitMaskImage = '';
+      glowEl.style.maskComposite = '';
+      glowEl.style.webkitMaskComposite = '';
+      return;
+    }
+
+    const s = gc.edge_softness;
+
+    if (isDirectional) {
+      // For directional shapes (cone, beam, spotlight, bar):
+      // Horizontal gradient mask fades left/right edges
+      const edgeFade = s * 30; // % from each edge that fades
+      const hMask = `linear-gradient(to right, transparent 0%, black ${edgeFade}%, black ${100 - edgeFade}%, transparent 100%)`;
+      // Vertical gradient mask fades the far end
+      const farFade = 100 - s * 25;
+      const vMask = `linear-gradient(to bottom, black 0%, black ${farFade}%, transparent 100%)`;
+      const combined = `${hMask}, ${vMask}`;
+      glowEl.style.maskImage = combined;
+      glowEl.style.webkitMaskImage = combined;
+      glowEl.style.maskComposite = 'intersect';
+      glowEl.style.webkitMaskComposite = 'source-in';
+    } else {
+      // For radial shapes (round, oval): strengthen edge fade via mask
+      const innerSolid = Math.max(5, 40 - s * 35);
+      const mask = `radial-gradient(ellipse at 50% 50%, black 0%, black ${innerSolid}%, transparent ${80 - s * 20}%)`;
+      glowEl.style.maskImage = mask;
+      glowEl.style.webkitMaskImage = mask;
+      glowEl.style.maskComposite = '';
+      glowEl.style.webkitMaskComposite = '';
+    }
+  }
+
+  /**
+   * Update the glow element for a single light based on entity state.
+   * Supports multiple glow shapes: cone, round, oval, beam, spotlight, bar.
+   * Each shape produces a different visual effect with configurable
+   * direction, size, intensity, edge softness, and gradient falloff.
+   */
+  _updateGlow(lightEl, entityId, state, canvasRect) {
+    const glowEl = lightEl.querySelector('.light-glow');
+    if (!glowEl) return;
+
+    const [domain] = entityId.split('.');
+    const isScene = domain === 'scene';
+    const isBinaryDomain = domain === 'switch' || domain === 'input_boolean' || domain === 'binary_sensor';
+    const isOn = state.state === 'on' || isScene;
+    if (!isOn) {
+      glowEl.style.opacity = '0';
+      glowEl.style.height = '0';
+      glowEl.style.width = '0';
+      return;
+    }
+
+    const gc = this._getGlowConfig(entityId);
+    // Switches, binary sensors, scenes don't have brightness — treat as full (255)
+    const brightness = state.attributes.brightness || ((isScene || isBinaryDomain) ? 255 : 0); // 0-255
+    const ratio = brightness / 255;
+
+    // Determine the glow color
+    let rgb;
+    if (gc.color) {
+      rgb = this._parseColorToRGB(gc.color);
+    }
+    if (!rgb) {
+      const color = this._resolveEntityColor(entityId, true, state.attributes);
+      rgb = this._parseColorToRGB(color);
+    }
+    if (!rgb) {
+      rgb = { r: 255, g: 165, b: 0 }; // fallback orange
+    }
+
+    // Scale dimensions with brightness if configured
+    const length = gc.scale_with_brightness ? gc.length * Math.max(ratio, 0.1) : gc.length;
+    const opacity = gc.scale_with_brightness ? gc.intensity * Math.max(ratio, 0.05) : gc.intensity;
+    const { r, g, b } = rgb;
+
+    // Reset shape-specific properties
+    glowEl.style.clipPath = '';
+    glowEl.style.borderRadius = '';
+
+    switch (gc.shape) {
+      case 'round': {
+        // Circular soft glow centered on the light
+        const size = gc.width;
+        const stops = this._buildGlowGradientStops(r, g, b, gc.falloff, gc.gradient_stops);
+        glowEl.style.width = `${size}px`;
+        glowEl.style.height = `${size}px`;
+        glowEl.style.transform = `translate(-50%, -50%) translateX(${gc.offset_x}px) translateY(${gc.offset_y}px)`;
+        glowEl.style.transformOrigin = '50% 50%';
+        glowEl.style.borderRadius = '50%';
+        glowEl.style.background = `radial-gradient(circle at 50% 50%, ${stops})`;
+        this._applyEdgeSoftness(glowEl, gc, false);
+        break;
+      }
+
+      case 'oval': {
+        // Elliptical glow, rotatable via direction
+        const stops = this._buildGlowGradientStops(r, g, b, gc.falloff, gc.gradient_stops);
+        glowEl.style.width = `${gc.width}px`;
+        glowEl.style.height = `${length}px`;
+        glowEl.style.transform = `translate(-50%, -50%) translateX(${gc.offset_x}px) translateY(${gc.offset_y}px) rotate(${gc.direction}deg)`;
+        glowEl.style.transformOrigin = '50% 50%';
+        glowEl.style.borderRadius = '50%';
+        glowEl.style.background = `radial-gradient(ellipse at 50% 50%, ${stops})`;
+        this._applyEdgeSoftness(glowEl, gc, false);
+        break;
+      }
+
+      case 'semicone': {
+        // Truncated cone — starts with a width at the origin instead of a point.
+        // start_width (0-1) controls how wide the near end is relative to the far end.
+        // 0 = same as cone (point), 0.5 = near end is half the far end width, 1 = bar-like.
+        const sw = gc.start_width > 0 ? gc.start_width : 0.35; // default for semicone shape
+        // Near-end inset: interpolate between cone's topInset (sw=0) and 0% full width (sw=1)
+        const coneTopInset = 50 - (50 / gc.spread);
+        const nearInset = coneTopInset * (1 - sw);
+        glowEl.style.clipPath = `polygon(${nearInset}% 0%, ${100 - nearInset}% 0%, 100% 100%, 0% 100%)`;
+        const stops = this._buildGlowGradientStops(r, g, b, gc.falloff, gc.gradient_stops);
+        glowEl.style.width = `${gc.width}px`;
+        glowEl.style.height = `${length}px`;
+        glowEl.style.transform = `translateX(-50%) translateY(${gc.offset_y}px) translateX(${gc.offset_x}px) rotate(${gc.direction}deg)`;
+        glowEl.style.transformOrigin = '50% 0%';
+        // Use an ellipse gradient that's wider at origin to fill the truncated top
+        const gradEllipseW = 50 + sw * 40; // wider ellipse for wider start
+        glowEl.style.background = `radial-gradient(${gradEllipseW}% 70% at 50% 0%, ${stops})`;
+        this._applyEdgeSoftness(glowEl, gc, true);
+        break;
+      }
+
+      case 'beam': {
+        // Narrow directional beam — like cone but with minimal spread
+        const effectiveSpread = Math.min(gc.spread, 1.15);
+        const topInset = 50 - (50 / effectiveSpread);
+        glowEl.style.clipPath = `polygon(${topInset}% 0%, ${100 - topInset}% 0%, 100% 100%, 0% 100%)`;
+        const stops = this._buildGlowGradientStops(r, g, b, gc.falloff, gc.gradient_stops);
+        glowEl.style.width = `${gc.width}px`;
+        glowEl.style.height = `${length}px`;
+        glowEl.style.transform = `translateX(-50%) translateY(${gc.offset_y}px) translateX(${gc.offset_x}px) rotate(${gc.direction}deg)`;
+        glowEl.style.transformOrigin = '50% 0%';
+        glowEl.style.background = `radial-gradient(ellipse at 50% 0%, ${stops})`;
+        this._applyEdgeSoftness(glowEl, gc, true);
+        break;
+      }
+
+      case 'spotlight': {
+        // Wide spotlight cone with inherently soft edges
+        const effectiveSpread = Math.max(gc.spread, 2.0);
+        const topInset = 50 - (50 / effectiveSpread);
+        glowEl.style.clipPath = `polygon(${topInset}% 0%, ${100 - topInset}% 0%, 100% 100%, 0% 100%)`;
+        // Spotlight uses a softer gradient with wider falloff
+        const spotStops = gc.gradient_stops
+          ? this._buildGlowGradientStops(r, g, b, gc.falloff, gc.gradient_stops)
+          : [
+              `rgba(${r},${g},${b},0.85) 0%`,
+              `rgba(${r},${g},${b},0.45) 20%`,
+              `rgba(${r},${g},${b},0.15) 50%`,
+              `rgba(${r},${g},${b},0.04) 75%`,
+              `transparent 100%`,
+            ].join(', ');
+        glowEl.style.width = `${gc.width}px`;
+        glowEl.style.height = `${length}px`;
+        glowEl.style.transform = `translateX(-50%) translateY(${gc.offset_y}px) translateX(${gc.offset_x}px) rotate(${gc.direction}deg)`;
+        glowEl.style.transformOrigin = '50% 0%';
+        glowEl.style.background = `radial-gradient(ellipse at 50% 0%, ${spotStops})`;
+        // Spotlights always have some edge softness
+        const spotGc = gc.edge_softness > 0 ? gc : { ...gc, edge_softness: Math.max(gc.edge_softness, 0.3) };
+        this._applyEdgeSoftness(glowEl, spotGc, true);
+        break;
+      }
+
+      case 'bar': {
+        // Rectangular bar glow (no clip-path trapezoid, straight sides)
+        const stops = this._buildGlowGradientStops(r, g, b, gc.falloff, gc.gradient_stops);
+        glowEl.style.width = `${gc.width}px`;
+        glowEl.style.height = `${length}px`;
+        glowEl.style.transform = `translateX(-50%) translateY(${gc.offset_y}px) translateX(${gc.offset_x}px) rotate(${gc.direction}deg)`;
+        glowEl.style.transformOrigin = '50% 0%';
+        // Linear gradient from origin to far end
+        glowEl.style.background = `linear-gradient(to bottom, ${stops})`;
+        this._applyEdgeSoftness(glowEl, gc, true);
+        break;
+      }
+
+      case 'custom': {
+        // Polar-coordinate custom shape. The user defines [angle°, radius 0-1]
+        // points and the shape is smoothly interpolated between them.
+        // Falls back to round if custom_shape is not defined or has < 3 points.
+        if (!gc.custom_shape || gc.custom_shape.length < 3) {
+          // Fallback: treat as round
+          const size = gc.width;
+          const fbStops = this._buildGlowGradientStops(r, g, b, gc.falloff, gc.gradient_stops);
+          glowEl.style.width = `${size}px`;
+          glowEl.style.height = `${size}px`;
+          glowEl.style.transform = `translate(-50%, -50%) translateX(${gc.offset_x}px) translateY(${gc.offset_y}px) rotate(${gc.direction}deg)`;
+          glowEl.style.transformOrigin = '50% 50%';
+          glowEl.style.borderRadius = '50%';
+          glowEl.style.background = `radial-gradient(circle at 50% 50%, ${fbStops})`;
+          this._applyEdgeSoftness(glowEl, gc, false);
+          break;
+        }
+
+        const size = gc.width;
+        const stops = this._buildGlowGradientStops(r, g, b, gc.falloff, gc.gradient_stops);
+        glowEl.style.width = `${size}px`;
+        glowEl.style.height = `${size}px`;
+        glowEl.style.transform = `translate(-50%, -50%) translateX(${gc.offset_x}px) translateY(${gc.offset_y}px) rotate(${gc.direction}deg)`;
+        glowEl.style.transformOrigin = '50% 50%';
+        glowEl.style.background = `radial-gradient(circle at 50% 50%, ${stops})`;
+
+        if (gc.edge_softness > 0) {
+          // Canvas-generated mask: shape-following soft edges with smooth falloff.
+          // The mask defines a solid interior and gradual fade at the shape boundary.
+          // This replaces clip-path to avoid hard/sharp polygon edges.
+          const maskUrl = this._getCustomShapeMaskUrl(gc.custom_shape, gc.edge_softness, size);
+          glowEl.style.clipPath = '';
+          glowEl.style.maskImage = `url(${maskUrl})`;
+          glowEl.style.webkitMaskImage = `url(${maskUrl})`;
+          glowEl.style.maskSize = '100% 100%';
+          glowEl.style.webkitMaskSize = '100% 100%';
+          glowEl.style.maskComposite = '';
+          glowEl.style.webkitMaskComposite = '';
+        } else {
+          // Hard edges via clip-path polygon (more efficient, no canvas needed)
+          const polyPoints = this._buildCustomShapePolygon(gc.custom_shape);
+          glowEl.style.clipPath = `polygon(${polyPoints})`;
+          glowEl.style.maskImage = '';
+          glowEl.style.webkitMaskImage = '';
+        }
+        break;
+      }
+
+      default: { // 'cone' — original behavior (also supports start_width for truncated cones)
+        const cTopInset = 50 - (50 / gc.spread);
+        // Apply start_width: interpolate from pointed (sw=0) to full width (sw=1)
+        const nearInset = gc.start_width > 0 ? cTopInset * (1 - gc.start_width) : cTopInset;
+        glowEl.style.clipPath = `polygon(${nearInset}% 0%, ${100 - nearInset}% 0%, 100% 100%, 0% 100%)`;
+        const stops = this._buildGlowGradientStops(r, g, b, gc.falloff, gc.gradient_stops);
+        glowEl.style.width = `${gc.width}px`;
+        glowEl.style.height = `${length}px`;
+        glowEl.style.transform = `translateX(-50%) translateY(${gc.offset_y}px) translateX(${gc.offset_x}px) rotate(${gc.direction}deg)`;
+        glowEl.style.transformOrigin = '50% 0%';
+        glowEl.style.background = `radial-gradient(ellipse at 50% 0%, ${stops})`;
+        this._applyEdgeSoftness(glowEl, gc, true);
+        break;
+      }
+    }
+
+    glowEl.style.filter = `blur(${gc.blur}px)`;
+    glowEl.style.opacity = String(opacity);
+
+    // Apply wall shadow occlusion if walls are configured
+    this._applyWallShadows(glowEl, entityId, gc, canvasRect);
+  }
+
+  /**
+   * Apply wall shadow mask to a glow element. Generates a canvas mask where
+   * wall segments block line-of-sight from the light, creating shadow regions.
+   * The mask is layered on top of any existing shape mask or clip-path.
+   *
+   * Uses a cached mask URL per entity. The mask only needs to be regenerated
+   * when the wall config, canvas dimensions, or glow config changes — NOT on
+   * every brightness/color state update.
+   */
+  _applyWallShadows(glowEl, entityId, gc, canvasRect) {
+    const walls = this._config.glow_walls;
+    if (!walls || walls.length === 0 || !canvasRect) {
+      return;
+    }
+
+    const canvasW = canvasRect.width;
+    const canvasH = canvasRect.height;
+
+    // Check if we already have a valid cached mask URL for this entity.
+    // Wall masks depend on: wall config, light position, glow dimensions, canvas size.
+    // None of these change on a typical hass state update (brightness/color change).
+    // Build a lightweight version key from the inputs that DO change.
+    if (!this._wallMaskPerEntity) this._wallMaskPerEntity = {};
+    const pos = this._config.positions[entityId] || { x: 50, y: 50 };
+    const glowW = parseFloat(glowEl.style.width) || gc.width;
+    const glowH = parseFloat(glowEl.style.height) || gc.length;
+    if (glowW <= 0 || glowH <= 0) return;
+
+    const versionKey = `${(pos.x * 10) | 0},${(pos.y * 10) | 0},${glowW | 0},${glowH | 0},${canvasW | 0},${canvasH | 0},${gc.shape},${this._wallConfigVersion || 0}`;
+    const cached = this._wallMaskPerEntity[entityId];
+    if (cached && cached.versionKey === versionKey) {
+      // Reuse previous mask URL — skip all computation
+      this._setWallMask(glowEl, cached.maskUrl);
+      return;
+    }
+
+    // Compute glow reach in canvas % for filtering distant walls.
+    // Use the larger of width/height as a conservative radius.
+    const reach = Math.max(glowW, glowH) / 2;
+    const reachPctX = reach / canvasW * 100;
+    const reachPctY = reach / canvasH * 100;
+
+    // Filter walls: skip segments entirely outside the glow's bounding box.
+    // A wall outside the glow area can't cast a shadow visible in the glow.
+    const relevantWalls = [];
+    for (let i = 0; i < walls.length; i++) {
+      const w = walls[i];
+      // Cohen–Sutherland style rejection: both endpoints on the same
+      // side of the bounding box → wall is entirely outside glow reach
+      if (w.x1 < pos.x - reachPctX && w.x2 < pos.x - reachPctX) continue;
+      if (w.x1 > pos.x + reachPctX && w.x2 > pos.x + reachPctX) continue;
+      if (w.y1 < pos.y - reachPctY && w.y2 < pos.y - reachPctY) continue;
+      if (w.y1 > pos.y + reachPctY && w.y2 > pos.y + reachPctY) continue;
+      relevantWalls.push(w);
+    }
+
+    if (relevantWalls.length === 0) {
+      // No walls near this light — no mask needed
+      this._wallMaskPerEntity[entityId] = { versionKey, maskUrl: null };
+      return;
+    }
+
+    // Determine where the light is in the glow element's local space.
+    // Centered shapes (round, oval, custom): light is at center (50%, 50%)
+    // Directional shapes (cone, beam, bar, etc.): light is at top-center (50%, 0%)
+    const isCentered = gc.shape === 'round' || gc.shape === 'oval' || gc.shape === 'custom';
+    const maskSize = 256;
+    const lightMaskX = maskSize / 2;
+    const lightMaskY = isCentered ? maskSize / 2 : 0;
+
+    // Convert only the relevant wall segments to mask pixel coordinates
+    const wallSegments = this._convertWallsToMaskCoords(
+      relevantWalls, pos.x, pos.y, glowW, glowH, canvasW, canvasH, maskSize, lightMaskX, lightMaskY
+    );
+
+    // Generate (or retrieve cached) wall shadow mask
+    const maskUrl = this._getWallShadowMaskUrl(wallSegments, lightMaskX, lightMaskY, maskSize, gc.shape);
+
+    // Cache for this entity so subsequent state updates skip all the above
+    this._wallMaskPerEntity[entityId] = { versionKey, maskUrl };
+    this._setWallMask(glowEl, maskUrl);
+  }
+
+  /**
+   * Apply a wall mask URL to a glow element, combining with any existing
+   * shape mask (from edge_softness or custom shape).
+   */
+  _setWallMask(glowEl, maskUrl) {
+    if (!maskUrl) return;
+
+    const existingMask = glowEl.style.maskImage || glowEl.style.webkitMaskImage || '';
+    const wallMask = `url(${maskUrl})`;
+
+    if (existingMask && existingMask !== 'none' && existingMask !== '') {
+      // Combine existing mask with wall mask
+      const combined = `${existingMask}, ${wallMask}`;
+      glowEl.style.maskImage = combined;
+      glowEl.style.webkitMaskImage = combined;
+      glowEl.style.maskSize = '100% 100%, 100% 100%';
+      glowEl.style.webkitMaskSize = '100% 100%, 100% 100%';
+      glowEl.style.maskComposite = 'intersect';
+      glowEl.style.webkitMaskComposite = 'source-in';
+    } else {
+      // Wall mask only
+      glowEl.style.maskImage = wallMask;
+      glowEl.style.webkitMaskImage = wallMask;
+      glowEl.style.maskSize = '100% 100%';
+      glowEl.style.webkitMaskSize = '100% 100%';
+      glowEl.style.maskComposite = '';
+      glowEl.style.webkitMaskComposite = '';
+    }
+  }
+
+  /** Update glows for all light elements. Called from updateLights(). */
+  _updateAllGlows() {
+    // Glow works in all modes — check if any glow is enabled
+    const hasGlobalGlow = this._config.glow.enabled;
+    const hasOverrides = Object.keys(this._config.glow_overrides).length > 0;
+    if (!hasGlobalGlow && !hasOverrides) return;
+
+    // Pre-compute canvas rect once per frame (avoid reflow per-light)
+    const walls = this._config.glow_walls;
+    let canvasRect = null;
+    if (walls && walls.length > 0) {
+      const canvas = this._els.canvas;
+      if (canvas) {
+        canvasRect = canvas.getBoundingClientRect();
+        if (canvasRect.width <= 0 || canvasRect.height <= 0) canvasRect = null;
+      }
+    }
+
+    const lights = this.shadowRoot.querySelectorAll('.light');
+    lights.forEach(lightEl => {
+      const id = lightEl.dataset.entity;
+      const st = this._hass?.states[id];
+      if (!st) return;
+      // Only update if this entity actually has glow enabled
+      const gc = this._getGlowConfig(id);
+      if (!gc.enabled) return;
+      this._updateGlow(lightEl, id, st, canvasRect);
+    });
+  }
+
   /** ---------- Light updates ---------- */
   updateLights() {
     if (!this._hass) return;
@@ -4041,6 +5108,7 @@ class SpatialLightColorCard extends HTMLElement {
     this._refreshColorPresets();
     this._refreshEntityIcons();
     this._updateCanvasElements();
+    this._updateAllGlows();
     // Reposition labels synchronously so they don't flash in the wrong
     // position for 1 frame before the rAF callback would run.
     // updateLights() only toggles classes/styles on existing DOM, so layout
@@ -4308,6 +5376,7 @@ class SpatialLightColorCardEditor extends HTMLElement {
     this._positionRedoStack = [];
     this._boundEditorKeyDown = null;
     this._ceIdCounter = 0;
+    this._collapsedSections = null; // Track section collapsed state across re-renders
   }
 
   async connectedCallback() {
@@ -4478,6 +5547,28 @@ class SpatialLightColorCardEditor extends HTMLElement {
       return;
     }
     this._render();
+  }
+
+  /**
+   * Parse custom shape text from a textarea into [[angle, radius], ...] array.
+   * Accepts one "angle, radius" pair per line. Returns null if fewer than 3 valid points.
+   */
+  _parseCustomShapeText(text) {
+    if (!text || !text.trim()) return null;
+    const points = [];
+    for (const line of text.split('\n')) {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith('#') || trimmed.startsWith('//')) continue;
+      const parts = trimmed.split(/[\s,]+/);
+      if (parts.length >= 2) {
+        const angle = Number(parts[0]);
+        const radius = Number(parts[1]);
+        if (Number.isFinite(angle) && Number.isFinite(radius)) {
+          points.push([((angle % 360) + 360) % 360, Math.max(0, Math.min(2, radius))]);
+        }
+      }
+    }
+    return points.length >= 3 ? points : null;
   }
 
   _fireConfigChanged() {
@@ -4890,6 +5981,65 @@ class SpatialLightColorCardEditor extends HTMLElement {
         border-color: var(--primary-color, #03a9f4);
         background: color-mix(in srgb, var(--primary-color, #03a9f4) 6%, transparent);
       }
+
+      /* Wall list styles */
+      .wall-list { display: flex; flex-direction: column; gap: 4px; }
+      .wall-item {
+        border: 1px solid var(--divider-color, rgba(0,0,0,0.08));
+        border-radius: 8px; overflow: hidden;
+      }
+      .wall-main {
+        display: flex; align-items: center; gap: 8px; padding: 6px 8px 6px 12px;
+        background: var(--secondary-background-color, #f5f5f5);
+      }
+      .wall-type {
+        font-size: 10px; font-weight: 600; text-transform: uppercase;
+        letter-spacing: 0.5px; color: var(--secondary-text-color, #727272);
+        min-width: 30px;
+      }
+      .wall-summary {
+        flex: 1; font-size: 12px; font-family: monospace;
+        color: var(--primary-text-color, #212121);
+        white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+      }
+      .wall-fields {
+        padding: 8px 12px; display: flex; flex-direction: column; gap: 8px;
+        border-top: 1px solid var(--divider-color, rgba(0,0,0,0.08));
+        background: var(--card-background-color, #fff);
+      }
+      .wall-fields .override-row {
+        display: flex; align-items: center; gap: 8px;
+      }
+      .wall-fields .override-row label {
+        font-size: 12px; color: var(--secondary-text-color, #727272);
+        min-width: 50px; flex-shrink: 0;
+      }
+      .wall-fields .override-row input {
+        flex: 1; padding: 5px 8px; border: 1px solid var(--divider-color, rgba(0,0,0,0.12));
+        border-radius: 4px; font-size: 13px; color: var(--primary-text-color, #212121);
+        background: var(--card-background-color, #fff); box-sizing: border-box; outline: none;
+        min-width: 0;
+      }
+      .wall-fields .override-row input:focus { border-color: var(--primary-color, #03a9f4); }
+
+      /* Custom CSS textarea */
+      .custom-css-textarea {
+        width: 100%; padding: 8px 12px;
+        border: 1px solid var(--divider-color, rgba(0,0,0,0.12));
+        border-radius: 6px; font-size: 13px; font-family: monospace;
+        color: var(--primary-text-color, #212121);
+        background: var(--card-background-color, #fff);
+        box-sizing: border-box; outline: none; resize: vertical; min-height: 80px;
+        transition: border-color 150ms ease; line-height: 1.5;
+      }
+      .custom-css-textarea:focus { border-color: var(--primary-color, #03a9f4); }
+
+      /* Glow override subsection in entity settings */
+      .entity-overrides .override-subsection {
+        font-size: 11px; font-weight: 600; color: var(--secondary-text-color, #727272);
+        text-transform: uppercase; letter-spacing: 0.5px; margin-top: 6px;
+        padding-bottom: 2px; border-bottom: 1px solid var(--divider-color, rgba(0,0,0,0.06));
+      }
     `;
   }
 
@@ -4908,6 +6058,12 @@ class SpatialLightColorCardEditor extends HTMLElement {
     const hasIconOnlyOverride = iconOnlyOverride !== undefined;
     const rotationOverride = (this._config.icon_rotation_overrides && this._config.icon_rotation_overrides[entity] !== undefined) ? this._config.icon_rotation_overrides[entity] : '';
     const mirrorOverride = (this._config.icon_mirror_overrides && this._config.icon_mirror_overrides[entity]) || '';
+    const glowOverride = (this._config.glow_overrides && this._config.glow_overrides[entity]) || {};
+    const glowOverrideEnabled = glowOverride.enabled === true;
+    const glowOverrideShape = glowOverride.shape || '';
+    const glowOverrideDirection = glowOverride.direction != null ? glowOverride.direction : '';
+    const glowOverrideIntensity = glowOverride.intensity != null ? glowOverride.intensity : '';
+    const styleOverride = (this._config.style_overrides && this._config.style_overrides[entity]) || '';
 
     return `
       <div class="entity-item ${isExpanded ? 'expanded' : ''}" data-entity="${entity}" data-index="${index}">
@@ -4957,6 +6113,92 @@ class SpatialLightColorCardEditor extends HTMLElement {
             <label>Icon-only override</label>
             <ha-switch data-entity="${entity}" data-key="iconOnly" ${hasIconOnlyOverride && iconOnlyChecked ? 'checked' : ''}></ha-switch>
           </div>
+          <div class="override-subsection">Glow Override</div>
+          <div class="override-switch">
+            <label>Enable glow</label>
+            <ha-switch data-entity="${entity}" data-key="glowEnabled" ${glowOverrideEnabled ? 'checked' : ''}></ha-switch>
+          </div>
+          <div class="override-row">
+            <label>Shape</label>
+            <select data-entity="${entity}" data-key="glowShape">
+              <option value=""${!glowOverrideShape ? ' selected' : ''}>Global (${(this._config.glow && this._config.glow.shape) || 'cone'})</option>
+              <option value="cone"${glowOverrideShape === 'cone' ? ' selected' : ''}>Cone</option>
+              <option value="semicone"${glowOverrideShape === 'semicone' ? ' selected' : ''}>Semicone</option>
+              <option value="round"${glowOverrideShape === 'round' ? ' selected' : ''}>Round</option>
+              <option value="oval"${glowOverrideShape === 'oval' ? ' selected' : ''}>Oval</option>
+              <option value="beam"${glowOverrideShape === 'beam' ? ' selected' : ''}>Beam</option>
+              <option value="spotlight"${glowOverrideShape === 'spotlight' ? ' selected' : ''}>Spotlight</option>
+              <option value="bar"${glowOverrideShape === 'bar' ? ' selected' : ''}>Bar</option>
+              <option value="custom"${glowOverrideShape === 'custom' ? ' selected' : ''}>Custom</option>
+            </select>
+          </div>
+          <div class="override-row" data-entity="${entity}" data-key="glowCustomShapeRow" style="display:${glowOverrideShape === 'custom' ? 'flex' : 'none'};">
+            <label>Custom Shape</label>
+            <textarea data-entity="${entity}" data-key="glowCustomShape" class="custom-css-textarea" rows="3" placeholder="angle, radius&#10;0, 1&#10;90, 0.6&#10;180, 1">${glowOverride.custom_shape ? glowOverride.custom_shape.map(p => p[0] + ', ' + p[1]).join('\n') : ''}</textarea>
+          </div>
+          <div class="override-row">
+            <label>Direction (°)</label>
+            <input type="number" data-entity="${entity}" data-key="glowDirection" value="${glowOverrideDirection}" placeholder="Global (${(this._config.glow && this._config.glow.direction) || 0})" min="0" max="360" step="5">
+          </div>
+          <div class="override-row">
+            <label>Intensity</label>
+            <input type="number" data-entity="${entity}" data-key="glowIntensity" value="${glowOverrideIntensity}" placeholder="Global" min="0" max="1" step="0.05">
+          </div>
+          <div class="override-subsection">Style Override</div>
+          <div class="override-row">
+            <label>Custom CSS</label>
+            <input type="text" data-entity="${entity}" data-key="styleOverride" value="${this._esc(styleOverride)}" placeholder="e.g. filter: blur(2px);">
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  _renderWallItem(wall, index) {
+    const isArray = Array.isArray(wall);
+    const isBox = !isArray && wall && typeof wall === 'object' &&
+      wall.x != null && wall.y != null && wall.width != null && wall.height != null;
+    const typeLabel = isBox ? 'Box' : 'Line';
+
+    let summary, vals;
+    if (isArray) {
+      vals = { x1: wall[0], y1: wall[1], x2: wall[2], y2: wall[3] };
+      summary = `(${wall[0]}, ${wall[1]}) → (${wall[2]}, ${wall[3]})`;
+    } else if (isBox) {
+      vals = wall;
+      summary = `x:${wall.x} y:${wall.y} ${wall.width}×${wall.height}`;
+    } else {
+      vals = wall;
+      summary = `(${wall.x1}, ${wall.y1}) → (${wall.x2}, ${wall.y2})`;
+    }
+
+    return `
+      <div class="wall-item" data-wall-index="${index}">
+        <div class="wall-main">
+          <span class="wall-type">${typeLabel}</span>
+          <span class="wall-summary">${summary}</span>
+          <button class="entity-btn remove" data-wall-index="${index}" title="Remove">&times;</button>
+        </div>
+        <div class="wall-fields">
+          ${isBox ? `
+            <div class="two-col">
+              <div class="override-row"><label>X (%)</label><input type="number" data-wall-index="${index}" data-wall-key="x" value="${vals.x}" step="1"></div>
+              <div class="override-row"><label>Y (%)</label><input type="number" data-wall-index="${index}" data-wall-key="y" value="${vals.y}" step="1"></div>
+            </div>
+            <div class="two-col">
+              <div class="override-row"><label>Width</label><input type="number" data-wall-index="${index}" data-wall-key="width" value="${vals.width}" step="1"></div>
+              <div class="override-row"><label>Height</label><input type="number" data-wall-index="${index}" data-wall-key="height" value="${vals.height}" step="1"></div>
+            </div>
+          ` : `
+            <div class="two-col">
+              <div class="override-row"><label>X1 (%)</label><input type="number" data-wall-index="${index}" data-wall-key="x1" value="${vals.x1}" step="1"></div>
+              <div class="override-row"><label>Y1 (%)</label><input type="number" data-wall-index="${index}" data-wall-key="y1" value="${vals.y1}" step="1"></div>
+            </div>
+            <div class="two-col">
+              <div class="override-row"><label>X2 (%)</label><input type="number" data-wall-index="${index}" data-wall-key="x2" value="${vals.x2}" step="1"></div>
+              <div class="override-row"><label>Y2 (%)</label><input type="number" data-wall-index="${index}" data-wall-key="y2" value="${vals.y2}" step="1"></div>
+            </div>
+          `}
         </div>
       </div>
     `;
@@ -5109,6 +6351,16 @@ class SpatialLightColorCardEditor extends HTMLElement {
     const editPositions = !!config._edit_positions;
     const presets = Array.isArray(config.color_presets) ? config.color_presets : [];
     const canvasElements = Array.isArray(config.canvas_elements) ? config.canvas_elements : [];
+    const glow = config.glow || {};
+    const glowWalls = Array.isArray(config.glow_walls) ? config.glow_walls : [];
+
+    // Save section collapsed state before re-render
+    if (this.shadowRoot.querySelector('.section')) {
+      this._collapsedSections = {};
+      this.shadowRoot.querySelectorAll('.section[id]').forEach(s => {
+        this._collapsedSections[s.id] = s.classList.contains('collapsed');
+      });
+    }
 
     // Clear reference since innerHTML will destroy it
     this._bgUploadEl = null;
@@ -5435,6 +6687,136 @@ class SpatialLightColorCardEditor extends HTMLElement {
           </div>
         </div>
 
+        <!-- Glow Section -->
+        <div class="section${glow.enabled ? '' : ' collapsed'}" id="section-glow">
+          <div class="section-header" data-section="glow">
+            <h3>Glow</h3>
+            <span class="chevron">&#9660;</span>
+          </div>
+          <div class="section-body">
+            <div class="option-row">
+              <div><div class="label">Enable Glow</div><div class="sublabel">Show shaped glow effects behind entities</div></div>
+              <ha-switch id="cfgGlowEnabled"></ha-switch>
+            </div>
+            <div id="glowSettingsGroup" style="display:flex;flex-direction:column;gap:12px;">
+              <div class="two-col">
+                <div class="input-row">
+                  <label for="cfgGlowShape">Shape</label>
+                  <select id="cfgGlowShape">
+                    <option value="cone">Cone</option>
+                    <option value="semicone">Semicone</option>
+                    <option value="round">Round</option>
+                    <option value="oval">Oval</option>
+                    <option value="beam">Beam</option>
+                    <option value="spotlight">Spotlight</option>
+                    <option value="bar">Bar</option>
+                    <option value="custom">Custom (polar)</option>
+                  </select>
+                </div>
+                <div class="input-row">
+                  <label for="cfgGlowFalloff">Falloff</label>
+                  <select id="cfgGlowFalloff">
+                    <option value="smooth">Smooth</option>
+                    <option value="linear">Linear</option>
+                    <option value="exponential">Exponential</option>
+                    <option value="sharp">Sharp</option>
+                    <option value="uniform">Uniform</option>
+                  </select>
+                </div>
+              </div>
+              <div class="input-row" id="cfgGlowCustomShapeRow" style="display:${(glow.shape || 'cone') === 'custom' ? 'flex' : 'none'};">
+                <label for="cfgGlowCustomShape">Custom Shape</label>
+                <textarea id="cfgGlowCustomShape" class="custom-css-textarea" rows="4" placeholder="angle, radius (one per line)&#10;0, 1&#10;90, 0.6&#10;180, 1&#10;270, 0.6">${glow.custom_shape ? glow.custom_shape.map(p => p[0] + ', ' + p[1]).join('\n') : ''}</textarea>
+                <div class="sublabel" style="margin-top:2px;">Polar coords: angle° (0=down, clockwise), radius 0–1. Min 3 points.</div>
+              </div>
+              <div class="two-col">
+                <div class="input-row">
+                  <label for="cfgGlowDirection">Direction (°)</label>
+                  <input type="number" id="cfgGlowDirection" min="0" max="360" step="5" placeholder="0">
+                </div>
+                <div class="input-row">
+                  <label for="cfgGlowSpread">Spread</label>
+                  <input type="number" id="cfgGlowSpread" min="0.1" max="5" step="0.1" placeholder="1.5">
+                </div>
+              </div>
+              <div class="two-col">
+                <div class="input-row">
+                  <label for="cfgGlowLength">Length (px)</label>
+                  <input type="number" id="cfgGlowLength" min="1" max="500" step="5" placeholder="80">
+                </div>
+                <div class="input-row">
+                  <label for="cfgGlowWidth">Width (px)</label>
+                  <input type="number" id="cfgGlowWidth" min="1" max="500" step="5" placeholder="60">
+                </div>
+              </div>
+              <div class="two-col">
+                <div class="input-row">
+                  <label for="cfgGlowBlur">Blur (px)</label>
+                  <input type="number" id="cfgGlowBlur" min="0" max="100" step="1" placeholder="12">
+                </div>
+                <div class="input-row">
+                  <label for="cfgGlowColor">Color</label>
+                  <div class="color-input-row">
+                    <input type="color" id="cfgGlowColorPicker" value="#ffffff">
+                    <input type="text" id="cfgGlowColor" placeholder="Auto (entity color)">
+                  </div>
+                </div>
+              </div>
+              <div class="option-row">
+                <div class="label">Intensity <span id="cfgGlowIntensityValue" style="font-weight:400;">70%</span></div>
+                <div class="slider-row" style="flex:0 0 auto;">
+                  <input type="range" id="cfgGlowIntensity" min="0" max="100" step="1" style="width:120px;">
+                </div>
+              </div>
+              <div class="option-row">
+                <div class="label">Edge Softness <span id="cfgGlowEdgeSoftnessValue" style="font-weight:400;">0%</span></div>
+                <div class="slider-row" style="flex:0 0 auto;">
+                  <input type="range" id="cfgGlowEdgeSoftness" min="0" max="100" step="1" style="width:120px;">
+                </div>
+              </div>
+              <div class="option-row">
+                <div class="label">Start Width <span id="cfgGlowStartWidthValue" style="font-weight:400;">0%</span></div>
+                <div class="slider-row" style="flex:0 0 auto;">
+                  <input type="range" id="cfgGlowStartWidth" min="0" max="100" step="1" style="width:120px;">
+                </div>
+              </div>
+              <div class="two-col">
+                <div class="input-row">
+                  <label for="cfgGlowOffsetX">Offset X (px)</label>
+                  <input type="number" id="cfgGlowOffsetX" step="1" placeholder="0">
+                </div>
+                <div class="input-row">
+                  <label for="cfgGlowOffsetY">Offset Y (px)</label>
+                  <input type="number" id="cfgGlowOffsetY" step="1" placeholder="0">
+                </div>
+              </div>
+              <div class="option-row">
+                <div><div class="label">Scale with Brightness</div><div class="sublabel">Adjust glow opacity based on light brightness</div></div>
+                <ha-switch id="cfgGlowScaleBrightness"></ha-switch>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Glow Walls Section -->
+        <div class="section${glowWalls.length === 0 ? ' collapsed' : ''}" id="section-glow-walls">
+          <div class="section-header" data-section="glow-walls">
+            <h3>Glow Walls${glowWalls.length > 0 ? ` (${glowWalls.length})` : ''}</h3>
+            <span class="chevron">&#9660;</span>
+          </div>
+          <div class="section-body">
+            <div class="sublabel" style="margin-bottom:8px;">Line segments or boxes that block glow from expanding (like room walls).</div>
+            ${glowWalls.length > 0
+              ? `<div class="wall-list">${glowWalls.map((w, i) => this._renderWallItem(w, i)).join('')}</div>`
+              : ''
+            }
+            <div class="add-ce-row">
+              <button class="add-ce-btn" id="addWallLineBtn" title="Add a line segment wall">+ Line</button>
+              <button class="add-ce-btn" id="addWallBoxBtn" title="Add a rectangular wall (box)">+ Box</button>
+            </div>
+          </div>
+        </div>
+
         <!-- Interaction Section -->
         <div class="section collapsed" id="section-interaction">
           <div class="section-header" data-section="interaction">
@@ -5449,11 +6831,35 @@ class SpatialLightColorCardEditor extends HTMLElement {
           </div>
         </div>
 
+        <!-- Custom CSS Section -->
+        <div class="section${config.custom_css ? '' : ' collapsed'}" id="section-custom-css">
+          <div class="section-header" data-section="custom-css">
+            <h3>Custom CSS</h3>
+            <span class="chevron">&#9660;</span>
+          </div>
+          <div class="section-body">
+            <div class="input-row">
+              <label>Global Custom CSS</label>
+              <textarea id="cfgCustomCss" class="custom-css-textarea" rows="6" placeholder="/* Injected into shadow DOM */&#10;.light { ... }&#10;.light-glow { ... }"></textarea>
+            </div>
+            <div class="sublabel">CSS is injected into the card's shadow DOM. Use per-entity style overrides in each entity's settings.</div>
+          </div>
+        </div>
+
       </div>
     `;
 
     this._setDOMValues();
     this._attachEditorListeners();
+
+    // Restore section collapsed/expanded state from before re-render
+    if (this._collapsedSections) {
+      Object.entries(this._collapsedSections).forEach(([id, wasCollapsed]) => {
+        const el = this.shadowRoot.getElementById(id);
+        if (el) el.classList.toggle('collapsed', wasCollapsed);
+      });
+    }
+
     // Setup entity pickers after DOM is ready
     requestAnimationFrame(() => {
       this._setupEntityPickers();
@@ -5529,6 +6935,43 @@ class SpatialLightColorCardEditor extends HTMLElement {
     setVal('cfgTempMin', c.temperature_min != null ? c.temperature_min : '');
     setVal('cfgTempMax', c.temperature_max != null ? c.temperature_max : '');
 
+    // Glow settings
+    const g = c.glow || {};
+    setVal('cfgGlowShape', g.shape || 'cone');
+    // Show/hide custom shape textarea based on shape
+    const csRow = root.getElementById('cfgGlowCustomShapeRow');
+    if (csRow) csRow.style.display = (g.shape || 'cone') === 'custom' ? 'flex' : 'none';
+    const csEl = root.getElementById('cfgGlowCustomShape');
+    if (csEl) csEl.value = g.custom_shape ? g.custom_shape.map(p => p[0] + ', ' + p[1]).join('\n') : '';
+    setVal('cfgGlowFalloff', g.falloff || 'smooth');
+    setVal('cfgGlowDirection', g.direction != null ? g.direction : '');
+    setVal('cfgGlowSpread', g.spread != null ? g.spread : '');
+    setVal('cfgGlowLength', g.length != null ? g.length : '');
+    setVal('cfgGlowWidth', g.width != null ? g.width : '');
+    setVal('cfgGlowBlur', g.blur != null ? g.blur : '');
+    setVal('cfgGlowOffsetX', g.offset_x != null ? g.offset_x : '');
+    setVal('cfgGlowOffsetY', g.offset_y != null ? g.offset_y : '');
+    const glowIntensityPct = Math.round((g.intensity != null ? g.intensity : 0.7) * 100);
+    setVal('cfgGlowIntensity', glowIntensityPct);
+    const glowIntensityLabel = root.getElementById('cfgGlowIntensityValue');
+    if (glowIntensityLabel) glowIntensityLabel.textContent = `${glowIntensityPct}%`;
+    const glowEdgePct = Math.round((g.edge_softness != null ? g.edge_softness : 0) * 100);
+    setVal('cfgGlowEdgeSoftness', glowEdgePct);
+    const glowEdgeLabel = root.getElementById('cfgGlowEdgeSoftnessValue');
+    if (glowEdgeLabel) glowEdgeLabel.textContent = `${glowEdgePct}%`;
+    const glowStartPct = Math.round((g.start_width != null ? g.start_width : 0) * 100);
+    setVal('cfgGlowStartWidth', glowStartPct);
+    const glowStartLabel = root.getElementById('cfgGlowStartWidthValue');
+    if (glowStartLabel) glowStartLabel.textContent = `${glowStartPct}%`;
+    setVal('cfgGlowColor', g.color || '');
+    if (g.color && /^#[0-9a-fA-F]{6}$/.test(g.color)) {
+      setVal('cfgGlowColorPicker', g.color);
+    }
+
+    // Custom CSS
+    const cssEl = root.getElementById('cfgCustomCss');
+    if (cssEl) cssEl.value = c.custom_css || '';
+
     // Switches
     const switches = {
       cfgEditPositions: !!c._edit_positions,
@@ -5539,6 +6982,8 @@ class SpatialLightColorCardEditor extends HTMLElement {
       cfgAlwaysControls: c.always_show_controls || false,
       cfgControlsBelow: c.controls_below !== false,
       cfgSwitchTap: c.switch_single_tap || false,
+      cfgGlowEnabled: !!(g.enabled),
+      cfgGlowScaleBrightness: g.scale_with_brightness !== false,
     };
     const setChecked = () => {
       Object.entries(switches).forEach(([id, val]) => {
@@ -5555,6 +7000,12 @@ class SpatialLightColorCardEditor extends HTMLElement {
         const entity = sw.dataset.entity;
         const override = c.icon_only_overrides && c.icon_only_overrides[entity];
         sw.checked = override !== undefined ? override : false;
+      });
+      // Per-entity glow enabled switches
+      root.querySelectorAll('.entity-overrides ha-switch[data-key="glowEnabled"]').forEach(sw => {
+        const entity = sw.dataset.entity;
+        const override = c.glow_overrides && c.glow_overrides[entity];
+        sw.checked = override ? override.enabled === true : false;
       });
     });
   }
@@ -5687,6 +7138,8 @@ class SpatialLightColorCardEditor extends HTMLElement {
         if (this._config.color_overrides) delete this._config.color_overrides[entity];
         if (this._config.icon_rotation_overrides) delete this._config.icon_rotation_overrides[entity];
         if (this._config.icon_mirror_overrides) delete this._config.icon_mirror_overrides[entity];
+        if (this._config.glow_overrides) delete this._config.glow_overrides[entity];
+        if (this._config.style_overrides) delete this._config.style_overrides[entity];
         if (this._expandedEntity === entity) this._expandedEntity = null;
         this._fireConfigChanged();
         this._render();
@@ -6124,6 +7577,305 @@ class SpatialLightColorCardEditor extends HTMLElement {
     });
     this._bindNumberInput('cfgTempMax', (val) => {
       this._config.temperature_max = (val >= 1000 && val <= 10000) ? val : null;
+    });
+
+    // --- Glow settings ---
+    const ensureGlow = () => {
+      if (!this._config.glow || typeof this._config.glow !== 'object') this._config.glow = {};
+    };
+    const glowEnabledEl = root.getElementById('cfgGlowEnabled');
+    if (glowEnabledEl) {
+      glowEnabledEl.addEventListener('change', () => {
+        ensureGlow();
+        this._config.glow.enabled = glowEnabledEl.checked;
+        this._fireConfigChanged();
+      });
+    }
+    const glowScaleEl = root.getElementById('cfgGlowScaleBrightness');
+    if (glowScaleEl) {
+      glowScaleEl.addEventListener('change', () => {
+        ensureGlow();
+        this._config.glow.scale_with_brightness = glowScaleEl.checked;
+        this._fireConfigChanged();
+      });
+    }
+
+    const glowShapeEl = root.getElementById('cfgGlowShape');
+    if (glowShapeEl) {
+      glowShapeEl.addEventListener('change', () => {
+        ensureGlow();
+        this._config.glow.shape = glowShapeEl.value;
+        // Show/hide custom shape textarea
+        const csRow = root.getElementById('cfgGlowCustomShapeRow');
+        if (csRow) csRow.style.display = glowShapeEl.value === 'custom' ? 'flex' : 'none';
+        this._fireConfigChanged();
+      });
+    }
+    const glowCustomShapeEl = root.getElementById('cfgGlowCustomShape');
+    if (glowCustomShapeEl) {
+      let csTimer = null;
+      const parseCustomShape = () => {
+        ensureGlow();
+        const parsed = this._parseCustomShapeText(glowCustomShapeEl.value);
+        if (parsed) { this._config.glow.custom_shape = parsed; }
+        else { delete this._config.glow.custom_shape; }
+        this._fireConfigChanged();
+      };
+      glowCustomShapeEl.addEventListener('input', () => {
+        clearTimeout(csTimer);
+        csTimer = setTimeout(parseCustomShape, 500);
+      });
+      glowCustomShapeEl.addEventListener('change', () => {
+        clearTimeout(csTimer);
+        parseCustomShape();
+      });
+    }
+    const glowFalloffEl = root.getElementById('cfgGlowFalloff');
+    if (glowFalloffEl) {
+      glowFalloffEl.addEventListener('change', () => {
+        ensureGlow();
+        this._config.glow.falloff = glowFalloffEl.value;
+        this._fireConfigChanged();
+      });
+    }
+
+    // Glow number inputs
+    const glowNumFields = [
+      ['cfgGlowDirection', 'direction'],
+      ['cfgGlowSpread', 'spread'],
+      ['cfgGlowLength', 'length'],
+      ['cfgGlowWidth', 'width'],
+      ['cfgGlowBlur', 'blur'],
+      ['cfgGlowOffsetX', 'offset_x'],
+      ['cfgGlowOffsetY', 'offset_y'],
+    ];
+    glowNumFields.forEach(([id, key]) => {
+      const el = root.getElementById(id);
+      if (!el) return;
+      el.addEventListener('change', () => {
+        ensureGlow();
+        const raw = el.value.trim();
+        if (raw === '') { delete this._config.glow[key]; }
+        else {
+          const v = parseFloat(raw);
+          if (Number.isFinite(v)) this._config.glow[key] = v;
+        }
+        this._fireConfigChanged();
+      });
+    });
+
+    // Glow intensity slider (0-100 → 0-1)
+    const glowIntSlider = root.getElementById('cfgGlowIntensity');
+    const glowIntLabel = root.getElementById('cfgGlowIntensityValue');
+    if (glowIntSlider) {
+      glowIntSlider.addEventListener('input', () => {
+        if (glowIntLabel) glowIntLabel.textContent = `${glowIntSlider.value}%`;
+      });
+      glowIntSlider.addEventListener('change', () => {
+        ensureGlow();
+        this._config.glow.intensity = parseFloat((parseInt(glowIntSlider.value, 10) / 100).toFixed(2));
+        this._fireConfigChanged();
+      });
+    }
+    // Glow edge softness slider (0-100 → 0-1)
+    const glowEdgeSlider = root.getElementById('cfgGlowEdgeSoftness');
+    const glowEdgeLabel = root.getElementById('cfgGlowEdgeSoftnessValue');
+    if (glowEdgeSlider) {
+      glowEdgeSlider.addEventListener('input', () => {
+        if (glowEdgeLabel) glowEdgeLabel.textContent = `${glowEdgeSlider.value}%`;
+      });
+      glowEdgeSlider.addEventListener('change', () => {
+        ensureGlow();
+        this._config.glow.edge_softness = parseFloat((parseInt(glowEdgeSlider.value, 10) / 100).toFixed(2));
+        this._fireConfigChanged();
+      });
+    }
+    // Glow start width slider (0-100 → 0-1)
+    const glowStartSlider = root.getElementById('cfgGlowStartWidth');
+    const glowStartLabel = root.getElementById('cfgGlowStartWidthValue');
+    if (glowStartSlider) {
+      glowStartSlider.addEventListener('input', () => {
+        if (glowStartLabel) glowStartLabel.textContent = `${glowStartSlider.value}%`;
+      });
+      glowStartSlider.addEventListener('change', () => {
+        ensureGlow();
+        this._config.glow.start_width = parseFloat((parseInt(glowStartSlider.value, 10) / 100).toFixed(2));
+        this._fireConfigChanged();
+      });
+    }
+
+    // Glow color (text + picker pair)
+    const glowColorText = root.getElementById('cfgGlowColor');
+    const glowColorPicker = root.getElementById('cfgGlowColorPicker');
+    if (glowColorText && glowColorPicker) {
+      let glowColorTimer = null;
+      glowColorText.addEventListener('input', () => {
+        clearTimeout(glowColorTimer);
+        glowColorTimer = setTimeout(() => {
+          ensureGlow();
+          const val = glowColorText.value.trim();
+          if (val) {
+            this._config.glow.color = val;
+            if (/^#[0-9a-fA-F]{6}$/.test(val)) glowColorPicker.value = val;
+          } else {
+            delete this._config.glow.color;
+          }
+          this._fireConfigChanged();
+        }, 400);
+      });
+      glowColorText.addEventListener('change', () => {
+        clearTimeout(glowColorTimer);
+        ensureGlow();
+        const val = glowColorText.value.trim();
+        if (val) {
+          this._config.glow.color = val;
+          if (/^#[0-9a-fA-F]{6}$/.test(val)) glowColorPicker.value = val;
+        } else {
+          delete this._config.glow.color;
+        }
+        this._fireConfigChanged();
+      });
+      glowColorPicker.addEventListener('input', () => {
+        glowColorText.value = glowColorPicker.value;
+        ensureGlow();
+        this._config.glow.color = glowColorPicker.value;
+        this._fireConfigChanged();
+      });
+    }
+
+    // --- Glow Walls ---
+    // Add wall buttons
+    const addWallLineBtn = root.getElementById('addWallLineBtn');
+    if (addWallLineBtn) {
+      addWallLineBtn.addEventListener('click', () => {
+        if (!Array.isArray(this._config.glow_walls)) this._config.glow_walls = [];
+        this._config.glow_walls.push({ x1: 20, y1: 50, x2: 80, y2: 50 });
+        this._fireConfigChanged();
+        this._render();
+      });
+    }
+    const addWallBoxBtn = root.getElementById('addWallBoxBtn');
+    if (addWallBoxBtn) {
+      addWallBoxBtn.addEventListener('click', () => {
+        if (!Array.isArray(this._config.glow_walls)) this._config.glow_walls = [];
+        this._config.glow_walls.push({ x: 20, y: 20, width: 60, height: 60 });
+        this._fireConfigChanged();
+        this._render();
+      });
+    }
+    // Wall remove buttons
+    root.querySelectorAll('.wall-item .entity-btn.remove').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const idx = parseInt(btn.dataset.wallIndex, 10);
+        if (!Array.isArray(this._config.glow_walls)) return;
+        this._config.glow_walls.splice(idx, 1);
+        this._fireConfigChanged();
+        this._render();
+      });
+    });
+    // Wall field editing
+    root.querySelectorAll('.wall-fields input').forEach(inp => {
+      const idx = parseInt(inp.dataset.wallIndex, 10);
+      const key = inp.dataset.wallKey;
+      if (isNaN(idx) || !key) return;
+      inp.addEventListener('change', () => {
+        if (!Array.isArray(this._config.glow_walls) || !this._config.glow_walls[idx]) return;
+        let wall = this._config.glow_walls[idx];
+        // Convert array to object form if needed
+        if (Array.isArray(wall)) {
+          wall = { x1: wall[0], y1: wall[1], x2: wall[2], y2: wall[3] };
+          this._config.glow_walls[idx] = wall;
+        }
+        const v = parseFloat(inp.value);
+        if (Number.isFinite(v)) wall[key] = v;
+        this._fireConfigChanged();
+      });
+    });
+
+    // --- Custom CSS ---
+    const customCssEl = root.getElementById('cfgCustomCss');
+    if (customCssEl) {
+      let cssTimer = null;
+      customCssEl.addEventListener('input', () => {
+        clearTimeout(cssTimer);
+        cssTimer = setTimeout(() => {
+          this._config.custom_css = customCssEl.value;
+          this._fireConfigChanged();
+        }, 500);
+      });
+      customCssEl.addEventListener('change', () => {
+        clearTimeout(cssTimer);
+        this._config.custom_css = customCssEl.value;
+        this._fireConfigChanged();
+      });
+    }
+
+    // --- Per-entity glow overrides ---
+    requestAnimationFrame(() => {
+      root.querySelectorAll('.entity-overrides ha-switch[data-key="glowEnabled"]').forEach(sw => {
+        sw.addEventListener('change', () => {
+          const entity = sw.dataset.entity;
+          if (!this._config.glow_overrides) this._config.glow_overrides = {};
+          if (!this._config.glow_overrides[entity]) this._config.glow_overrides[entity] = {};
+          this._config.glow_overrides[entity].enabled = sw.checked;
+          this._fireConfigChanged();
+        });
+      });
+    });
+    root.querySelectorAll('.entity-overrides select[data-key="glowShape"]').forEach(sel => {
+      sel.addEventListener('change', () => {
+        const entity = sel.dataset.entity;
+        if (!this._config.glow_overrides) this._config.glow_overrides = {};
+        if (!this._config.glow_overrides[entity]) this._config.glow_overrides[entity] = {};
+        if (sel.value) { this._config.glow_overrides[entity].shape = sel.value; }
+        else { delete this._config.glow_overrides[entity].shape; }
+        // Show/hide per-entity custom shape textarea
+        const csRow = root.querySelector(`.override-row[data-entity="${entity}"][data-key="glowCustomShapeRow"]`);
+        if (csRow) csRow.style.display = sel.value === 'custom' ? 'flex' : 'none';
+        this._fireConfigChanged();
+      });
+    });
+    root.querySelectorAll('.entity-overrides textarea[data-key="glowCustomShape"]').forEach(ta => {
+      let csTimer = null;
+      const parseAndSave = () => {
+        const entity = ta.dataset.entity;
+        if (!this._config.glow_overrides) this._config.glow_overrides = {};
+        if (!this._config.glow_overrides[entity]) this._config.glow_overrides[entity] = {};
+        const parsed = this._parseCustomShapeText(ta.value);
+        if (parsed) { this._config.glow_overrides[entity].custom_shape = parsed; }
+        else { delete this._config.glow_overrides[entity].custom_shape; }
+        this._fireConfigChanged();
+      };
+      ta.addEventListener('input', () => { clearTimeout(csTimer); csTimer = setTimeout(parseAndSave, 500); });
+      ta.addEventListener('change', () => { clearTimeout(csTimer); parseAndSave(); });
+    });
+    root.querySelectorAll('.entity-overrides input[data-key="glowDirection"]').forEach(inp => {
+      this._bindEntityOverride(inp, (entity, val) => {
+        if (!this._config.glow_overrides) this._config.glow_overrides = {};
+        if (!this._config.glow_overrides[entity]) this._config.glow_overrides[entity] = {};
+        const num = parseFloat(val);
+        if (Number.isFinite(num)) { this._config.glow_overrides[entity].direction = num; }
+        else { delete this._config.glow_overrides[entity].direction; }
+      });
+    });
+    root.querySelectorAll('.entity-overrides input[data-key="glowIntensity"]').forEach(inp => {
+      this._bindEntityOverride(inp, (entity, val) => {
+        if (!this._config.glow_overrides) this._config.glow_overrides = {};
+        if (!this._config.glow_overrides[entity]) this._config.glow_overrides[entity] = {};
+        const num = parseFloat(val);
+        if (Number.isFinite(num)) { this._config.glow_overrides[entity].intensity = Math.max(0, Math.min(1, num)); }
+        else { delete this._config.glow_overrides[entity].intensity; }
+      });
+    });
+
+    // --- Per-entity style overrides ---
+    root.querySelectorAll('.entity-overrides input[data-key="styleOverride"]').forEach(inp => {
+      this._bindEntityOverride(inp, (entity, val) => {
+        if (!this._config.style_overrides) this._config.style_overrides = {};
+        if (val) { this._config.style_overrides[entity] = val; }
+        else { delete this._config.style_overrides[entity]; }
+      });
     });
   }
 

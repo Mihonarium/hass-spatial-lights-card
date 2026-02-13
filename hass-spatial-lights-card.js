@@ -260,7 +260,7 @@ class SpatialLightColorCard extends HTMLElement {
 
   /** Valid glow shape names. */
   static get GLOW_SHAPES() {
-    return ['cone', 'semicone', 'round', 'oval', 'beam', 'spotlight', 'bar'];
+    return ['cone', 'semicone', 'round', 'oval', 'beam', 'spotlight', 'bar', 'custom'];
   }
 
   /** Valid glow falloff modes. */
@@ -287,6 +287,7 @@ class SpatialLightColorCard extends HTMLElement {
       edge_softness: 0,         // 0-1: how soft/feathered the edges of the shape are
       falloff: 'smooth',        // smooth, linear, exponential, sharp — gradient curve
       gradient_stops: null,     // custom array of [position%, opacity] e.g. [[0, 1], [50, 0.3], [100, 0]]
+      custom_shape: null,       // polar coords: [[angle°, radius 0-1], ...] — used with shape:'custom'
     };
     if (!obj || typeof obj !== 'object') return defaults;
     return {
@@ -306,6 +307,7 @@ class SpatialLightColorCard extends HTMLElement {
       edge_softness: Number.isFinite(Number(obj.edge_softness)) ? Math.max(0, Math.min(1, Number(obj.edge_softness))) : defaults.edge_softness,
       falloff: SpatialLightColorCard.GLOW_FALLOFFS.includes(obj.falloff) ? obj.falloff : defaults.falloff,
       gradient_stops: this._normalizeGradientStops(obj.gradient_stops),
+      custom_shape: this._normalizeCustomShape(obj.custom_shape),
     };
   }
 
@@ -322,6 +324,96 @@ class SpatialLightColorCard extends HTMLElement {
       }
     }
     return result.length >= 2 ? result : null;
+  }
+
+  /**
+   * Normalize custom_shape: array of [angleDeg, radiusFraction] polar points.
+   * Angle 0 = forward direction (down by default), clockwise.
+   * Radius 0 = center, 1 = full extent.
+   * Minimum 3 points required to define a shape.
+   */
+  _normalizeCustomShape(shape) {
+    if (!Array.isArray(shape) || shape.length < 3) return null;
+    const result = [];
+    for (const point of shape) {
+      if (!Array.isArray(point) || point.length < 2) continue;
+      const angle = Number(point[0]);
+      const radius = Number(point[1]);
+      if (Number.isFinite(angle) && Number.isFinite(radius)) {
+        result.push([((angle % 360) + 360) % 360, Math.max(0, Math.min(2, radius))]);
+      }
+    }
+    return result.length >= 3 ? result : null;
+  }
+
+  /**
+   * Build a smooth clip-path polygon string from custom shape polar coordinates.
+   * Interpolates between defined points with cosine smoothing for organic shapes.
+   * Returns a CSS polygon() value string.
+   */
+  _buildCustomShapePolygon(customShape) {
+    const sorted = [...customShape].sort((a, b) => a[0] - b[0]);
+
+    // Generate interpolated points every 5° for a smooth curve (72 points)
+    const numPoints = 72;
+    const points = [];
+
+    for (let i = 0; i < numPoints; i++) {
+      const angleDeg = (i / numPoints) * 360;
+      const radius = this._interpolateCustomRadius(sorted, angleDeg);
+
+      // Convert polar to cartesian percentage coordinates.
+      // Convention: 0° = down (+y), 90° = right (+x), clockwise.
+      const angleRad = (angleDeg * Math.PI) / 180;
+      const x = 50 + radius * 50 * Math.sin(angleRad);
+      const y = 50 + radius * 50 * Math.cos(angleRad);
+      points.push(`${x.toFixed(2)}% ${y.toFixed(2)}%`);
+    }
+
+    return points.join(', ');
+  }
+
+  /**
+   * Cosine-interpolate the radius at a given angle between surrounding
+   * defined points in a sorted polar shape array.
+   */
+  _interpolateCustomRadius(sortedPoints, angleDeg) {
+    const n = sortedPoints.length;
+    const angle = ((angleDeg % 360) + 360) % 360;
+
+    // Find the two points surrounding the target angle
+    let beforeIdx = n - 1;
+    let afterIdx = 0;
+
+    for (let i = 0; i < n; i++) {
+      if (sortedPoints[i][0] > angle) {
+        afterIdx = i;
+        beforeIdx = (i - 1 + n) % n;
+        break;
+      }
+      if (i === n - 1) {
+        beforeIdx = n - 1;
+        afterIdx = 0;
+      }
+    }
+
+    const before = sortedPoints[beforeIdx];
+    const after = sortedPoints[afterIdx];
+
+    // Exact match
+    if (Math.abs(before[0] - angle) < 0.01) return before[1];
+    if (Math.abs(after[0] - angle) < 0.01) return after[1];
+
+    // Interpolation parameter t (handles 360° wrap-around)
+    let range = after[0] - before[0];
+    if (range <= 0) range += 360;
+    let diff = angle - before[0];
+    if (diff < 0) diff += 360;
+    const t = range > 0 ? diff / range : 0;
+
+    // Cosine interpolation for smooth organic curves
+    const t2 = (1 - Math.cos(t * Math.PI)) / 2;
+    return before[1] * (1 - t2) + after[1] * t2;
   }
 
   /** Normalize per-entity glow overrides. Each value is a partial glow config. */
@@ -348,6 +440,8 @@ class SpatialLightColorCard extends HTMLElement {
       if (SpatialLightColorCard.GLOW_FALLOFFS.includes(val.falloff)) o.falloff = val.falloff;
       const gs = this._normalizeGradientStops(val.gradient_stops);
       if (gs) o.gradient_stops = gs;
+      const cs = this._normalizeCustomShape(val.custom_shape);
+      if (cs) o.custom_shape = cs;
       if (Object.keys(o).length > 0) result[entity] = o;
     });
     return result;
@@ -4390,6 +4484,37 @@ class SpatialLightColorCard extends HTMLElement {
         // Linear gradient from origin to far end
         glowEl.style.background = `linear-gradient(to bottom, ${stops})`;
         this._applyEdgeSoftness(glowEl, gc, true);
+        break;
+      }
+
+      case 'custom': {
+        // Polar-coordinate custom shape. The user defines [angle°, radius 0-1]
+        // points and the shape is smoothly interpolated between them.
+        // Falls back to round if custom_shape is not defined or has < 3 points.
+        if (!gc.custom_shape || gc.custom_shape.length < 3) {
+          // Fallback: treat as round
+          const size = gc.width;
+          const fbStops = this._buildGlowGradientStops(r, g, b, gc.falloff, gc.gradient_stops);
+          glowEl.style.width = `${size}px`;
+          glowEl.style.height = `${size}px`;
+          glowEl.style.transform = `translate(-50%, -50%) translateX(${gc.offset_x}px) translateY(${gc.offset_y}px) rotate(${gc.direction}deg)`;
+          glowEl.style.transformOrigin = '50% 50%';
+          glowEl.style.borderRadius = '50%';
+          glowEl.style.background = `radial-gradient(circle at 50% 50%, ${fbStops})`;
+          this._applyEdgeSoftness(glowEl, gc, false);
+          break;
+        }
+
+        const size = gc.width;
+        const polyPoints = this._buildCustomShapePolygon(gc.custom_shape);
+        const stops = this._buildGlowGradientStops(r, g, b, gc.falloff, gc.gradient_stops);
+        glowEl.style.width = `${size}px`;
+        glowEl.style.height = `${size}px`;
+        glowEl.style.transform = `translate(-50%, -50%) translateX(${gc.offset_x}px) translateY(${gc.offset_y}px) rotate(${gc.direction}deg)`;
+        glowEl.style.transformOrigin = '50% 50%';
+        glowEl.style.clipPath = `polygon(${polyPoints})`;
+        glowEl.style.background = `radial-gradient(circle at 50% 50%, ${stops})`;
+        this._applyEdgeSoftness(glowEl, gc, false);
         break;
       }
 

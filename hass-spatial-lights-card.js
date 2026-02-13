@@ -260,7 +260,7 @@ class SpatialLightColorCard extends HTMLElement {
 
   /** Valid glow shape names. */
   static get GLOW_SHAPES() {
-    return ['cone', 'round', 'oval', 'beam', 'spotlight', 'bar'];
+    return ['cone', 'semicone', 'round', 'oval', 'beam', 'spotlight', 'bar'];
   }
 
   /** Valid glow falloff modes. */
@@ -272,7 +272,7 @@ class SpatialLightColorCard extends HTMLElement {
   _normalizeGlowConfig(obj) {
     const defaults = {
       enabled: false,
-      shape: 'cone',            // cone, round, oval, beam, spotlight, bar
+      shape: 'cone',            // cone, semicone, round, oval, beam, spotlight, bar
       direction: 0,             // 0=down, 90=right, 180=up, 270=left
       length: 80,               // max length in px (height for directional shapes, diameter for round)
       width: 60,                // spread width in px
@@ -281,6 +281,7 @@ class SpatialLightColorCard extends HTMLElement {
       offset_x: 0,              // horizontal offset from center
       offset_y: 0,              // vertical offset from center
       spread: 1.5,              // far-end width multiplier (1=no spread)
+      start_width: 0,           // 0-1: width fraction at origin (0=point, 0.5=half-width) — used by semicone
       scale_with_brightness: true,
       color: null,              // null = use entity color
       edge_softness: 0,         // 0-1: how soft/feathered the edges of the shape are
@@ -299,6 +300,7 @@ class SpatialLightColorCard extends HTMLElement {
       offset_x: Number.isFinite(Number(obj.offset_x)) ? Number(obj.offset_x) : defaults.offset_x,
       offset_y: Number.isFinite(Number(obj.offset_y)) ? Number(obj.offset_y) : defaults.offset_y,
       spread: Number.isFinite(Number(obj.spread)) && Number(obj.spread) > 0 ? Number(obj.spread) : defaults.spread,
+      start_width: Number.isFinite(Number(obj.start_width)) ? Math.max(0, Math.min(1, Number(obj.start_width))) : defaults.start_width,
       scale_with_brightness: obj.scale_with_brightness !== false,
       color: typeof obj.color === 'string' && obj.color.trim() ? obj.color.trim() : null,
       edge_softness: Number.isFinite(Number(obj.edge_softness)) ? Math.max(0, Math.min(1, Number(obj.edge_softness))) : defaults.edge_softness,
@@ -338,6 +340,7 @@ class SpatialLightColorCard extends HTMLElement {
       if (val.offset_x != null && Number.isFinite(Number(val.offset_x))) o.offset_x = Number(val.offset_x);
       if (val.offset_y != null && Number.isFinite(Number(val.offset_y))) o.offset_y = Number(val.offset_y);
       if (val.spread != null && Number.isFinite(Number(val.spread)) && Number(val.spread) > 0) o.spread = Number(val.spread);
+      if (val.start_width != null && Number.isFinite(Number(val.start_width))) o.start_width = Math.max(0, Math.min(1, Number(val.start_width)));
       if (val.scale_with_brightness != null) o.scale_with_brightness = val.scale_with_brightness !== false;
       if (typeof val.color === 'string' && val.color.trim()) o.color = val.color.trim();
       if (SpatialLightColorCard.GLOW_SHAPES.includes(val.shape)) o.shape = val.shape;
@@ -4251,6 +4254,7 @@ class SpatialLightColorCard extends HTMLElement {
 
     const [domain] = entityId.split('.');
     const isScene = domain === 'scene';
+    const isBinaryDomain = domain === 'switch' || domain === 'input_boolean' || domain === 'binary_sensor';
     const isOn = state.state === 'on' || isScene;
     if (!isOn) {
       glowEl.style.opacity = '0';
@@ -4260,7 +4264,8 @@ class SpatialLightColorCard extends HTMLElement {
     }
 
     const gc = this._getGlowConfig(entityId);
-    const brightness = state.attributes.brightness || (isScene ? 255 : 0); // 0-255
+    // Switches, binary sensors, scenes don't have brightness — treat as full (255)
+    const brightness = state.attributes.brightness || ((isScene || isBinaryDomain) ? 255 : 0); // 0-255
     const ratio = brightness / 255;
 
     // Determine the glow color
@@ -4310,6 +4315,27 @@ class SpatialLightColorCard extends HTMLElement {
         glowEl.style.borderRadius = '50%';
         glowEl.style.background = `radial-gradient(ellipse at 50% 50%, ${stops})`;
         this._applyEdgeSoftness(glowEl, gc, false);
+        break;
+      }
+
+      case 'semicone': {
+        // Truncated cone — starts with a width at the origin instead of a point.
+        // start_width (0-1) controls how wide the near end is relative to the far end.
+        // 0 = same as cone (point), 0.5 = near end is half the far end width, 1 = bar-like.
+        const sw = gc.start_width > 0 ? gc.start_width : 0.35; // default for semicone shape
+        // Near-end inset: interpolate between cone's topInset (sw=0) and 0% full width (sw=1)
+        const coneTopInset = 50 - (50 / gc.spread);
+        const nearInset = coneTopInset * (1 - sw);
+        glowEl.style.clipPath = `polygon(${nearInset}% 0%, ${100 - nearInset}% 0%, 100% 100%, 0% 100%)`;
+        const stops = this._buildGlowGradientStops(r, g, b, gc.falloff, gc.gradient_stops);
+        glowEl.style.width = `${gc.width}px`;
+        glowEl.style.height = `${length}px`;
+        glowEl.style.transform = `translateX(-50%) translateY(${gc.offset_y}px) translateX(${gc.offset_x}px) rotate(${gc.direction}deg)`;
+        glowEl.style.transformOrigin = '50% 0%';
+        // Use an ellipse gradient that's wider at origin to fill the truncated top
+        const gradEllipseW = 50 + sw * 40; // wider ellipse for wider start
+        glowEl.style.background = `radial-gradient(${gradEllipseW}% 70% at 50% 0%, ${stops})`;
+        this._applyEdgeSoftness(glowEl, gc, true);
         break;
       }
 
@@ -4367,9 +4393,11 @@ class SpatialLightColorCard extends HTMLElement {
         break;
       }
 
-      default: { // 'cone' — original behavior
-        const topInset = 50 - (50 / gc.spread);
-        glowEl.style.clipPath = `polygon(${topInset}% 0%, ${100 - topInset}% 0%, 100% 100%, 0% 100%)`;
+      default: { // 'cone' — original behavior (also supports start_width for truncated cones)
+        const cTopInset = 50 - (50 / gc.spread);
+        // Apply start_width: interpolate from pointed (sw=0) to full width (sw=1)
+        const nearInset = gc.start_width > 0 ? cTopInset * (1 - gc.start_width) : cTopInset;
+        glowEl.style.clipPath = `polygon(${nearInset}% 0%, ${100 - nearInset}% 0%, 100% 100%, 0% 100%)`;
         const stops = this._buildGlowGradientStops(r, g, b, gc.falloff, gc.gradient_stops);
         glowEl.style.width = `${gc.width}px`;
         glowEl.style.height = `${length}px`;

@@ -254,10 +254,10 @@ class SpatialLightColorCard extends HTMLElement {
 
   /** Normalize a single glow config object, filling in defaults. */
   _normalizeGlowConfig(obj) {
-    const VALID_SHAPES = ['cone', 'circle', 'oval', 'beam', 'semicircle'];
+    const VALID_SHAPES = ['cone', 'semicone', 'circle', 'oval', 'beam', 'semicircle'];
     const defaults = {
       enabled: false,
-      shape: 'cone',          // cone, circle, oval, beam, semicircle
+      shape: 'cone',          // cone, semicone, circle, oval, beam, semicircle
       direction: 0,           // 0=down, 90=right, 180=up, 270=left
       length: 80,             // max length in px (cone/beam height; oval vertical radius)
       width: 60,              // spread width in px (cone base width; circle/oval diameter)
@@ -4128,6 +4128,9 @@ class SpatialLightColorCard extends HTMLElement {
 
     // Dispatch to shape-specific renderer
     switch (gc.shape) {
+      case 'semicone':
+        this._applyGlowSemicone(glowEl, gc, rgb, ratio);
+        break;
       case 'circle':
         this._applyGlowCircle(glowEl, gc, rgb, ratio);
         break;
@@ -4186,6 +4189,85 @@ class SpatialLightColorCard extends HTMLElement {
 
     // Element must be wide enough for the full cone + blur overshoot
     const elWidth = gc.width * gc.spread;
+
+    el.style.width = `${elWidth}px`;
+    el.style.height = `${length}px`;
+    el.style.transformOrigin = '50% 0%';
+    el.style.transform = `translateX(-50%) translateY(${gc.offset_y}px) translateX(${gc.offset_x}px) rotate(${gc.direction}deg)`;
+    el.style.background = gradient;
+    el.style.maskImage = mask;
+    el.style.webkitMaskImage = mask;
+    el.style.clipPath = 'none';
+    el.style.borderRadius = '0';
+  }
+
+  /**
+   * Semicone (truncated cone): starts with a flat width at the icon and
+   * expands outward. Unlike the regular cone which tapers to a point,
+   * this shape has a visible starting width equal to `width`, expanding
+   * to `width * spread` at the far end.
+   *
+   * Achieved by shifting the conic-gradient mask center above the
+   * element so the cone has already opened to the starting width by
+   * the time it reaches the element's top edge. Uses a radial gradient
+   * with a wide x-radius for the color, producing uniform brightness
+   * across the starting width (appropriate for a wide light source).
+   */
+  _applyGlowSemicone(el, gc, rgb, ratio) {
+    const length = gc.scale_with_brightness ? gc.length * Math.max(ratio, 0.1) : gc.length;
+    const { r, g, b } = rgb;
+
+    const startHalfWidth = gc.width / 2;
+    const endHalfWidth = gc.width * gc.spread / 2;
+    const elWidth = Math.max(gc.width, gc.width * gc.spread);
+
+    let mask;
+
+    if (Math.abs(gc.spread - 1) < 0.05) {
+      // spread ≈ 1 → parallel sides (rectangle). Use linear gradient
+      // to soften the left/right edges.
+      const edgePct = Math.max(1, gc.edge_blur * 25);
+      mask = `linear-gradient(to right, `
+        + `transparent 0%, black ${edgePct}%, black ${100 - edgePct}%, transparent 100%)`;
+    } else if (gc.spread > 1) {
+      // Widening truncated cone. The virtual apex is above the element.
+      // d = distance from element top to the virtual point of the cone.
+      const d = length / (gc.spread - 1);
+      const totalLength = length + d;
+      // Half-angle of the full virtual cone
+      const halfAngle = Math.atan2(endHalfWidth, totalLength) * 180 / Math.PI;
+      const edgeBlurDeg = gc.edge_blur * halfAngle;
+      // Center above the element (negative %)
+      const centerPct = (-d / length) * 100;
+      mask = `conic-gradient(from 0deg at 50% ${centerPct}%, `
+        + `transparent ${180 - halfAngle - edgeBlurDeg}deg, `
+        + `black ${180 - halfAngle + edgeBlurDeg}deg, `
+        + `black ${180 + halfAngle - edgeBlurDeg}deg, `
+        + `transparent ${180 + halfAngle + edgeBlurDeg}deg)`;
+    } else {
+      // Narrowing truncated cone (spread < 1). Apex is below the element.
+      const d = length / (1 - gc.spread);
+      const halfAngle = Math.atan2(startHalfWidth, d) * 180 / Math.PI;
+      const edgeBlurDeg = gc.edge_blur * halfAngle;
+      // Center below the element (>100%)
+      const centerPct = (d / length) * 100;
+      // The visible cone opens upward from the center, so the opaque
+      // region is at 0° (up). Using 'from 180deg' shifts coordinates
+      // so the opaque band sits around 180° — same pattern as widening.
+      mask = `conic-gradient(from 180deg at 50% ${centerPct}%, `
+        + `transparent ${180 - halfAngle - edgeBlurDeg}deg, `
+        + `black ${180 - halfAngle + edgeBlurDeg}deg, `
+        + `black ${180 + halfAngle - edgeBlurDeg}deg, `
+        + `transparent ${180 + halfAngle + edgeBlurDeg}deg)`;
+    }
+
+    // Radial gradient with a wide x-radius so the bright area spans
+    // the full starting width, appropriate for a wide light source.
+    const gradient = `radial-gradient(${startHalfWidth * 1.5}px ${length}px at 50% 0%, `
+      + `rgba(${r},${g},${b},0.9) 0%, `
+      + `rgba(${r},${g},${b},0.4) 30%, `
+      + `rgba(${r},${g},${b},0.1) 65%, `
+      + `transparent 100%)`;
 
     el.style.width = `${elWidth}px`;
     el.style.height = `${length}px`;

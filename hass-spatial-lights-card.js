@@ -226,8 +226,9 @@ class SpatialLightColorCard extends HTMLElement {
 
     this._initializePositions();
 
-    // Clear sensor cache on config change
+    // Clear caches on config change
     this._canvasElementCache = null;
+    this._customMaskCache = null;
 
     // Re-render if hass is already available (config changed after first render)
     if (this._hass) {
@@ -265,7 +266,7 @@ class SpatialLightColorCard extends HTMLElement {
 
   /** Valid glow falloff modes. */
   static get GLOW_FALLOFFS() {
-    return ['smooth', 'linear', 'exponential', 'sharp'];
+    return ['smooth', 'linear', 'exponential', 'sharp', 'uniform'];
   }
 
   /** Normalize a single glow config object, filling in defaults. */
@@ -414,6 +415,119 @@ class SpatialLightColorCard extends HTMLElement {
     // Cosine interpolation for smooth organic curves
     const t2 = (1 - Math.cos(t * Math.PI)) / 2;
     return before[1] * (1 - t2) + after[1] * t2;
+  }
+
+  /**
+   * Get a cached canvas-generated mask data URL for a custom shape with soft edges.
+   * The mask is a greyscale image where white = fully opaque, black = fully transparent.
+   * The shape boundary follows the polar coordinates, and the edge_softness controls
+   * how gradual the transition is from opaque interior to transparent exterior.
+   */
+  _getCustomShapeMaskUrl(customShape, edgeSoftness) {
+    if (!this._customMaskCache) this._customMaskCache = new Map();
+
+    // Build cache key from shape + softness
+    const key = JSON.stringify(customShape) + ':' + edgeSoftness.toFixed(3);
+    if (this._customMaskCache.has(key)) {
+      return this._customMaskCache.get(key);
+    }
+
+    const url = this._generateCustomShapeMask(customShape, edgeSoftness);
+
+    // Limit cache size to 32 entries
+    if (this._customMaskCache.size >= 32) {
+      const firstKey = this._customMaskCache.keys().next().value;
+      this._customMaskCache.delete(firstKey);
+    }
+    this._customMaskCache.set(key, url);
+    return url;
+  }
+
+  /**
+   * Render a custom shape mask to a canvas and return a data URL.
+   * For each pixel, computes the distance from center as a fraction of the
+   * shape boundary radius at that angle, then applies a smooth fade zone
+   * at the boundary controlled by edge_softness.
+   *
+   * @param {Array} customShape - sorted [angle°, radius 0-1] pairs
+   * @param {number} edgeSoftness - 0-1: how wide the edge fade zone is
+   * @returns {string} data URL for use as CSS mask-image
+   */
+  _generateCustomShapeMask(customShape, edgeSoftness) {
+    const size = 256;
+    const canvas = document.createElement('canvas');
+    canvas.width = size;
+    canvas.height = size;
+    const ctx = canvas.getContext('2d');
+
+    const sorted = [...customShape].sort((a, b) => a[0] - b[0]);
+    const cx = size / 2;
+    const maxR = size / 2;
+
+    // Pre-compute shape radii every 1° for faster per-pixel lookup
+    const radiusLut = new Float32Array(360);
+    for (let a = 0; a < 360; a++) {
+      radiusLut[a] = this._interpolateCustomRadius(sorted, a) * maxR;
+    }
+
+    // Fade zone: edge_softness controls what fraction of the local radius is transition
+    // 0.1 = very tight edge, 1.0 = fade starts from center
+    const fadeRatio = Math.max(0.02, edgeSoftness * 0.6);
+
+    const imgData = ctx.createImageData(size, size);
+    const data = imgData.data;
+
+    for (let py = 0; py < size; py++) {
+      for (let px = 0; px < size; px++) {
+        const dx = px - cx;
+        const dy = py - cx;
+        const dist = Math.sqrt(dx * dx + dy * dy);
+
+        // Angle: 0° = down (+y), 90° = right (+x), clockwise
+        // atan2(dx, dy) gives angle from +y axis (down), clockwise
+        let angleDeg = Math.atan2(dx, dy) * 180 / Math.PI;
+        if (angleDeg < 0) angleDeg += 360;
+
+        // Look up shape boundary radius (linear interpolation between 1° steps)
+        const aFloor = Math.floor(angleDeg) % 360;
+        const aCeil = (aFloor + 1) % 360;
+        const aFrac = angleDeg - Math.floor(angleDeg);
+        const shapeR = radiusLut[aFloor] * (1 - aFrac) + radiusLut[aCeil] * aFrac;
+
+        // Fade zone width proportional to shape radius at this angle
+        const fadeWidth = shapeR * fadeRatio;
+
+        let alpha;
+        if (fadeWidth < 0.5) {
+          // Essentially no softness — hard edge
+          alpha = dist <= shapeR ? 255 : 0;
+        } else {
+          // Solid interior, smooth fade at boundary, transparent exterior
+          const innerR = shapeR - fadeWidth;
+          const outerR = shapeR + fadeWidth * 0.3; // slight overshoot for very soft look
+
+          if (dist <= innerR) {
+            alpha = 255;
+          } else if (dist >= outerR) {
+            alpha = 0;
+          } else {
+            // Smoothstep (hermite) for organic falloff
+            const t = (dist - innerR) / (outerR - innerR);
+            const s = t * t * (3 - 2 * t);
+            alpha = Math.round(255 * (1 - s));
+          }
+        }
+
+        const idx = (py * size + px) * 4;
+        data[idx] = 255;
+        data[idx + 1] = 255;
+        data[idx + 2] = 255;
+        data[idx + 3] = alpha; // alpha channel controls mask visibility
+      }
+    }
+
+    ctx.putImageData(imgData, 0, 0);
+    return canvas.toDataURL('image/png');
   }
 
   /** Normalize per-entity glow overrides. Each value is a partial glow config. */
@@ -4287,6 +4401,10 @@ class SpatialLightColorCard extends HTMLElement {
           `rgba(${r},${g},${b},0.15) 50%`,
           `transparent 75%`,
         ].join(', ');
+      case 'uniform':
+        // Solid fill — constant color everywhere. Edge softness is handled
+        // by the mask (custom shapes) or blur (other shapes).
+        return `rgba(${r},${g},${b},1) 0%, rgba(${r},${g},${b},1) 100%`;
       default: // 'smooth'
         return [
           `rgba(${r},${g},${b},0.9) 0%`,
@@ -4506,15 +4624,32 @@ class SpatialLightColorCard extends HTMLElement {
         }
 
         const size = gc.width;
-        const polyPoints = this._buildCustomShapePolygon(gc.custom_shape);
         const stops = this._buildGlowGradientStops(r, g, b, gc.falloff, gc.gradient_stops);
         glowEl.style.width = `${size}px`;
         glowEl.style.height = `${size}px`;
         glowEl.style.transform = `translate(-50%, -50%) translateX(${gc.offset_x}px) translateY(${gc.offset_y}px) rotate(${gc.direction}deg)`;
         glowEl.style.transformOrigin = '50% 50%';
-        glowEl.style.clipPath = `polygon(${polyPoints})`;
         glowEl.style.background = `radial-gradient(circle at 50% 50%, ${stops})`;
-        this._applyEdgeSoftness(glowEl, gc, false);
+
+        if (gc.edge_softness > 0) {
+          // Canvas-generated mask: shape-following soft edges with smooth falloff.
+          // The mask defines a solid interior and gradual fade at the shape boundary.
+          // This replaces clip-path to avoid hard/sharp polygon edges.
+          const maskUrl = this._getCustomShapeMaskUrl(gc.custom_shape, gc.edge_softness);
+          glowEl.style.clipPath = '';
+          glowEl.style.maskImage = `url(${maskUrl})`;
+          glowEl.style.webkitMaskImage = `url(${maskUrl})`;
+          glowEl.style.maskSize = '100% 100%';
+          glowEl.style.webkitMaskSize = '100% 100%';
+          glowEl.style.maskComposite = '';
+          glowEl.style.webkitMaskComposite = '';
+        } else {
+          // Hard edges via clip-path polygon (more efficient, no canvas needed)
+          const polyPoints = this._buildCustomShapePolygon(gc.custom_shape);
+          glowEl.style.clipPath = `polygon(${polyPoints})`;
+          glowEl.style.maskImage = '';
+          glowEl.style.webkitMaskImage = '';
+        }
         break;
       }
 

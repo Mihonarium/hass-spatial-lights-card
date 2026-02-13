@@ -221,6 +221,10 @@ class SpatialLightColorCard extends HTMLElement {
       glow_walls: this._normalizeGlowWalls(config.glow_walls),
     };
 
+    // Bump wall config version to invalidate per-entity wall mask caches
+    this._wallConfigVersion = (this._wallConfigVersion || 0) + 1;
+    this._wallMaskPerEntity = {};
+
     this._gridSize = this._config.grid_size;
 
     // Editor-driven position editing mode
@@ -603,8 +607,8 @@ class SpatialLightColorCard extends HTMLElement {
    * Generate a wall shadow mask using polygon-based shadow casting.
    * For each wall segment, computes a shadow trapezoid extending away from
    * the light and fills it using Canvas 2D's GPU-accelerated, anti-aliased
-   * path rendering. This replaces per-pixel ray casting for much better
-   * performance and smooth diagonal shadow edges.
+   * path rendering. The glow element's own blur filter provides natural
+   * penumbra, so no additional blur pass is needed on the mask.
    */
   _generateWallShadowMask(wallSegments, lightX, lightY, maskSize) {
     const canvas = document.createElement('canvas');
@@ -654,16 +658,7 @@ class SpatialLightColorCard extends HTMLElement {
       ctx.fill();
     }
 
-    // Apply slight Gaussian blur for natural penumbra (soft shadow edges).
-    // This simulates the soft boundary of real-world shadows from area lights.
-    const blurCanvas = document.createElement('canvas');
-    blurCanvas.width = maskSize;
-    blurCanvas.height = maskSize;
-    const blurCtx = blurCanvas.getContext('2d');
-    blurCtx.filter = `blur(${Math.max(1, maskSize / 128)}px)`;
-    blurCtx.drawImage(canvas, 0, 0);
-
-    return blurCanvas.toDataURL('image/png');
+    return canvas.toDataURL('image/png');
   }
 
   /**
@@ -4903,6 +4898,10 @@ class SpatialLightColorCard extends HTMLElement {
    * Apply wall shadow mask to a glow element. Generates a canvas mask where
    * wall segments block line-of-sight from the light, creating shadow regions.
    * The mask is layered on top of any existing shape mask or clip-path.
+   *
+   * Uses a cached mask URL per entity. The mask only needs to be regenerated
+   * when the wall config, canvas dimensions, or glow config changes — NOT on
+   * every brightness/color state update.
    */
   _applyWallShadows(glowEl, entityId, gc, canvasRect) {
     const walls = this._config.glow_walls;
@@ -4913,13 +4912,49 @@ class SpatialLightColorCard extends HTMLElement {
     const canvasW = canvasRect.width;
     const canvasH = canvasRect.height;
 
-    // Get light position in canvas %
+    // Check if we already have a valid cached mask URL for this entity.
+    // Wall masks depend on: wall config, light position, glow dimensions, canvas size.
+    // None of these change on a typical hass state update (brightness/color change).
+    // Build a lightweight version key from the inputs that DO change.
+    if (!this._wallMaskPerEntity) this._wallMaskPerEntity = {};
     const pos = this._config.positions[entityId] || { x: 50, y: 50 };
-
-    // Get glow element dimensions
     const glowW = parseFloat(glowEl.style.width) || gc.width;
     const glowH = parseFloat(glowEl.style.height) || gc.length;
     if (glowW <= 0 || glowH <= 0) return;
+
+    const versionKey = `${(pos.x * 10) | 0},${(pos.y * 10) | 0},${glowW | 0},${glowH | 0},${canvasW | 0},${canvasH | 0},${gc.shape},${this._wallConfigVersion || 0}`;
+    const cached = this._wallMaskPerEntity[entityId];
+    if (cached && cached.versionKey === versionKey) {
+      // Reuse previous mask URL — skip all computation
+      this._setWallMask(glowEl, cached.maskUrl);
+      return;
+    }
+
+    // Compute glow reach in canvas % for filtering distant walls.
+    // Use the larger of width/height as a conservative radius.
+    const reach = Math.max(glowW, glowH) / 2;
+    const reachPctX = reach / canvasW * 100;
+    const reachPctY = reach / canvasH * 100;
+
+    // Filter walls: skip segments entirely outside the glow's bounding box.
+    // A wall outside the glow area can't cast a shadow visible in the glow.
+    const relevantWalls = [];
+    for (let i = 0; i < walls.length; i++) {
+      const w = walls[i];
+      // Cohen–Sutherland style rejection: both endpoints on the same
+      // side of the bounding box → wall is entirely outside glow reach
+      if (w.x1 < pos.x - reachPctX && w.x2 < pos.x - reachPctX) continue;
+      if (w.x1 > pos.x + reachPctX && w.x2 > pos.x + reachPctX) continue;
+      if (w.y1 < pos.y - reachPctY && w.y2 < pos.y - reachPctY) continue;
+      if (w.y1 > pos.y + reachPctY && w.y2 > pos.y + reachPctY) continue;
+      relevantWalls.push(w);
+    }
+
+    if (relevantWalls.length === 0) {
+      // No walls near this light — no mask needed
+      this._wallMaskPerEntity[entityId] = { versionKey, maskUrl: null };
+      return;
+    }
 
     // Determine where the light is in the glow element's local space.
     // Centered shapes (round, oval, custom): light is at center (50%, 50%)
@@ -4929,16 +4964,26 @@ class SpatialLightColorCard extends HTMLElement {
     const lightMaskX = maskSize / 2;
     const lightMaskY = isCentered ? maskSize / 2 : 0;
 
-    // Convert wall segments from canvas % to mask pixel coordinates
+    // Convert only the relevant wall segments to mask pixel coordinates
     const wallSegments = this._convertWallsToMaskCoords(
-      walls, pos.x, pos.y, glowW, glowH, canvasW, canvasH, maskSize, lightMaskX, lightMaskY
+      relevantWalls, pos.x, pos.y, glowW, glowH, canvasW, canvasH, maskSize, lightMaskX, lightMaskY
     );
 
     // Generate (or retrieve cached) wall shadow mask
     const maskUrl = this._getWallShadowMaskUrl(wallSegments, lightMaskX, lightMaskY, maskSize, gc.shape);
 
-    // Apply the wall mask. We need to combine with any existing mask from
-    // edge_softness or custom shape. Use multiple mask layers with intersect.
+    // Cache for this entity so subsequent state updates skip all the above
+    this._wallMaskPerEntity[entityId] = { versionKey, maskUrl };
+    this._setWallMask(glowEl, maskUrl);
+  }
+
+  /**
+   * Apply a wall mask URL to a glow element, combining with any existing
+   * shape mask (from edge_softness or custom shape).
+   */
+  _setWallMask(glowEl, maskUrl) {
+    if (!maskUrl) return;
+
     const existingMask = glowEl.style.maskImage || glowEl.style.webkitMaskImage || '';
     const wallMask = `url(${maskUrl})`;
 

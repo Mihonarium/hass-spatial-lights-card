@@ -661,10 +661,11 @@ It also has color presets (for quickly setting lights to a specific color) and a
 This card made turning dozens of lights to nice colors in arbitrary ways much easier.
 
 ## ToDo
+- [ ] Think about adding arbitrary templates/HTML
 - [ ] Color effects (not just colors) among presets (with icons?)
+- [ ] Add a setting for toggling lights with a single tap
 - [ ] Think about a way to toggle groups of lights/the default entity?
 - [x] Allow users to add arbitrary css to individual lights and to the whole card.
 - [x] Allow adding a light glow (directional/non-directional) from the lights with multiple shapes, custom polar shapes, soft edges, wall occlusion, and per-entity overrides.
 - [x] Add canvas elements (links, sensors, templates) for non-entity content on the canvas.
-- [x] Add a setting for toggling lights with a single tap (`switch_single_tap`).
 

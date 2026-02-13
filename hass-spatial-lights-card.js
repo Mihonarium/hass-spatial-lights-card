@@ -210,6 +210,12 @@ class SpatialLightColorCard extends HTMLElement {
 
       // Canvas elements (non-entity elements: links, sensors, templates)
       canvas_elements: this._normalizeCanvasElements(config.canvas_elements),
+
+      // Custom CSS injection (global string appended to shadow DOM styles)
+      custom_css: typeof config.custom_css === 'string' ? config.custom_css : '',
+
+      // Per-entity inline style overrides (entity_id → CSS properties string)
+      style_overrides: this._normalizeStyleOverrides(config.style_overrides),
     };
 
     this._gridSize = this._config.grid_size;
@@ -252,24 +258,39 @@ class SpatialLightColorCard extends HTMLElement {
     return result;
   }
 
+  /** Valid glow shape names. */
+  static get GLOW_SHAPES() {
+    return ['cone', 'round', 'oval', 'beam', 'spotlight', 'bar'];
+  }
+
+  /** Valid glow falloff modes. */
+  static get GLOW_FALLOFFS() {
+    return ['smooth', 'linear', 'exponential', 'sharp'];
+  }
+
   /** Normalize a single glow config object, filling in defaults. */
   _normalizeGlowConfig(obj) {
     const defaults = {
       enabled: false,
-      direction: 0,           // 0=down, 90=right, 180=up, 270=left
-      length: 80,             // max length in px
-      width: 60,              // spread width in px
-      intensity: 0.7,         // max opacity (0-1)
-      blur: 12,               // blur radius in px
-      offset_x: 0,            // horizontal offset from center
-      offset_y: 0,            // vertical offset from center
-      spread: 1.5,            // far-end width multiplier (1=no spread)
+      shape: 'cone',            // cone, round, oval, beam, spotlight, bar
+      direction: 0,             // 0=down, 90=right, 180=up, 270=left
+      length: 80,               // max length in px (height for directional shapes, diameter for round)
+      width: 60,                // spread width in px
+      intensity: 0.7,           // max opacity (0-1)
+      blur: 12,                 // blur radius in px
+      offset_x: 0,              // horizontal offset from center
+      offset_y: 0,              // vertical offset from center
+      spread: 1.5,              // far-end width multiplier (1=no spread)
       scale_with_brightness: true,
-      color: null,            // null = use entity color
+      color: null,              // null = use entity color
+      edge_softness: 0,         // 0-1: how soft/feathered the edges of the shape are
+      falloff: 'smooth',        // smooth, linear, exponential, sharp — gradient curve
+      gradient_stops: null,     // custom array of [position%, opacity] e.g. [[0, 1], [50, 0.3], [100, 0]]
     };
     if (!obj || typeof obj !== 'object') return defaults;
     return {
       enabled: obj.enabled === true,
+      shape: SpatialLightColorCard.GLOW_SHAPES.includes(obj.shape) ? obj.shape : defaults.shape,
       direction: Number.isFinite(Number(obj.direction)) ? Number(obj.direction) : defaults.direction,
       length: Number.isFinite(Number(obj.length)) && Number(obj.length) > 0 ? Number(obj.length) : defaults.length,
       width: Number.isFinite(Number(obj.width)) && Number(obj.width) > 0 ? Number(obj.width) : defaults.width,
@@ -280,7 +301,25 @@ class SpatialLightColorCard extends HTMLElement {
       spread: Number.isFinite(Number(obj.spread)) && Number(obj.spread) > 0 ? Number(obj.spread) : defaults.spread,
       scale_with_brightness: obj.scale_with_brightness !== false,
       color: typeof obj.color === 'string' && obj.color.trim() ? obj.color.trim() : null,
+      edge_softness: Number.isFinite(Number(obj.edge_softness)) ? Math.max(0, Math.min(1, Number(obj.edge_softness))) : defaults.edge_softness,
+      falloff: SpatialLightColorCard.GLOW_FALLOFFS.includes(obj.falloff) ? obj.falloff : defaults.falloff,
+      gradient_stops: this._normalizeGradientStops(obj.gradient_stops),
     };
+  }
+
+  /** Normalize custom gradient stops: array of [position%, opacity] tuples. */
+  _normalizeGradientStops(stops) {
+    if (!Array.isArray(stops) || stops.length < 2) return null;
+    const result = [];
+    for (const stop of stops) {
+      if (!Array.isArray(stop) || stop.length < 2) continue;
+      const pos = Number(stop[0]);
+      const opacity = Number(stop[1]);
+      if (Number.isFinite(pos) && Number.isFinite(opacity)) {
+        result.push([Math.max(0, Math.min(100, pos)), Math.max(0, Math.min(1, opacity))]);
+      }
+    }
+    return result.length >= 2 ? result : null;
   }
 
   /** Normalize per-entity glow overrides. Each value is a partial glow config. */
@@ -290,6 +329,7 @@ class SpatialLightColorCard extends HTMLElement {
     Object.entries(obj).forEach(([entity, val]) => {
       if (!val || typeof val !== 'object') return;
       const o = {};
+      if (val.enabled != null) o.enabled = val.enabled === true;
       if (val.direction != null && Number.isFinite(Number(val.direction))) o.direction = Number(val.direction);
       if (val.length != null && Number.isFinite(Number(val.length)) && Number(val.length) > 0) o.length = Number(val.length);
       if (val.width != null && Number.isFinite(Number(val.width)) && Number(val.width) > 0) o.width = Number(val.width);
@@ -300,7 +340,24 @@ class SpatialLightColorCard extends HTMLElement {
       if (val.spread != null && Number.isFinite(Number(val.spread)) && Number(val.spread) > 0) o.spread = Number(val.spread);
       if (val.scale_with_brightness != null) o.scale_with_brightness = val.scale_with_brightness !== false;
       if (typeof val.color === 'string' && val.color.trim()) o.color = val.color.trim();
+      if (SpatialLightColorCard.GLOW_SHAPES.includes(val.shape)) o.shape = val.shape;
+      if (val.edge_softness != null && Number.isFinite(Number(val.edge_softness))) o.edge_softness = Math.max(0, Math.min(1, Number(val.edge_softness)));
+      if (SpatialLightColorCard.GLOW_FALLOFFS.includes(val.falloff)) o.falloff = val.falloff;
+      const gs = this._normalizeGradientStops(val.gradient_stops);
+      if (gs) o.gradient_stops = gs;
       if (Object.keys(o).length > 0) result[entity] = o;
+    });
+    return result;
+  }
+
+  /** Normalize per-entity inline style overrides. Each value is a CSS properties string. */
+  _normalizeStyleOverrides(obj) {
+    const result = {};
+    if (!obj || typeof obj !== 'object') return result;
+    Object.entries(obj).forEach(([entity, val]) => {
+      if (typeof val === 'string' && val.trim()) {
+        result[entity] = val.trim();
+      }
     });
     return result;
   }
@@ -1363,7 +1420,7 @@ class SpatialLightColorCard extends HTMLElement {
         box-shadow: 0 0 10px rgba(99,102,241,0.45), 0 0 8px var(--light-color, #ffa500);
       }
 
-      /* Directional glow (minimal-ui mode) */
+      /* Glow element — works in all display modes (cone, round, oval, beam, spotlight, bar) */
       .light-glow {
         position: absolute;
         left: 50%;
@@ -1376,9 +1433,11 @@ class SpatialLightColorCard extends HTMLElement {
         opacity: 0;
         transition: opacity 400ms ease, height 400ms ease;
       }
-      /* Reduce glow for unselected lights when a selection is active */
+      /* Reduce glow for unselected lights when a selection is active.
+         Note: the parent .light already gets brightness/saturate dimming,
+         so only add extra dimming on the glow itself for stronger visual separation. */
       .canvas.has-selection .light:not(.selected) .light-glow {
-        filter: brightness(0.4) saturate(0.4);
+        opacity: 0.3 !important;
       }
 
       .light-icon-emoji { font-size: calc(32px * var(--icon-scale, 1)); line-height: 1; filter: drop-shadow(0 1px 2px rgba(0,0,0,0.6)); transform: var(--icon-transform, none); }
@@ -1823,6 +1882,9 @@ class SpatialLightColorCard extends HTMLElement {
       :host(.overlay-active) .light-label {
         z-index: 1;
       }
+
+      /* User custom CSS */
+      ${this._config.custom_css || ''}
     `;
   }
 
@@ -1947,10 +2009,17 @@ class SpatialLightColorCard extends HTMLElement {
         }
       }
 
-      // Add glow element for minimal-ui mode when glow is enabled
-      const glowHtml = (isMinimalUI && this._config.glow.enabled)
+      // Add glow element when glow is enabled (works in all modes)
+      const entityGlow = this._getGlowConfig(entity_id);
+      const glowHtml = entityGlow.enabled
         ? '<div class="light-glow"></div>'
         : '';
+
+      // Apply per-entity style overrides
+      const styleOverride = this._config.style_overrides[entity_id];
+      if (styleOverride) {
+        style += styleOverride + (styleOverride.endsWith(';') ? '' : ';');
+      }
 
       return `
         <div class="light ${stateClass} ${isSelected ? 'selected' : ''} ${iconOnlyClass}"
@@ -4084,27 +4153,114 @@ class SpatialLightColorCard extends HTMLElement {
     ctx.restore();
   }
 
-  /** ---------- Directional glow updates ---------- */
+  /** ---------- Glow updates ---------- */
 
   /**
-   * Update the directional glow element for a single light based on entity state.
-   * The glow is a cone-shaped gradient that emanates from the light icon,
-   * with its direction, size, and intensity driven by configuration and
-   * the entity's brightness/color.
+   * Build gradient stops based on falloff mode and optional custom stops.
+   * Returns a CSS gradient string fragment for rgba(r,g,b,...) stops.
+   */
+  _buildGlowGradientStops(r, g, b, falloff, customStops, origin) {
+    // Custom stops take priority
+    if (customStops && customStops.length >= 2) {
+      return customStops.map(([pos, op]) =>
+        `rgba(${r},${g},${b},${op.toFixed(3)}) ${pos}%`
+      ).join(', ');
+    }
+
+    // Preset falloff curves
+    switch (falloff) {
+      case 'linear':
+        return [
+          `rgba(${r},${g},${b},0.8) 0%`,
+          `rgba(${r},${g},${b},0.4) 50%`,
+          `transparent 100%`,
+        ].join(', ');
+      case 'exponential':
+        return [
+          `rgba(${r},${g},${b},0.95) 0%`,
+          `rgba(${r},${g},${b},0.6) 15%`,
+          `rgba(${r},${g},${b},0.2) 40%`,
+          `rgba(${r},${g},${b},0.04) 70%`,
+          `transparent 100%`,
+        ].join(', ');
+      case 'sharp':
+        return [
+          `rgba(${r},${g},${b},1) 0%`,
+          `rgba(${r},${g},${b},0.8) 20%`,
+          `rgba(${r},${g},${b},0.15) 50%`,
+          `transparent 75%`,
+        ].join(', ');
+      default: // 'smooth'
+        return [
+          `rgba(${r},${g},${b},0.9) 0%`,
+          `rgba(${r},${g},${b},0.35) 30%`,
+          `rgba(${r},${g},${b},0.08) 65%`,
+          `transparent 100%`,
+        ].join(', ');
+    }
+  }
+
+  /**
+   * Apply edge softness masking to a glow element.
+   * Uses CSS mask-image gradients to feather the edges of directional shapes.
+   */
+  _applyEdgeSoftness(glowEl, gc, isDirectional) {
+    if (gc.edge_softness <= 0) {
+      glowEl.style.maskImage = '';
+      glowEl.style.webkitMaskImage = '';
+      glowEl.style.maskComposite = '';
+      glowEl.style.webkitMaskComposite = '';
+      return;
+    }
+
+    const s = gc.edge_softness;
+
+    if (isDirectional) {
+      // For directional shapes (cone, beam, spotlight, bar):
+      // Horizontal gradient mask fades left/right edges
+      const edgeFade = s * 30; // % from each edge that fades
+      const hMask = `linear-gradient(to right, transparent 0%, black ${edgeFade}%, black ${100 - edgeFade}%, transparent 100%)`;
+      // Vertical gradient mask fades the far end
+      const farFade = 100 - s * 25;
+      const vMask = `linear-gradient(to bottom, black 0%, black ${farFade}%, transparent 100%)`;
+      const combined = `${hMask}, ${vMask}`;
+      glowEl.style.maskImage = combined;
+      glowEl.style.webkitMaskImage = combined;
+      glowEl.style.maskComposite = 'intersect';
+      glowEl.style.webkitMaskComposite = 'source-in';
+    } else {
+      // For radial shapes (round, oval): strengthen edge fade via mask
+      const innerSolid = Math.max(5, 40 - s * 35);
+      const mask = `radial-gradient(ellipse at 50% 50%, black 0%, black ${innerSolid}%, transparent ${80 - s * 20}%)`;
+      glowEl.style.maskImage = mask;
+      glowEl.style.webkitMaskImage = mask;
+      glowEl.style.maskComposite = '';
+      glowEl.style.webkitMaskComposite = '';
+    }
+  }
+
+  /**
+   * Update the glow element for a single light based on entity state.
+   * Supports multiple glow shapes: cone, round, oval, beam, spotlight, bar.
+   * Each shape produces a different visual effect with configurable
+   * direction, size, intensity, edge softness, and gradient falloff.
    */
   _updateGlow(lightEl, entityId, state) {
     const glowEl = lightEl.querySelector('.light-glow');
     if (!glowEl) return;
 
-    const isOn = state.state === 'on';
+    const [domain] = entityId.split('.');
+    const isScene = domain === 'scene';
+    const isOn = state.state === 'on' || isScene;
     if (!isOn) {
       glowEl.style.opacity = '0';
       glowEl.style.height = '0';
+      glowEl.style.width = '0';
       return;
     }
 
     const gc = this._getGlowConfig(entityId);
-    const brightness = state.attributes.brightness || 0; // 0-255
+    const brightness = state.attributes.brightness || (isScene ? 255 : 0); // 0-255
     const ratio = brightness / 255;
 
     // Determine the glow color
@@ -4123,40 +4279,127 @@ class SpatialLightColorCard extends HTMLElement {
     // Scale dimensions with brightness if configured
     const length = gc.scale_with_brightness ? gc.length * Math.max(ratio, 0.1) : gc.length;
     const opacity = gc.scale_with_brightness ? gc.intensity * Math.max(ratio, 0.05) : gc.intensity;
-
-    // Build the cone clip-path using spread
-    // At the top (origin): narrower. At the bottom (far end): wider.
-    // spread=1 means same width top and bottom (cylinder)
-    // spread=2 means twice as wide at the far end
-    const topInset = 50 - (50 / gc.spread);  // % from each side at top
-    const clipPath = `polygon(${topInset}% 0%, ${100 - topInset}% 0%, 100% 100%, 0% 100%)`;
-
-    // Build radial gradient: concentrated at origin, fading outward
     const { r, g, b } = rgb;
-    const gradient = `radial-gradient(ellipse at 50% 0%, `
-      + `rgba(${r},${g},${b},0.9) 0%, `
-      + `rgba(${r},${g},${b},0.35) 30%, `
-      + `rgba(${r},${g},${b},0.08) 65%, `
-      + `transparent 100%)`;
 
-    // Apply styles
-    glowEl.style.width = `${gc.width}px`;
-    glowEl.style.height = `${length}px`;
-    glowEl.style.transform = `translateX(-50%) translateY(${gc.offset_y}px) translateX(${gc.offset_x}px) rotate(${gc.direction}deg)`;
-    glowEl.style.clipPath = clipPath;
-    glowEl.style.background = gradient;
+    // Reset shape-specific properties
+    glowEl.style.clipPath = '';
+    glowEl.style.borderRadius = '';
+
+    switch (gc.shape) {
+      case 'round': {
+        // Circular soft glow centered on the light
+        const size = gc.width;
+        const stops = this._buildGlowGradientStops(r, g, b, gc.falloff, gc.gradient_stops);
+        glowEl.style.width = `${size}px`;
+        glowEl.style.height = `${size}px`;
+        glowEl.style.transform = `translate(-50%, -50%) translateX(${gc.offset_x}px) translateY(${gc.offset_y}px)`;
+        glowEl.style.transformOrigin = '50% 50%';
+        glowEl.style.borderRadius = '50%';
+        glowEl.style.background = `radial-gradient(circle at 50% 50%, ${stops})`;
+        this._applyEdgeSoftness(glowEl, gc, false);
+        break;
+      }
+
+      case 'oval': {
+        // Elliptical glow, rotatable via direction
+        const stops = this._buildGlowGradientStops(r, g, b, gc.falloff, gc.gradient_stops);
+        glowEl.style.width = `${gc.width}px`;
+        glowEl.style.height = `${length}px`;
+        glowEl.style.transform = `translate(-50%, -50%) translateX(${gc.offset_x}px) translateY(${gc.offset_y}px) rotate(${gc.direction}deg)`;
+        glowEl.style.transformOrigin = '50% 50%';
+        glowEl.style.borderRadius = '50%';
+        glowEl.style.background = `radial-gradient(ellipse at 50% 50%, ${stops})`;
+        this._applyEdgeSoftness(glowEl, gc, false);
+        break;
+      }
+
+      case 'beam': {
+        // Narrow directional beam — like cone but with minimal spread
+        const effectiveSpread = Math.min(gc.spread, 1.15);
+        const topInset = 50 - (50 / effectiveSpread);
+        glowEl.style.clipPath = `polygon(${topInset}% 0%, ${100 - topInset}% 0%, 100% 100%, 0% 100%)`;
+        const stops = this._buildGlowGradientStops(r, g, b, gc.falloff, gc.gradient_stops);
+        glowEl.style.width = `${gc.width}px`;
+        glowEl.style.height = `${length}px`;
+        glowEl.style.transform = `translateX(-50%) translateY(${gc.offset_y}px) translateX(${gc.offset_x}px) rotate(${gc.direction}deg)`;
+        glowEl.style.transformOrigin = '50% 0%';
+        glowEl.style.background = `radial-gradient(ellipse at 50% 0%, ${stops})`;
+        this._applyEdgeSoftness(glowEl, gc, true);
+        break;
+      }
+
+      case 'spotlight': {
+        // Wide spotlight cone with inherently soft edges
+        const effectiveSpread = Math.max(gc.spread, 2.0);
+        const topInset = 50 - (50 / effectiveSpread);
+        glowEl.style.clipPath = `polygon(${topInset}% 0%, ${100 - topInset}% 0%, 100% 100%, 0% 100%)`;
+        // Spotlight uses a softer gradient with wider falloff
+        const spotStops = gc.gradient_stops
+          ? this._buildGlowGradientStops(r, g, b, gc.falloff, gc.gradient_stops)
+          : [
+              `rgba(${r},${g},${b},0.85) 0%`,
+              `rgba(${r},${g},${b},0.45) 20%`,
+              `rgba(${r},${g},${b},0.15) 50%`,
+              `rgba(${r},${g},${b},0.04) 75%`,
+              `transparent 100%`,
+            ].join(', ');
+        glowEl.style.width = `${gc.width}px`;
+        glowEl.style.height = `${length}px`;
+        glowEl.style.transform = `translateX(-50%) translateY(${gc.offset_y}px) translateX(${gc.offset_x}px) rotate(${gc.direction}deg)`;
+        glowEl.style.transformOrigin = '50% 0%';
+        glowEl.style.background = `radial-gradient(ellipse at 50% 0%, ${spotStops})`;
+        // Spotlights always have some edge softness
+        const spotGc = gc.edge_softness > 0 ? gc : { ...gc, edge_softness: Math.max(gc.edge_softness, 0.3) };
+        this._applyEdgeSoftness(glowEl, spotGc, true);
+        break;
+      }
+
+      case 'bar': {
+        // Rectangular bar glow (no clip-path trapezoid, straight sides)
+        const stops = this._buildGlowGradientStops(r, g, b, gc.falloff, gc.gradient_stops);
+        glowEl.style.width = `${gc.width}px`;
+        glowEl.style.height = `${length}px`;
+        glowEl.style.transform = `translateX(-50%) translateY(${gc.offset_y}px) translateX(${gc.offset_x}px) rotate(${gc.direction}deg)`;
+        glowEl.style.transformOrigin = '50% 0%';
+        // Linear gradient from origin to far end
+        glowEl.style.background = `linear-gradient(to bottom, ${stops})`;
+        this._applyEdgeSoftness(glowEl, gc, true);
+        break;
+      }
+
+      default: { // 'cone' — original behavior
+        const topInset = 50 - (50 / gc.spread);
+        glowEl.style.clipPath = `polygon(${topInset}% 0%, ${100 - topInset}% 0%, 100% 100%, 0% 100%)`;
+        const stops = this._buildGlowGradientStops(r, g, b, gc.falloff, gc.gradient_stops);
+        glowEl.style.width = `${gc.width}px`;
+        glowEl.style.height = `${length}px`;
+        glowEl.style.transform = `translateX(-50%) translateY(${gc.offset_y}px) translateX(${gc.offset_x}px) rotate(${gc.direction}deg)`;
+        glowEl.style.transformOrigin = '50% 0%';
+        glowEl.style.background = `radial-gradient(ellipse at 50% 0%, ${stops})`;
+        this._applyEdgeSoftness(glowEl, gc, true);
+        break;
+      }
+    }
+
     glowEl.style.filter = `blur(${gc.blur}px)`;
     glowEl.style.opacity = String(opacity);
   }
 
   /** Update glows for all light elements. Called from updateLights(). */
   _updateAllGlows() {
-    if (!this._config.glow.enabled || !this._config.minimal_ui) return;
+    // Glow works in all modes — check if any glow is enabled
+    const hasGlobalGlow = this._config.glow.enabled;
+    const hasOverrides = Object.keys(this._config.glow_overrides).length > 0;
+    if (!hasGlobalGlow && !hasOverrides) return;
+
     const lights = this.shadowRoot.querySelectorAll('.light');
     lights.forEach(lightEl => {
       const id = lightEl.dataset.entity;
       const st = this._hass?.states[id];
       if (!st) return;
+      // Only update if this entity actually has glow enabled
+      const gc = this._getGlowConfig(id);
+      if (!gc.enabled) return;
       this._updateGlow(lightEl, id, st);
     });
   }

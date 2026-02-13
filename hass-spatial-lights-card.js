@@ -5504,6 +5504,28 @@ class SpatialLightColorCardEditor extends HTMLElement {
     this._render();
   }
 
+  /**
+   * Parse custom shape text from a textarea into [[angle, radius], ...] array.
+   * Accepts one "angle, radius" pair per line. Returns null if fewer than 3 valid points.
+   */
+  _parseCustomShapeText(text) {
+    if (!text || !text.trim()) return null;
+    const points = [];
+    for (const line of text.split('\n')) {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith('#') || trimmed.startsWith('//')) continue;
+      const parts = trimmed.split(/[\s,]+/);
+      if (parts.length >= 2) {
+        const angle = Number(parts[0]);
+        const radius = Number(parts[1]);
+        if (Number.isFinite(angle) && Number.isFinite(radius)) {
+          points.push([((angle % 360) + 360) % 360, Math.max(0, Math.min(2, radius))]);
+        }
+      }
+    }
+    return points.length >= 3 ? points : null;
+  }
+
   _fireConfigChanged() {
     this._configFromEditor = true;
     const config = JSON.parse(JSON.stringify(this._config));
@@ -6064,6 +6086,10 @@ class SpatialLightColorCardEditor extends HTMLElement {
               <option value="bar"${glowOverrideShape === 'bar' ? ' selected' : ''}>Bar</option>
               <option value="custom"${glowOverrideShape === 'custom' ? ' selected' : ''}>Custom</option>
             </select>
+          </div>
+          <div class="override-row" data-entity="${entity}" data-key="glowCustomShapeRow" style="display:${glowOverrideShape === 'custom' ? 'flex' : 'none'};">
+            <label>Custom Shape</label>
+            <textarea data-entity="${entity}" data-key="glowCustomShape" class="custom-css-textarea" rows="3" placeholder="angle, radius&#10;0, 1&#10;90, 0.6&#10;180, 1">${glowOverride.custom_shape ? glowOverride.custom_shape.map(p => p[0] + ', ' + p[1]).join('\n') : ''}</textarea>
           </div>
           <div class="override-row">
             <label>Direction (°)</label>
@@ -6653,6 +6679,11 @@ class SpatialLightColorCardEditor extends HTMLElement {
                   </select>
                 </div>
               </div>
+              <div class="input-row" id="cfgGlowCustomShapeRow" style="display:${(glow.shape || 'cone') === 'custom' ? 'flex' : 'none'};">
+                <label for="cfgGlowCustomShape">Custom Shape</label>
+                <textarea id="cfgGlowCustomShape" class="custom-css-textarea" rows="4" placeholder="angle, radius (one per line)&#10;0, 1&#10;90, 0.6&#10;180, 1&#10;270, 0.6">${glow.custom_shape ? glow.custom_shape.map(p => p[0] + ', ' + p[1]).join('\n') : ''}</textarea>
+                <div class="sublabel" style="margin-top:2px;">Polar coords: angle° (0=down, clockwise), radius 0–1. Min 3 points.</div>
+              </div>
               <div class="two-col">
                 <div class="input-row">
                   <label for="cfgGlowDirection">Direction (°)</label>
@@ -6862,6 +6893,11 @@ class SpatialLightColorCardEditor extends HTMLElement {
     // Glow settings
     const g = c.glow || {};
     setVal('cfgGlowShape', g.shape || 'cone');
+    // Show/hide custom shape textarea based on shape
+    const csRow = root.getElementById('cfgGlowCustomShapeRow');
+    if (csRow) csRow.style.display = (g.shape || 'cone') === 'custom' ? 'flex' : 'none';
+    const csEl = root.getElementById('cfgGlowCustomShape');
+    if (csEl) csEl.value = g.custom_shape ? g.custom_shape.map(p => p[0] + ', ' + p[1]).join('\n') : '';
     setVal('cfgGlowFalloff', g.falloff || 'smooth');
     setVal('cfgGlowDirection', g.direction != null ? g.direction : '');
     setVal('cfgGlowSpread', g.spread != null ? g.spread : '');
@@ -7524,7 +7560,29 @@ class SpatialLightColorCardEditor extends HTMLElement {
       glowShapeEl.addEventListener('change', () => {
         ensureGlow();
         this._config.glow.shape = glowShapeEl.value;
+        // Show/hide custom shape textarea
+        const csRow = root.getElementById('cfgGlowCustomShapeRow');
+        if (csRow) csRow.style.display = glowShapeEl.value === 'custom' ? 'flex' : 'none';
         this._fireConfigChanged();
+      });
+    }
+    const glowCustomShapeEl = root.getElementById('cfgGlowCustomShape');
+    if (glowCustomShapeEl) {
+      let csTimer = null;
+      const parseCustomShape = () => {
+        ensureGlow();
+        const parsed = this._parseCustomShapeText(glowCustomShapeEl.value);
+        if (parsed) { this._config.glow.custom_shape = parsed; }
+        else { delete this._config.glow.custom_shape; }
+        this._fireConfigChanged();
+      };
+      glowCustomShapeEl.addEventListener('input', () => {
+        clearTimeout(csTimer);
+        csTimer = setTimeout(parseCustomShape, 500);
+      });
+      glowCustomShapeEl.addEventListener('change', () => {
+        clearTimeout(csTimer);
+        parseCustomShape();
       });
     }
     const glowFalloffEl = root.getElementById('cfgGlowFalloff');
@@ -7727,8 +7785,25 @@ class SpatialLightColorCardEditor extends HTMLElement {
         if (!this._config.glow_overrides[entity]) this._config.glow_overrides[entity] = {};
         if (sel.value) { this._config.glow_overrides[entity].shape = sel.value; }
         else { delete this._config.glow_overrides[entity].shape; }
+        // Show/hide per-entity custom shape textarea
+        const csRow = root.querySelector(`.override-row[data-entity="${entity}"][data-key="glowCustomShapeRow"]`);
+        if (csRow) csRow.style.display = sel.value === 'custom' ? 'flex' : 'none';
         this._fireConfigChanged();
       });
+    });
+    root.querySelectorAll('.entity-overrides textarea[data-key="glowCustomShape"]').forEach(ta => {
+      let csTimer = null;
+      const parseAndSave = () => {
+        const entity = ta.dataset.entity;
+        if (!this._config.glow_overrides) this._config.glow_overrides = {};
+        if (!this._config.glow_overrides[entity]) this._config.glow_overrides[entity] = {};
+        const parsed = this._parseCustomShapeText(ta.value);
+        if (parsed) { this._config.glow_overrides[entity].custom_shape = parsed; }
+        else { delete this._config.glow_overrides[entity].custom_shape; }
+        this._fireConfigChanged();
+      };
+      ta.addEventListener('input', () => { clearTimeout(csTimer); csTimer = setTimeout(parseAndSave, 500); });
+      ta.addEventListener('change', () => { clearTimeout(csTimer); parseAndSave(); });
     });
     root.querySelectorAll('.entity-overrides input[data-key="glowDirection"]').forEach(inp => {
       this._bindEntityOverride(inp, (entity, val) => {

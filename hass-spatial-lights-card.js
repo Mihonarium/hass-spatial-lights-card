@@ -5870,6 +5870,65 @@ class SpatialLightColorCardEditor extends HTMLElement {
         border-color: var(--primary-color, #03a9f4);
         background: color-mix(in srgb, var(--primary-color, #03a9f4) 6%, transparent);
       }
+
+      /* Wall list styles */
+      .wall-list { display: flex; flex-direction: column; gap: 4px; }
+      .wall-item {
+        border: 1px solid var(--divider-color, rgba(0,0,0,0.08));
+        border-radius: 8px; overflow: hidden;
+      }
+      .wall-main {
+        display: flex; align-items: center; gap: 8px; padding: 6px 8px 6px 12px;
+        background: var(--secondary-background-color, #f5f5f5);
+      }
+      .wall-type {
+        font-size: 10px; font-weight: 600; text-transform: uppercase;
+        letter-spacing: 0.5px; color: var(--secondary-text-color, #727272);
+        min-width: 30px;
+      }
+      .wall-summary {
+        flex: 1; font-size: 12px; font-family: monospace;
+        color: var(--primary-text-color, #212121);
+        white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+      }
+      .wall-fields {
+        padding: 8px 12px; display: flex; flex-direction: column; gap: 8px;
+        border-top: 1px solid var(--divider-color, rgba(0,0,0,0.08));
+        background: var(--card-background-color, #fff);
+      }
+      .wall-fields .override-row {
+        display: flex; align-items: center; gap: 8px;
+      }
+      .wall-fields .override-row label {
+        font-size: 12px; color: var(--secondary-text-color, #727272);
+        min-width: 50px; flex-shrink: 0;
+      }
+      .wall-fields .override-row input {
+        flex: 1; padding: 5px 8px; border: 1px solid var(--divider-color, rgba(0,0,0,0.12));
+        border-radius: 4px; font-size: 13px; color: var(--primary-text-color, #212121);
+        background: var(--card-background-color, #fff); box-sizing: border-box; outline: none;
+        min-width: 0;
+      }
+      .wall-fields .override-row input:focus { border-color: var(--primary-color, #03a9f4); }
+
+      /* Custom CSS textarea */
+      .custom-css-textarea {
+        width: 100%; padding: 8px 12px;
+        border: 1px solid var(--divider-color, rgba(0,0,0,0.12));
+        border-radius: 6px; font-size: 13px; font-family: monospace;
+        color: var(--primary-text-color, #212121);
+        background: var(--card-background-color, #fff);
+        box-sizing: border-box; outline: none; resize: vertical; min-height: 80px;
+        transition: border-color 150ms ease; line-height: 1.5;
+      }
+      .custom-css-textarea:focus { border-color: var(--primary-color, #03a9f4); }
+
+      /* Glow override subsection in entity settings */
+      .entity-overrides .override-subsection {
+        font-size: 11px; font-weight: 600; color: var(--secondary-text-color, #727272);
+        text-transform: uppercase; letter-spacing: 0.5px; margin-top: 6px;
+        padding-bottom: 2px; border-bottom: 1px solid var(--divider-color, rgba(0,0,0,0.06));
+      }
     `;
   }
 
@@ -5888,6 +5947,12 @@ class SpatialLightColorCardEditor extends HTMLElement {
     const hasIconOnlyOverride = iconOnlyOverride !== undefined;
     const rotationOverride = (this._config.icon_rotation_overrides && this._config.icon_rotation_overrides[entity] !== undefined) ? this._config.icon_rotation_overrides[entity] : '';
     const mirrorOverride = (this._config.icon_mirror_overrides && this._config.icon_mirror_overrides[entity]) || '';
+    const glowOverride = (this._config.glow_overrides && this._config.glow_overrides[entity]) || {};
+    const glowOverrideEnabled = glowOverride.enabled === true;
+    const glowOverrideShape = glowOverride.shape || '';
+    const glowOverrideDirection = glowOverride.direction != null ? glowOverride.direction : '';
+    const glowOverrideIntensity = glowOverride.intensity != null ? glowOverride.intensity : '';
+    const styleOverride = (this._config.style_overrides && this._config.style_overrides[entity]) || '';
 
     return `
       <div class="entity-item ${isExpanded ? 'expanded' : ''}" data-entity="${entity}" data-index="${index}">
@@ -5937,6 +6002,88 @@ class SpatialLightColorCardEditor extends HTMLElement {
             <label>Icon-only override</label>
             <ha-switch data-entity="${entity}" data-key="iconOnly" ${hasIconOnlyOverride && iconOnlyChecked ? 'checked' : ''}></ha-switch>
           </div>
+          <div class="override-subsection">Glow Override</div>
+          <div class="override-switch">
+            <label>Enable glow</label>
+            <ha-switch data-entity="${entity}" data-key="glowEnabled" ${glowOverrideEnabled ? 'checked' : ''}></ha-switch>
+          </div>
+          <div class="override-row">
+            <label>Shape</label>
+            <select data-entity="${entity}" data-key="glowShape">
+              <option value=""${!glowOverrideShape ? ' selected' : ''}>Global (${(this._config.glow && this._config.glow.shape) || 'cone'})</option>
+              <option value="cone"${glowOverrideShape === 'cone' ? ' selected' : ''}>Cone</option>
+              <option value="semicone"${glowOverrideShape === 'semicone' ? ' selected' : ''}>Semicone</option>
+              <option value="round"${glowOverrideShape === 'round' ? ' selected' : ''}>Round</option>
+              <option value="oval"${glowOverrideShape === 'oval' ? ' selected' : ''}>Oval</option>
+              <option value="beam"${glowOverrideShape === 'beam' ? ' selected' : ''}>Beam</option>
+              <option value="spotlight"${glowOverrideShape === 'spotlight' ? ' selected' : ''}>Spotlight</option>
+              <option value="bar"${glowOverrideShape === 'bar' ? ' selected' : ''}>Bar</option>
+              <option value="custom"${glowOverrideShape === 'custom' ? ' selected' : ''}>Custom</option>
+            </select>
+          </div>
+          <div class="override-row">
+            <label>Direction (°)</label>
+            <input type="number" data-entity="${entity}" data-key="glowDirection" value="${glowOverrideDirection}" placeholder="Global (${(this._config.glow && this._config.glow.direction) || 0})" min="0" max="360" step="5">
+          </div>
+          <div class="override-row">
+            <label>Intensity</label>
+            <input type="number" data-entity="${entity}" data-key="glowIntensity" value="${glowOverrideIntensity}" placeholder="Global" min="0" max="1" step="0.05">
+          </div>
+          <div class="override-subsection">Style Override</div>
+          <div class="override-row">
+            <label>Custom CSS</label>
+            <input type="text" data-entity="${entity}" data-key="styleOverride" value="${this._esc(styleOverride)}" placeholder="e.g. filter: blur(2px);">
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  _renderWallItem(wall, index) {
+    const isArray = Array.isArray(wall);
+    const isBox = !isArray && wall && typeof wall === 'object' &&
+      wall.x != null && wall.y != null && wall.width != null && wall.height != null;
+    const typeLabel = isBox ? 'Box' : 'Line';
+
+    let summary, vals;
+    if (isArray) {
+      vals = { x1: wall[0], y1: wall[1], x2: wall[2], y2: wall[3] };
+      summary = `(${wall[0]}, ${wall[1]}) → (${wall[2]}, ${wall[3]})`;
+    } else if (isBox) {
+      vals = wall;
+      summary = `x:${wall.x} y:${wall.y} ${wall.width}×${wall.height}`;
+    } else {
+      vals = wall;
+      summary = `(${wall.x1}, ${wall.y1}) → (${wall.x2}, ${wall.y2})`;
+    }
+
+    return `
+      <div class="wall-item" data-wall-index="${index}">
+        <div class="wall-main">
+          <span class="wall-type">${typeLabel}</span>
+          <span class="wall-summary">${summary}</span>
+          <button class="entity-btn remove" data-wall-index="${index}" title="Remove">&times;</button>
+        </div>
+        <div class="wall-fields">
+          ${isBox ? `
+            <div class="two-col">
+              <div class="override-row"><label>X (%)</label><input type="number" data-wall-index="${index}" data-wall-key="x" value="${vals.x}" step="1"></div>
+              <div class="override-row"><label>Y (%)</label><input type="number" data-wall-index="${index}" data-wall-key="y" value="${vals.y}" step="1"></div>
+            </div>
+            <div class="two-col">
+              <div class="override-row"><label>Width</label><input type="number" data-wall-index="${index}" data-wall-key="width" value="${vals.width}" step="1"></div>
+              <div class="override-row"><label>Height</label><input type="number" data-wall-index="${index}" data-wall-key="height" value="${vals.height}" step="1"></div>
+            </div>
+          ` : `
+            <div class="two-col">
+              <div class="override-row"><label>X1 (%)</label><input type="number" data-wall-index="${index}" data-wall-key="x1" value="${vals.x1}" step="1"></div>
+              <div class="override-row"><label>Y1 (%)</label><input type="number" data-wall-index="${index}" data-wall-key="y1" value="${vals.y1}" step="1"></div>
+            </div>
+            <div class="two-col">
+              <div class="override-row"><label>X2 (%)</label><input type="number" data-wall-index="${index}" data-wall-key="x2" value="${vals.x2}" step="1"></div>
+              <div class="override-row"><label>Y2 (%)</label><input type="number" data-wall-index="${index}" data-wall-key="y2" value="${vals.y2}" step="1"></div>
+            </div>
+          `}
         </div>
       </div>
     `;
@@ -6089,6 +6236,8 @@ class SpatialLightColorCardEditor extends HTMLElement {
     const editPositions = !!config._edit_positions;
     const presets = Array.isArray(config.color_presets) ? config.color_presets : [];
     const canvasElements = Array.isArray(config.canvas_elements) ? config.canvas_elements : [];
+    const glow = config.glow || {};
+    const glowWalls = Array.isArray(config.glow_walls) ? config.glow_walls : [];
 
     // Clear reference since innerHTML will destroy it
     this._bgUploadEl = null;
@@ -6415,6 +6564,131 @@ class SpatialLightColorCardEditor extends HTMLElement {
           </div>
         </div>
 
+        <!-- Glow Section -->
+        <div class="section collapsed" id="section-glow">
+          <div class="section-header" data-section="glow">
+            <h3>Glow</h3>
+            <span class="chevron">&#9660;</span>
+          </div>
+          <div class="section-body">
+            <div class="option-row">
+              <div><div class="label">Enable Glow</div><div class="sublabel">Show shaped glow effects behind entities</div></div>
+              <ha-switch id="cfgGlowEnabled"></ha-switch>
+            </div>
+            <div id="glowSettingsGroup" style="display:flex;flex-direction:column;gap:12px;">
+              <div class="two-col">
+                <div class="input-row">
+                  <label for="cfgGlowShape">Shape</label>
+                  <select id="cfgGlowShape">
+                    <option value="cone">Cone</option>
+                    <option value="semicone">Semicone</option>
+                    <option value="round">Round</option>
+                    <option value="oval">Oval</option>
+                    <option value="beam">Beam</option>
+                    <option value="spotlight">Spotlight</option>
+                    <option value="bar">Bar</option>
+                    <option value="custom">Custom (polar)</option>
+                  </select>
+                </div>
+                <div class="input-row">
+                  <label for="cfgGlowFalloff">Falloff</label>
+                  <select id="cfgGlowFalloff">
+                    <option value="smooth">Smooth</option>
+                    <option value="linear">Linear</option>
+                    <option value="exponential">Exponential</option>
+                    <option value="sharp">Sharp</option>
+                    <option value="uniform">Uniform</option>
+                  </select>
+                </div>
+              </div>
+              <div class="two-col">
+                <div class="input-row">
+                  <label for="cfgGlowDirection">Direction (°)</label>
+                  <input type="number" id="cfgGlowDirection" min="0" max="360" step="5" placeholder="0">
+                </div>
+                <div class="input-row">
+                  <label for="cfgGlowSpread">Spread</label>
+                  <input type="number" id="cfgGlowSpread" min="0.1" max="5" step="0.1" placeholder="1.5">
+                </div>
+              </div>
+              <div class="two-col">
+                <div class="input-row">
+                  <label for="cfgGlowLength">Length (px)</label>
+                  <input type="number" id="cfgGlowLength" min="1" max="500" step="5" placeholder="80">
+                </div>
+                <div class="input-row">
+                  <label for="cfgGlowWidth">Width (px)</label>
+                  <input type="number" id="cfgGlowWidth" min="1" max="500" step="5" placeholder="60">
+                </div>
+              </div>
+              <div class="two-col">
+                <div class="input-row">
+                  <label for="cfgGlowBlur">Blur (px)</label>
+                  <input type="number" id="cfgGlowBlur" min="0" max="100" step="1" placeholder="12">
+                </div>
+                <div class="input-row">
+                  <label for="cfgGlowColor">Color</label>
+                  <div class="color-input-row">
+                    <input type="color" id="cfgGlowColorPicker" value="#ffffff">
+                    <input type="text" id="cfgGlowColor" placeholder="Auto (entity color)">
+                  </div>
+                </div>
+              </div>
+              <div class="option-row">
+                <div class="label">Intensity <span id="cfgGlowIntensityValue" style="font-weight:400;">70%</span></div>
+                <div class="slider-row" style="flex:0 0 auto;">
+                  <input type="range" id="cfgGlowIntensity" min="0" max="100" step="1" style="width:120px;">
+                </div>
+              </div>
+              <div class="option-row">
+                <div class="label">Edge Softness <span id="cfgGlowEdgeSoftnessValue" style="font-weight:400;">0%</span></div>
+                <div class="slider-row" style="flex:0 0 auto;">
+                  <input type="range" id="cfgGlowEdgeSoftness" min="0" max="100" step="1" style="width:120px;">
+                </div>
+              </div>
+              <div class="option-row">
+                <div class="label">Start Width <span id="cfgGlowStartWidthValue" style="font-weight:400;">0%</span></div>
+                <div class="slider-row" style="flex:0 0 auto;">
+                  <input type="range" id="cfgGlowStartWidth" min="0" max="100" step="1" style="width:120px;">
+                </div>
+              </div>
+              <div class="two-col">
+                <div class="input-row">
+                  <label for="cfgGlowOffsetX">Offset X (px)</label>
+                  <input type="number" id="cfgGlowOffsetX" step="1" placeholder="0">
+                </div>
+                <div class="input-row">
+                  <label for="cfgGlowOffsetY">Offset Y (px)</label>
+                  <input type="number" id="cfgGlowOffsetY" step="1" placeholder="0">
+                </div>
+              </div>
+              <div class="option-row">
+                <div><div class="label">Scale with Brightness</div><div class="sublabel">Adjust glow opacity based on light brightness</div></div>
+                <ha-switch id="cfgGlowScaleBrightness"></ha-switch>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Glow Walls Section -->
+        <div class="section collapsed" id="section-glow-walls">
+          <div class="section-header" data-section="glow-walls">
+            <h3>Glow Walls${glowWalls.length > 0 ? ` (${glowWalls.length})` : ''}</h3>
+            <span class="chevron">&#9660;</span>
+          </div>
+          <div class="section-body">
+            <div class="sublabel" style="margin-bottom:8px;">Line segments or boxes that block glow from expanding (like room walls).</div>
+            ${glowWalls.length > 0
+              ? `<div class="wall-list">${glowWalls.map((w, i) => this._renderWallItem(w, i)).join('')}</div>`
+              : ''
+            }
+            <div class="add-ce-row">
+              <button class="add-ce-btn" id="addWallLineBtn" title="Add a line segment wall">+ Line</button>
+              <button class="add-ce-btn" id="addWallBoxBtn" title="Add a rectangular wall (box)">+ Box</button>
+            </div>
+          </div>
+        </div>
+
         <!-- Interaction Section -->
         <div class="section collapsed" id="section-interaction">
           <div class="section-header" data-section="interaction">
@@ -6426,6 +6700,21 @@ class SpatialLightColorCardEditor extends HTMLElement {
               <div><div class="label">Single-Tap for Switches &amp; Scenes</div><div class="sublabel">Toggle switches and activate scenes with one tap</div></div>
               <ha-switch id="cfgSwitchTap"></ha-switch>
             </div>
+          </div>
+        </div>
+
+        <!-- Custom CSS Section -->
+        <div class="section collapsed" id="section-custom-css">
+          <div class="section-header" data-section="custom-css">
+            <h3>Custom CSS</h3>
+            <span class="chevron">&#9660;</span>
+          </div>
+          <div class="section-body">
+            <div class="input-row">
+              <label>Global Custom CSS</label>
+              <textarea id="cfgCustomCss" class="custom-css-textarea" rows="6" placeholder="/* Injected into shadow DOM */&#10;.light { ... }&#10;.light-glow { ... }"></textarea>
+            </div>
+            <div class="sublabel">CSS is injected into the card's shadow DOM. Use per-entity style overrides in each entity's settings.</div>
           </div>
         </div>
 
@@ -6509,6 +6798,38 @@ class SpatialLightColorCardEditor extends HTMLElement {
     setVal('cfgTempMin', c.temperature_min != null ? c.temperature_min : '');
     setVal('cfgTempMax', c.temperature_max != null ? c.temperature_max : '');
 
+    // Glow settings
+    const g = c.glow || {};
+    setVal('cfgGlowShape', g.shape || 'cone');
+    setVal('cfgGlowFalloff', g.falloff || 'smooth');
+    setVal('cfgGlowDirection', g.direction != null ? g.direction : '');
+    setVal('cfgGlowSpread', g.spread != null ? g.spread : '');
+    setVal('cfgGlowLength', g.length != null ? g.length : '');
+    setVal('cfgGlowWidth', g.width != null ? g.width : '');
+    setVal('cfgGlowBlur', g.blur != null ? g.blur : '');
+    setVal('cfgGlowOffsetX', g.offset_x != null ? g.offset_x : '');
+    setVal('cfgGlowOffsetY', g.offset_y != null ? g.offset_y : '');
+    const glowIntensityPct = Math.round((g.intensity != null ? g.intensity : 0.7) * 100);
+    setVal('cfgGlowIntensity', glowIntensityPct);
+    const glowIntensityLabel = root.getElementById('cfgGlowIntensityValue');
+    if (glowIntensityLabel) glowIntensityLabel.textContent = `${glowIntensityPct}%`;
+    const glowEdgePct = Math.round((g.edge_softness != null ? g.edge_softness : 0) * 100);
+    setVal('cfgGlowEdgeSoftness', glowEdgePct);
+    const glowEdgeLabel = root.getElementById('cfgGlowEdgeSoftnessValue');
+    if (glowEdgeLabel) glowEdgeLabel.textContent = `${glowEdgePct}%`;
+    const glowStartPct = Math.round((g.start_width != null ? g.start_width : 0) * 100);
+    setVal('cfgGlowStartWidth', glowStartPct);
+    const glowStartLabel = root.getElementById('cfgGlowStartWidthValue');
+    if (glowStartLabel) glowStartLabel.textContent = `${glowStartPct}%`;
+    setVal('cfgGlowColor', g.color || '');
+    if (g.color && /^#[0-9a-fA-F]{6}$/.test(g.color)) {
+      setVal('cfgGlowColorPicker', g.color);
+    }
+
+    // Custom CSS
+    const cssEl = root.getElementById('cfgCustomCss');
+    if (cssEl) cssEl.value = c.custom_css || '';
+
     // Switches
     const switches = {
       cfgEditPositions: !!c._edit_positions,
@@ -6519,6 +6840,8 @@ class SpatialLightColorCardEditor extends HTMLElement {
       cfgAlwaysControls: c.always_show_controls || false,
       cfgControlsBelow: c.controls_below !== false,
       cfgSwitchTap: c.switch_single_tap || false,
+      cfgGlowEnabled: !!(g.enabled),
+      cfgGlowScaleBrightness: g.scale_with_brightness !== false,
     };
     const setChecked = () => {
       Object.entries(switches).forEach(([id, val]) => {
@@ -6535,6 +6858,12 @@ class SpatialLightColorCardEditor extends HTMLElement {
         const entity = sw.dataset.entity;
         const override = c.icon_only_overrides && c.icon_only_overrides[entity];
         sw.checked = override !== undefined ? override : false;
+      });
+      // Per-entity glow enabled switches
+      root.querySelectorAll('.entity-overrides ha-switch[data-key="glowEnabled"]').forEach(sw => {
+        const entity = sw.dataset.entity;
+        const override = c.glow_overrides && c.glow_overrides[entity];
+        sw.checked = override ? override.enabled === true : false;
       });
     });
   }
@@ -6667,6 +6996,8 @@ class SpatialLightColorCardEditor extends HTMLElement {
         if (this._config.color_overrides) delete this._config.color_overrides[entity];
         if (this._config.icon_rotation_overrides) delete this._config.icon_rotation_overrides[entity];
         if (this._config.icon_mirror_overrides) delete this._config.icon_mirror_overrides[entity];
+        if (this._config.glow_overrides) delete this._config.glow_overrides[entity];
+        if (this._config.style_overrides) delete this._config.style_overrides[entity];
         if (this._expandedEntity === entity) this._expandedEntity = null;
         this._fireConfigChanged();
         this._render();
@@ -7104,6 +7435,266 @@ class SpatialLightColorCardEditor extends HTMLElement {
     });
     this._bindNumberInput('cfgTempMax', (val) => {
       this._config.temperature_max = (val >= 1000 && val <= 10000) ? val : null;
+    });
+
+    // --- Glow settings ---
+    const ensureGlow = () => {
+      if (!this._config.glow || typeof this._config.glow !== 'object') this._config.glow = {};
+    };
+    const glowEnabledEl = root.getElementById('cfgGlowEnabled');
+    if (glowEnabledEl) {
+      glowEnabledEl.addEventListener('change', () => {
+        ensureGlow();
+        this._config.glow.enabled = glowEnabledEl.checked;
+        this._fireConfigChanged();
+      });
+    }
+    const glowScaleEl = root.getElementById('cfgGlowScaleBrightness');
+    if (glowScaleEl) {
+      glowScaleEl.addEventListener('change', () => {
+        ensureGlow();
+        this._config.glow.scale_with_brightness = glowScaleEl.checked;
+        this._fireConfigChanged();
+      });
+    }
+
+    const glowShapeEl = root.getElementById('cfgGlowShape');
+    if (glowShapeEl) {
+      glowShapeEl.addEventListener('change', () => {
+        ensureGlow();
+        this._config.glow.shape = glowShapeEl.value;
+        this._fireConfigChanged();
+      });
+    }
+    const glowFalloffEl = root.getElementById('cfgGlowFalloff');
+    if (glowFalloffEl) {
+      glowFalloffEl.addEventListener('change', () => {
+        ensureGlow();
+        this._config.glow.falloff = glowFalloffEl.value;
+        this._fireConfigChanged();
+      });
+    }
+
+    // Glow number inputs
+    const glowNumFields = [
+      ['cfgGlowDirection', 'direction'],
+      ['cfgGlowSpread', 'spread'],
+      ['cfgGlowLength', 'length'],
+      ['cfgGlowWidth', 'width'],
+      ['cfgGlowBlur', 'blur'],
+      ['cfgGlowOffsetX', 'offset_x'],
+      ['cfgGlowOffsetY', 'offset_y'],
+    ];
+    glowNumFields.forEach(([id, key]) => {
+      const el = root.getElementById(id);
+      if (!el) return;
+      el.addEventListener('change', () => {
+        ensureGlow();
+        const raw = el.value.trim();
+        if (raw === '') { delete this._config.glow[key]; }
+        else {
+          const v = parseFloat(raw);
+          if (Number.isFinite(v)) this._config.glow[key] = v;
+        }
+        this._fireConfigChanged();
+      });
+    });
+
+    // Glow intensity slider (0-100 → 0-1)
+    const glowIntSlider = root.getElementById('cfgGlowIntensity');
+    const glowIntLabel = root.getElementById('cfgGlowIntensityValue');
+    if (glowIntSlider) {
+      glowIntSlider.addEventListener('input', () => {
+        if (glowIntLabel) glowIntLabel.textContent = `${glowIntSlider.value}%`;
+      });
+      glowIntSlider.addEventListener('change', () => {
+        ensureGlow();
+        this._config.glow.intensity = parseFloat((parseInt(glowIntSlider.value, 10) / 100).toFixed(2));
+        this._fireConfigChanged();
+      });
+    }
+    // Glow edge softness slider (0-100 → 0-1)
+    const glowEdgeSlider = root.getElementById('cfgGlowEdgeSoftness');
+    const glowEdgeLabel = root.getElementById('cfgGlowEdgeSoftnessValue');
+    if (glowEdgeSlider) {
+      glowEdgeSlider.addEventListener('input', () => {
+        if (glowEdgeLabel) glowEdgeLabel.textContent = `${glowEdgeSlider.value}%`;
+      });
+      glowEdgeSlider.addEventListener('change', () => {
+        ensureGlow();
+        this._config.glow.edge_softness = parseFloat((parseInt(glowEdgeSlider.value, 10) / 100).toFixed(2));
+        this._fireConfigChanged();
+      });
+    }
+    // Glow start width slider (0-100 → 0-1)
+    const glowStartSlider = root.getElementById('cfgGlowStartWidth');
+    const glowStartLabel = root.getElementById('cfgGlowStartWidthValue');
+    if (glowStartSlider) {
+      glowStartSlider.addEventListener('input', () => {
+        if (glowStartLabel) glowStartLabel.textContent = `${glowStartSlider.value}%`;
+      });
+      glowStartSlider.addEventListener('change', () => {
+        ensureGlow();
+        this._config.glow.start_width = parseFloat((parseInt(glowStartSlider.value, 10) / 100).toFixed(2));
+        this._fireConfigChanged();
+      });
+    }
+
+    // Glow color (text + picker pair)
+    const glowColorText = root.getElementById('cfgGlowColor');
+    const glowColorPicker = root.getElementById('cfgGlowColorPicker');
+    if (glowColorText && glowColorPicker) {
+      let glowColorTimer = null;
+      glowColorText.addEventListener('input', () => {
+        clearTimeout(glowColorTimer);
+        glowColorTimer = setTimeout(() => {
+          ensureGlow();
+          const val = glowColorText.value.trim();
+          if (val) {
+            this._config.glow.color = val;
+            if (/^#[0-9a-fA-F]{6}$/.test(val)) glowColorPicker.value = val;
+          } else {
+            delete this._config.glow.color;
+          }
+          this._fireConfigChanged();
+        }, 400);
+      });
+      glowColorText.addEventListener('change', () => {
+        clearTimeout(glowColorTimer);
+        ensureGlow();
+        const val = glowColorText.value.trim();
+        if (val) {
+          this._config.glow.color = val;
+          if (/^#[0-9a-fA-F]{6}$/.test(val)) glowColorPicker.value = val;
+        } else {
+          delete this._config.glow.color;
+        }
+        this._fireConfigChanged();
+      });
+      glowColorPicker.addEventListener('input', () => {
+        glowColorText.value = glowColorPicker.value;
+        ensureGlow();
+        this._config.glow.color = glowColorPicker.value;
+        this._fireConfigChanged();
+      });
+    }
+
+    // --- Glow Walls ---
+    // Add wall buttons
+    const addWallLineBtn = root.getElementById('addWallLineBtn');
+    if (addWallLineBtn) {
+      addWallLineBtn.addEventListener('click', () => {
+        if (!Array.isArray(this._config.glow_walls)) this._config.glow_walls = [];
+        this._config.glow_walls.push({ x1: 20, y1: 50, x2: 80, y2: 50 });
+        this._fireConfigChanged();
+        this._render();
+      });
+    }
+    const addWallBoxBtn = root.getElementById('addWallBoxBtn');
+    if (addWallBoxBtn) {
+      addWallBoxBtn.addEventListener('click', () => {
+        if (!Array.isArray(this._config.glow_walls)) this._config.glow_walls = [];
+        this._config.glow_walls.push({ x: 20, y: 20, width: 60, height: 60 });
+        this._fireConfigChanged();
+        this._render();
+      });
+    }
+    // Wall remove buttons
+    root.querySelectorAll('.wall-item .entity-btn.remove').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const idx = parseInt(btn.dataset.wallIndex, 10);
+        if (!Array.isArray(this._config.glow_walls)) return;
+        this._config.glow_walls.splice(idx, 1);
+        this._fireConfigChanged();
+        this._render();
+      });
+    });
+    // Wall field editing
+    root.querySelectorAll('.wall-fields input').forEach(inp => {
+      const idx = parseInt(inp.dataset.wallIndex, 10);
+      const key = inp.dataset.wallKey;
+      if (isNaN(idx) || !key) return;
+      inp.addEventListener('change', () => {
+        if (!Array.isArray(this._config.glow_walls) || !this._config.glow_walls[idx]) return;
+        let wall = this._config.glow_walls[idx];
+        // Convert array to object form if needed
+        if (Array.isArray(wall)) {
+          wall = { x1: wall[0], y1: wall[1], x2: wall[2], y2: wall[3] };
+          this._config.glow_walls[idx] = wall;
+        }
+        const v = parseFloat(inp.value);
+        if (Number.isFinite(v)) wall[key] = v;
+        this._fireConfigChanged();
+      });
+    });
+
+    // --- Custom CSS ---
+    const customCssEl = root.getElementById('cfgCustomCss');
+    if (customCssEl) {
+      let cssTimer = null;
+      customCssEl.addEventListener('input', () => {
+        clearTimeout(cssTimer);
+        cssTimer = setTimeout(() => {
+          this._config.custom_css = customCssEl.value;
+          this._fireConfigChanged();
+        }, 500);
+      });
+      customCssEl.addEventListener('change', () => {
+        clearTimeout(cssTimer);
+        this._config.custom_css = customCssEl.value;
+        this._fireConfigChanged();
+      });
+    }
+
+    // --- Per-entity glow overrides ---
+    requestAnimationFrame(() => {
+      root.querySelectorAll('.entity-overrides ha-switch[data-key="glowEnabled"]').forEach(sw => {
+        sw.addEventListener('change', () => {
+          const entity = sw.dataset.entity;
+          if (!this._config.glow_overrides) this._config.glow_overrides = {};
+          if (!this._config.glow_overrides[entity]) this._config.glow_overrides[entity] = {};
+          this._config.glow_overrides[entity].enabled = sw.checked;
+          this._fireConfigChanged();
+        });
+      });
+    });
+    root.querySelectorAll('.entity-overrides select[data-key="glowShape"]').forEach(sel => {
+      sel.addEventListener('change', () => {
+        const entity = sel.dataset.entity;
+        if (!this._config.glow_overrides) this._config.glow_overrides = {};
+        if (!this._config.glow_overrides[entity]) this._config.glow_overrides[entity] = {};
+        if (sel.value) { this._config.glow_overrides[entity].shape = sel.value; }
+        else { delete this._config.glow_overrides[entity].shape; }
+        this._fireConfigChanged();
+      });
+    });
+    root.querySelectorAll('.entity-overrides input[data-key="glowDirection"]').forEach(inp => {
+      this._bindEntityOverride(inp, (entity, val) => {
+        if (!this._config.glow_overrides) this._config.glow_overrides = {};
+        if (!this._config.glow_overrides[entity]) this._config.glow_overrides[entity] = {};
+        const num = parseFloat(val);
+        if (Number.isFinite(num)) { this._config.glow_overrides[entity].direction = num; }
+        else { delete this._config.glow_overrides[entity].direction; }
+      });
+    });
+    root.querySelectorAll('.entity-overrides input[data-key="glowIntensity"]').forEach(inp => {
+      this._bindEntityOverride(inp, (entity, val) => {
+        if (!this._config.glow_overrides) this._config.glow_overrides = {};
+        if (!this._config.glow_overrides[entity]) this._config.glow_overrides[entity] = {};
+        const num = parseFloat(val);
+        if (Number.isFinite(num)) { this._config.glow_overrides[entity].intensity = Math.max(0, Math.min(1, num)); }
+        else { delete this._config.glow_overrides[entity].intensity; }
+      });
+    });
+
+    // --- Per-entity style overrides ---
+    root.querySelectorAll('.entity-overrides input[data-key="styleOverride"]').forEach(inp => {
+      this._bindEntityOverride(inp, (entity, val) => {
+        if (!this._config.style_overrides) this._config.style_overrides = {};
+        if (val) { this._config.style_overrides[entity] = val; }
+        else { delete this._config.style_overrides[entity]; }
+      });
     });
   }
 

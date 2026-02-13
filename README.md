@@ -28,8 +28,10 @@ Very useful when you have a lot of lights, and searching for the one you need by
 4. [Usage](#-usage) — Selecting, toggling, color wheel, sliders, presets, moving lights, keyboard shortcuts
 5. [Configuration Reference](#-all-configuration-options)
 6. [Custom Colors & Backgrounds](#-custom-colors--backgrounds)
-7. [Visual Layout Options](#-visual-options)
-8. [Troubleshooting](#troubleshooting)
+7. [Glow Effects](#-glow-effects) — Shapes, walls, custom polar shapes, per-entity overrides
+8. [Custom CSS](#-custom-css) — Global and per-entity style customization
+9. [Visual Layout Options](#-visual-options)
+10. [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -213,6 +215,11 @@ Position history stores up to 50 steps.
 | `show_live_colors` | boolean | `false` | Show the current colors of your lights as additional preset circles. |
 | `temperature_min` | number | `null` | Override minimum Kelvin for temperature slider. |
 | `temperature_max` | number | `null` | Override maximum Kelvin for temperature slider. |
+| `glow` | map | `{}` | Glow effect configuration (see [Glow Effects](#-glow-effects) section). |
+| `glow_overrides` | map | `{}` | Per-entity glow overrides (e.g., `light.lamp: {direction: 180}`). |
+| `glow_walls` | list | `[]` | Line segments or boxes that block glow expansion (see [Glow Walls](#glow-walls)). |
+| `custom_css` | string | `""` | Custom CSS injected into the card's shadow DOM. |
+| `style_overrides` | map | `{}` | Per-entity inline CSS style overrides (e.g., `light.lamp: "filter: blur(2px);"`). |
 
 > ℹ️ **Label modes:** `smart` uses friendly names when available, falling back to entity IDs. Override individual entities with `label_overrides`.
 
@@ -321,6 +328,200 @@ When icon-only mode is enabled:
 
 ---
 
+## 💡 Glow Effects
+
+Add beautiful, customizable glow effects behind your light entities. Glows respond to entity state — they light up when the entity is on and dim when off. Glow works with lights, switches, binary sensors, and input booleans.
+
+### Basic Usage
+
+Enable glow in the visual editor's **Glow** section, or in YAML:
+
+```yaml
+glow:
+  enabled: true
+```
+
+### Glow Shapes
+
+| Shape | Description |
+|-------|-------------|
+| `cone` | Directional cone emanating from the entity (default). |
+| `semicone` | Cone that starts with a configurable width instead of a point. Use `start_width` to control. |
+| `round` | Circular radial glow centered on the entity. |
+| `oval` | Elliptical glow, rotatable with `direction`. |
+| `beam` | Narrow directional beam (minimal spread). |
+| `spotlight` | Wide directional cone with inherent edge softness. |
+| `bar` | Rectangular linear gradient. |
+| `custom` | Arbitrary shape defined by polar coordinates (see [Custom Shapes](#custom-shapes)). |
+
+### Glow Parameters
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `enabled` | boolean | `false` | Enable glow for all entities. |
+| `shape` | string | `"cone"` | Glow shape (see table above). |
+| `direction` | number | `0` | Direction in degrees. 0 = down, 90 = right, 180 = up, 270 = left. |
+| `length` | number | `80` | Glow length/diameter in pixels. |
+| `width` | number | `60` | Glow width in pixels. |
+| `intensity` | number | `0.7` | Maximum opacity (0–1). |
+| `blur` | number | `12` | Blur radius in pixels for soft edges. |
+| `offset_x` | number | `0` | Horizontal offset from entity center (px). |
+| `offset_y` | number | `0` | Vertical offset from entity center (px). |
+| `spread` | number | `1.5` | Far-end width multiplier (1 = no spread). |
+| `start_width` | number | `0` | Origin width fraction (0–1). 0 = pointed, 1 = full width. Used by cone and semicone. |
+| `edge_softness` | number | `0` | Edge feathering (0–1). Higher values produce softer, more organic edges. |
+| `falloff` | string | `"smooth"` | Gradient curve: `smooth`, `linear`, `exponential`, `sharp`, or `uniform`. |
+| `scale_with_brightness` | boolean | `true` | Scale glow opacity with entity brightness. |
+| `color` | string | `null` | Override glow color. `null` = use entity's current color. |
+| `gradient_stops` | list | `null` | Custom gradient: `[[position%, opacity], ...]` (min 2 stops). |
+| `custom_shape` | list | `null` | Polar coordinates for `custom` shape (see below). |
+
+### Example Configurations
+
+**Soft round glow:**
+```yaml
+glow:
+  enabled: true
+  shape: round
+  intensity: 0.5
+  blur: 20
+  edge_softness: 0.8
+  falloff: smooth
+```
+
+**Directional cone pointing right:**
+```yaml
+glow:
+  enabled: true
+  shape: cone
+  direction: 90
+  length: 120
+  width: 80
+  spread: 2.0
+```
+
+**Semicone (starts wide, expands further):**
+```yaml
+glow:
+  enabled: true
+  shape: semicone
+  start_width: 0.4
+  direction: 0
+  length: 100
+```
+
+### Custom Shapes
+
+Define arbitrary glow shapes using polar coordinates. Each point is `[angle_degrees, radius]` where:
+- **Angle**: 0° = down, 90° = right, 180° = up, 270° = left (clockwise)
+- **Radius**: 0 = center, 1 = full extent (can go up to 2)
+
+Points are cosine-interpolated for smooth curves. Minimum 3 points required.
+
+```yaml
+glow:
+  enabled: true
+  shape: custom
+  edge_softness: 0.6
+  custom_shape:
+    - [0, 1.0]     # Full extent downward
+    - [90, 0.5]    # Half extent to the right
+    - [180, 0.3]   # Short upward
+    - [270, 0.5]   # Half extent to the left
+```
+
+### Falloff Modes
+
+| Mode | Description |
+|------|-------------|
+| `smooth` | Smooth hermite curve (default). Natural-looking falloff. |
+| `linear` | Linear gradient from full opacity to zero. |
+| `exponential` | Rapid falloff near the edges, concentrated near the center. |
+| `sharp` | Hard center with abrupt edge transition. |
+| `uniform` | Solid color fill with no gradient (use `edge_softness` for soft edges). |
+
+### Per-Entity Glow Overrides
+
+Override glow settings per entity using `glow_overrides`. Any parameter from the glow config can be overridden:
+
+```yaml
+glow:
+  enabled: true
+  shape: cone
+  direction: 0
+
+glow_overrides:
+  light.ceiling:
+    shape: round
+    intensity: 0.9
+  light.wall_sconce:
+    direction: 90      # Points right
+    length: 150
+  light.floor_lamp:
+    enabled: false      # Disable glow for this entity
+```
+
+Per-entity glow overrides for shape, direction, and intensity can also be configured in the visual editor by expanding each entity's settings.
+
+### Glow Walls
+
+Glow walls are invisible line segments or boxes that block glow from expanding in certain directions — like physical walls in a room. They use 2D ray-casting to create realistic shadow masks.
+
+**Line segment** (x1, y1 → x2, y2 in canvas percentage coordinates):
+```yaml
+glow_walls:
+  - [10, 50, 90, 50]       # Horizontal line across the middle
+  - {x1: 50, y1: 10, x2: 50, y2: 90}  # Vertical line (object form)
+```
+
+**Box** (expands to 4 line segments):
+```yaml
+glow_walls:
+  - {x: 20, y: 20, width: 60, height: 60}  # Rectangular wall
+```
+
+Coordinates use the same 0–100% coordinate system as entity positions. You can mix line segments and boxes:
+```yaml
+glow_walls:
+  - [0, 50, 40, 50]                       # Left wall segment
+  - [60, 50, 100, 50]                     # Right wall segment
+  - {x: 30, y: 70, width: 40, height: 30} # Bottom room box
+```
+
+Glow walls can also be configured in the visual editor's **Glow Walls** section.
+
+---
+
+## 🔧 Custom CSS
+
+### Global Custom CSS
+
+Inject arbitrary CSS into the card's shadow DOM for full control over the card's appearance:
+
+```yaml
+custom_css: |
+  .light-glow {
+    mix-blend-mode: screen;
+  }
+  .canvas {
+    border-radius: 16px;
+  }
+```
+
+### Per-Entity Style Overrides
+
+Apply inline CSS to individual entity containers:
+
+```yaml
+style_overrides:
+  light.accent: "filter: drop-shadow(0 0 8px gold);"
+  light.ceiling: "opacity: 0.8; transform: scale(1.2);"
+```
+
+Both can be configured in the visual editor — global CSS in the **Custom CSS** section, and per-entity styles in each entity's expanded settings panel.
+
+---
+
 ## 🎨 Visual Options
 
 ### Floating Controls (Default)
@@ -379,6 +580,6 @@ This card made turning dozens of lights to nice colors in arbitrary ways much ea
 - [ ] Color effects (not just colors) among presets (with icons?)
 - [ ] Add a setting for toggling lights with a single tap
 - [ ] Think about a way to toggle groups of lights/the default entity?
-- [ ] Allow users to add arbitrary css to individual lights ans to the whole card.
-- [ ] Allow adding a light glow (directional/non-directional) from the lights? Something like: <img width="739" height="474" alt="image" src="https://github.com/user-attachments/assets/3c2350d9-57de-4928-83fe-d2a3ad21b331" />
+- [x] Allow users to add arbitrary css to individual lights and to the whole card.
+- [x] Allow adding a light glow (directional/non-directional) from the lights with multiple shapes, custom polar shapes, soft edges, wall occlusion, and per-entity overrides.
 

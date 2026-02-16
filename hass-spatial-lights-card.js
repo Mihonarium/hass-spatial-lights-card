@@ -45,6 +45,7 @@ class SpatialLightColorCard extends HTMLElement {
 
     /** Large color wheel (long-press) */
     this._largeColorWheelOpen = false;
+    this._largeColorWheelOpenedAt = 0;
     this._colorWheelLongPressTimer = null;
     this._colorWheelLongPressStart = null;
     this._colorWheelLongPressed = false;
@@ -3483,6 +3484,7 @@ class SpatialLightColorCard extends HTMLElement {
   /** ---------- Large color wheel (long-press) ---------- */
   _openLargeColorWheel() {
     this._largeColorWheelOpen = true;
+    this._largeColorWheelOpenedAt = Date.now();
     const overlay = this._els.colorWheelOverlay;
     if (!overlay) return;
 
@@ -3772,7 +3774,7 @@ class SpatialLightColorCard extends HTMLElement {
     // Close on backdrop click
     if (overlay) {
       overlay.addEventListener('click', (e) => {
-        if (e.target === overlay) this._closeLargeColorWheel();
+        if (e.target === overlay && Date.now() - this._largeColorWheelOpenedAt > 500) this._closeLargeColorWheel();
       });
     }
 

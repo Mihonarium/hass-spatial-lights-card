@@ -209,6 +209,16 @@ class SpatialLightColorCard extends HTMLElement {
         : [],
       show_live_colors: config.show_live_colors === true,
 
+      // Effect presets (array of {effect, icon?} shown as icon circles next to color presets)
+      effect_presets: Array.isArray(config.effect_presets)
+        ? config.effect_presets
+            .filter(e => e && typeof e === 'object' && typeof e.effect === 'string' && e.effect.trim())
+            .map(e => ({
+              effect: e.effect.trim(),
+              icon: (typeof e.icon === 'string' && e.icon.trim()) ? e.icon.trim() : 'mdi:auto-fix',
+            }))
+        : [],
+
       // Canvas elements (non-entity elements: links, sensors, templates)
       canvas_elements: this._normalizeCanvasElements(config.canvas_elements),
 
@@ -2131,6 +2141,34 @@ class SpatialLightColorCard extends HTMLElement {
       }
       .temp-preset:hover .temp-label { opacity: 1; }
 
+      .effect-preset {
+        width: 36px; height: 36px; border-radius: 9999px; cursor: pointer;
+        flex-shrink: 0; position: relative; background: transparent !important;
+        display: flex; align-items: center; justify-content: center;
+      }
+      .effect-preset::after {
+        content: ''; position: absolute; inset: 4px; border-radius: 9999px;
+        background: rgba(255,255,255,0.08); border: 2px solid rgba(255,255,255,0.15);
+        box-shadow: var(--shadow-sm);
+        transition: transform var(--transition-fast), border-color var(--transition-fast), box-shadow var(--transition-fast);
+      }
+      .effect-preset:hover::after { transform: scale(1.15); border-color: rgba(255,255,255,0.5); box-shadow: 0 0 8px rgba(255,255,255,0.2); }
+      .effect-preset:active::after { transform: scale(0.92); }
+      .effect-preset.active::after { box-shadow: 0 0 0 2px rgba(255,255,255,0.5); background: rgba(255,255,255,0.15); }
+      .effect-preset.active:hover::after { box-shadow: 0 0 0 2px rgba(255,255,255,0.5), 0 0 8px rgba(255,255,255,0.2); }
+      .effect-preset ha-icon {
+        position: relative; z-index: 1;
+        --mdc-icon-size: 18px; color: rgba(255,255,255,0.7);
+        pointer-events: none;
+      }
+      .effect-preset.active ha-icon { color: rgba(255,255,255,0.95); }
+      .effect-preset .effect-label {
+        position: absolute; top: calc(100% + 2px); left: 50%; transform: translateX(-50%);
+        font-size: 9px; color: var(--text-tertiary); white-space: nowrap; pointer-events: none;
+        opacity: 0; transition: opacity var(--transition-fast);
+      }
+      .effect-preset:hover .effect-label { opacity: 1; }
+
       .slider-group { display:flex; flex-direction:column; gap:10px; min-width: 240px; grid-column: 2; grid-row: 1; }
       .slider-row { display:flex; align-items:center; gap:8px; width:100%; padding: 2px 0; }
 
@@ -3837,8 +3875,16 @@ class SpatialLightColorCard extends HTMLElement {
       const presetsAreas = this.shadowRoot.querySelectorAll('.presets-area');
       presetsAreas.forEach(area => { area.innerHTML = combinedHtml; });
       this._bindPresetHandlers();
+      this._refreshEffectPresetIcons();
       requestAnimationFrame(() => this._updateSeparatorVisibility());
     }
+  }
+
+  _refreshEffectPresetIcons() {
+    if (!this.shadowRoot || !this._hass) return;
+    this.shadowRoot.querySelectorAll('.effect-preset ha-icon').forEach(iconEl => {
+      if (iconEl.hass !== this._hass) iconEl.hass = this._hass;
+    });
   }
 
   _highlightEntities(entityList) {
@@ -3907,6 +3953,16 @@ class SpatialLightColorCard extends HTMLElement {
         e.stopPropagation();
         const kelvin = parseInt(el.dataset.presetKelvin, 10);
         if (Number.isFinite(kelvin)) this._applyTemperaturePreset(kelvin);
+      });
+      this._bindPresetHighlight(el);
+    });
+    this.shadowRoot.querySelectorAll('.effect-preset').forEach(el => {
+      if (el._presetBound) return;
+      el._presetBound = true;
+      el.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const effectName = el.dataset.presetEffect;
+        if (effectName) this._applyEffectPreset(effectName);
       });
       this._bindPresetHighlight(el);
     });
@@ -4045,15 +4101,108 @@ class SpatialLightColorCard extends HTMLElement {
     return html;
   }
 
+  _getAvailableEffects() {
+    const presets = this._config.effect_presets;
+    if (!presets || presets.length === 0) return [];
+
+    const controlled = this._getControlledEntities();
+    // If no lights selected/controlled, show effects available on any configured entity
+    const pool = controlled.length > 0 ? controlled : this._config.entities;
+    if (pool.length === 0) return presets;
+
+    // Collect effect_list from each entity that is a light
+    const entityEffectSets = [];
+    for (const id of pool) {
+      const st = this._hass?.states?.[id];
+      if (!st) continue;
+      // Only consider light entities that have an effect_list
+      const effectList = st.attributes.effect_list;
+      if (!Array.isArray(effectList)) continue;
+      entityEffectSets.push(new Set(effectList));
+    }
+
+    // If no entities have effect_list, show nothing
+    if (entityEffectSets.length === 0) return [];
+
+    // When lights are selected, show only effects available on ALL selected lights
+    // When no selection, show effects available on ANY entity
+    if (controlled.length > 0) {
+      return presets.filter(p => entityEffectSets.every(s => s.has(p.effect)));
+    }
+    return presets.filter(p => entityEffectSets.some(s => s.has(p.effect)));
+  }
+
+  _getActivePresetEffect() {
+    const controlled = this._getControlledEntities();
+    if (controlled.length === 0) return null;
+
+    const entitiesToCheck = this._selectedLights.size > 0
+      ? controlled
+      : this._config.entities;
+
+    let referenceEffect = null;
+    let anyEffectOn = false;
+
+    for (const id of entitiesToCheck) {
+      const st = this._hass?.states?.[id];
+      if (!st || st.state !== 'on') continue;
+      const effect = st.attributes.effect;
+      if (!effect) continue;
+      anyEffectOn = true;
+      if (!referenceEffect) {
+        referenceEffect = effect;
+      } else if (referenceEffect !== effect) {
+        return null;
+      }
+    }
+    if (!anyEffectOn || !referenceEffect) return null;
+    return referenceEffect;
+  }
+
+  _renderEffectPresets() {
+    const available = this._getAvailableEffects();
+    if (available.length === 0) return '';
+
+    const activeEffect = this._getActivePresetEffect();
+
+    // Find which entities currently have each effect active (for highlighting)
+    const effectEntities = {};
+    for (const id of this._config.entities) {
+      const st = this._hass?.states?.[id];
+      if (!st || st.state !== 'on') continue;
+      const eff = st.attributes.effect;
+      if (!eff) continue;
+      if (!effectEntities[eff]) effectEntities[eff] = [];
+      effectEntities[eff].push(id);
+    }
+
+    let html = '';
+    available.forEach(preset => {
+      const isActive = activeEffect && activeEffect === preset.effect;
+      const entities = effectEntities[preset.effect] || [];
+      const entitiesAttr = entities.length ? ` data-preset-entities="${entities.join(',')}"` : '';
+      const escapedEffect = this._escapeHtml(preset.effect);
+      html += `<div class="effect-preset${isActive ? ' active' : ''}" data-preset-effect="${escapedEffect}" data-preset-icon="${this._escapeHtml(preset.icon)}"${entitiesAttr} title="${escapedEffect}"><ha-icon icon="${this._escapeHtml(preset.icon)}"></ha-icon><span class="effect-label">${escapedEffect}</span></div>`;
+    });
+
+    return html;
+  }
+
   _renderPresetsContent() {
     const colorHtml = this._renderColorPresets();
     const tempHtml = this._renderTemperaturePresets();
-    if (!colorHtml && !tempHtml) return '';
+    const effectHtml = this._renderEffectPresets();
+    if (!colorHtml && !tempHtml && !effectHtml) return '';
     let html = colorHtml || '';
     if (colorHtml && tempHtml) {
       html += '<div class="preset-separator" aria-hidden="true"></div>';
     }
     html += tempHtml || '';
+    const beforeEffect = colorHtml || tempHtml;
+    if (beforeEffect && effectHtml) {
+      html += '<div class="preset-separator" aria-hidden="true"></div>';
+    }
+    html += effectHtml || '';
     return html;
   }
 
@@ -4415,6 +4564,17 @@ class SpatialLightColorCard extends HTMLElement {
     if (this._els.temperatureValue) {
       this._els.temperatureValue.textContent = `${kelvin}K`;
     }
+  }
+
+  _applyEffectPreset(effectName) {
+    const controlled = this._selectedLights.size > 0
+      ? [...this._selectedLights]
+      : (this._config.default_entity ? [this._config.default_entity] : []);
+    if (controlled.length === 0 || !effectName) return;
+
+    controlled.forEach(entity_id => {
+      this._hass.callService('light', 'turn_on', { entity_id, effect: effectName });
+    });
   }
 
   _handleBrightnessInput(e) {

@@ -218,6 +218,9 @@ class SpatialLightColorCard extends HTMLElement {
               icon: (typeof e.icon === 'string' && e.icon.trim()) ? e.icon.trim() : 'mdi:auto-fix',
             }))
         : [],
+      // Effect filtering mode: 'any' = show if available on any light, 'all' = only if on all lights
+      effect_filter_default: ['any', 'all'].includes(config.effect_filter_default) ? config.effect_filter_default : 'any',
+      effect_filter_selected: ['any', 'all'].includes(config.effect_filter_selected) ? config.effect_filter_selected : 'all',
 
       // Canvas elements (non-entity elements: links, sensors, templates)
       canvas_elements: this._normalizeCanvasElements(config.canvas_elements),
@@ -4106,8 +4109,9 @@ class SpatialLightColorCard extends HTMLElement {
     if (!presets || presets.length === 0) return [];
 
     const controlled = this._getControlledEntities();
-    // If no lights selected/controlled, show effects available on any configured entity
-    const pool = controlled.length > 0 ? controlled : this._config.entities;
+    const hasSelection = controlled.length > 0;
+    // If no lights selected/controlled, show effects available on configured entities
+    const pool = hasSelection ? controlled : this._config.entities;
     if (pool.length === 0) return presets;
 
     // Collect effect_list from each entity that is a light
@@ -4124,9 +4128,12 @@ class SpatialLightColorCard extends HTMLElement {
     // If no entities have effect_list, show nothing
     if (entityEffectSets.length === 0) return [];
 
-    // When lights are selected, show only effects available on ALL selected lights
-    // When no selection, show effects available on ANY entity
-    if (controlled.length > 0) {
+    // Use configured filter mode: 'any' or 'all'
+    const mode = hasSelection
+      ? (this._config.effect_filter_selected || 'all')
+      : (this._config.effect_filter_default || 'any');
+
+    if (mode === 'all') {
       return presets.filter(p => entityEffectSets.every(s => s.has(p.effect)));
     }
     return presets.filter(p => entityEffectSets.some(s => s.has(p.effect)));
@@ -6729,6 +6736,20 @@ class SpatialLightColorCardEditor extends HTMLElement {
               <ha-switch id="cfgLiveColors"></ha-switch>
             </div>
             <div class="option-row">
+              <div><div class="label">Effect Filter (default)</div><div class="sublabel">Show effects available on any or all lights</div></div>
+              <select id="cfgEffectFilterDefault" style="padding:6px 10px; border-radius:6px; border:1px solid var(--divider-color, rgba(0,0,0,0.12)); background:var(--card-background-color, #fff); color:var(--primary-text-color, #212121); font-size:14px;">
+                <option value="any">Any light</option>
+                <option value="all">All lights</option>
+              </select>
+            </div>
+            <div class="option-row">
+              <div><div class="label">Effect Filter (selected)</div><div class="sublabel">Show effects available on any or all selected lights</div></div>
+              <select id="cfgEffectFilterSelected" style="padding:6px 10px; border-radius:6px; border:1px solid var(--divider-color, rgba(0,0,0,0.12)); background:var(--card-background-color, #fff); color:var(--primary-text-color, #212121); font-size:14px;">
+                <option value="any">Any selected</option>
+                <option value="all">All selected</option>
+              </select>
+            </div>
+            <div class="option-row">
               <div><div class="label">Always Show Controls</div><div class="sublabel">Keep brightness/color controls visible</div></div>
               <ha-switch id="cfgAlwaysControls"></ha-switch>
             </div>
@@ -7048,6 +7069,8 @@ class SpatialLightColorCardEditor extends HTMLElement {
     const irv = root.getElementById('cfgIconRotationValue');
     if (irv) irv.textContent = `${c.icon_rotation || 0}°`;
     setVal('cfgIconMirror', c.icon_mirror || 'none');
+    setVal('cfgEffectFilterDefault', c.effect_filter_default || 'any');
+    setVal('cfgEffectFilterSelected', c.effect_filter_selected || 'all');
 
     // Background image (ha-picture-upload created programmatically after lazy load)
     let bgUrl = '';
@@ -7515,6 +7538,22 @@ class SpatialLightColorCardEditor extends HTMLElement {
     if (mirrorEl) {
       mirrorEl.addEventListener('change', () => {
         this._config.icon_mirror = mirrorEl.value === 'none' ? 'none' : mirrorEl.value;
+        this._fireConfigChanged();
+      });
+    }
+
+    // --- Effect filter dropdowns ---
+    const efDefault = root.getElementById('cfgEffectFilterDefault');
+    if (efDefault) {
+      efDefault.addEventListener('change', () => {
+        this._config.effect_filter_default = efDefault.value;
+        this._fireConfigChanged();
+      });
+    }
+    const efSelected = root.getElementById('cfgEffectFilterSelected');
+    if (efSelected) {
+      efSelected.addEventListener('change', () => {
+        this._config.effect_filter_selected = efSelected.value;
         this._fireConfigChanged();
       });
     }

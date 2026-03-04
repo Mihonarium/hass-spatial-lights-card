@@ -4169,12 +4169,10 @@ class SpatialLightColorCard extends HTMLElement {
       const presetFilterKey = hasSelection ? 'filter_selected' : 'filter_default';
       const effectiveMode = preset[presetFilterKey] || globalMode;
 
-      // Which lights to check visibility against:
-      // - With selection: check ALL selected lights (user explicitly chose them)
-      // - Without selection: check lights in restriction (or all if no restriction)
-      const checkIds = hasSelection
-        ? [...pool]
-        : (presetLights ? pool.filter(id => presetLights.includes(id)) : [...pool]);
+      // Visibility is always checked against the full pool (all selected,
+      // or all card entities). The lights restriction only gates relevance
+      // (prerequisite above) and controls which lights get the effect applied.
+      const checkIds = [...pool];
       if (checkIds.length === 0) return false;
 
       // Count how many check-lights actually support this effect

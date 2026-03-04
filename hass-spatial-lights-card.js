@@ -4137,8 +4137,8 @@ class SpatialLightColorCard extends HTMLElement {
 
     // "selected" means the user explicitly selected lights (not just default_entity)
     const hasSelection = this._selectedLights.size > 0;
-    const pool = hasSelection ? [...this._selectedLights] : this._config.entities;
-    if (pool.length === 0) return presets;
+    const pool = hasSelection ? [...this._selectedLights] : (this._config.entities || []);
+    if (pool.length === 0) return [];
 
     // Collect effect_list from each entity in the full pool
     const entityEffectSets = new Map(); // entity_id -> Set of effects
@@ -4173,7 +4173,6 @@ class SpatialLightColorCard extends HTMLElement {
       // or all card entities). The lights restriction only gates relevance
       // (prerequisite above) and controls which lights get the effect applied.
       const checkIds = [...pool];
-      if (checkIds.length === 0) return false;
 
       // Count how many check-lights actually support this effect
       const supporting = checkIds.filter(id => {
@@ -4640,11 +4639,11 @@ class SpatialLightColorCard extends HTMLElement {
     } else if (restrictedLights) {
       // Nothing selected but preset is restricted — apply to all restricted lights
       targets = [...restrictedLights];
-    } else if (this._config.default_entity) {
-      targets = [this._config.default_entity];
     } else {
-      return;
+      // Nothing selected, no restriction — apply to all canvas entities
+      targets = [...(this._config.entities || [])];
     }
+    if (targets.length === 0) return;
 
     targets.forEach(entity_id => {
       const st = this._hass?.states?.[entity_id];

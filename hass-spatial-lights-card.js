@@ -6084,6 +6084,31 @@ class SpatialLightColorCardEditor extends HTMLElement {
       }
       .add-preset-btn:hover { border-color: var(--primary-color, #03a9f4); color: var(--primary-color, #03a9f4); }
 
+      .effect-presets-list {
+        display: flex; flex-direction: column; gap: 6px;
+      }
+      .effect-preset-row {
+        display: flex; align-items: center; gap: 8px;
+        padding: 6px 8px; border: 1px solid var(--divider-color, rgba(0,0,0,0.12));
+        border-radius: 6px; background: var(--secondary-background-color, #f5f5f5);
+      }
+      .effect-preset-row input[type="text"] {
+        flex: 1; min-width: 0; padding: 4px 8px; border: 1px solid var(--divider-color, rgba(0,0,0,0.12));
+        border-radius: 4px; font-size: 13px; box-sizing: border-box;
+        background: var(--card-background-color, #fff); color: var(--primary-text-color, #212121);
+      }
+      .effect-preset-row .effect-icon-label {
+        font-size: 12px; color: var(--secondary-text-color, #727272); white-space: nowrap;
+      }
+      .effect-preset-row .remove-effect-preset {
+        width: 24px; height: 24px; border: none; background: transparent; cursor: pointer;
+        color: var(--secondary-text-color, #727272); font-size: 16px; border-radius: 4px;
+        display: flex; align-items: center; justify-content: center; flex-shrink: 0;
+      }
+      .effect-preset-row .remove-effect-preset:hover {
+        background: rgba(255,0,0,0.1); color: var(--error-color, #db4437);
+      }
+
       /* Canvas element editor styles */
       .ce-list { display: flex; flex-direction: column; gap: 4px; }
       .ce-item {
@@ -6732,24 +6757,6 @@ class SpatialLightColorCardEditor extends HTMLElement {
               <ha-switch id="cfgIconOnly"></ha-switch>
             </div>
             <div class="option-row">
-              <div><div class="label">Show Live Colors</div><div class="sublabel">Display current light colors as presets</div></div>
-              <ha-switch id="cfgLiveColors"></ha-switch>
-            </div>
-            <div class="option-row">
-              <div><div class="label">Effect Filter (default)</div><div class="sublabel">Show effects available on any or all lights</div></div>
-              <select id="cfgEffectFilterDefault" style="padding:6px 10px; border-radius:6px; border:1px solid var(--divider-color, rgba(0,0,0,0.12)); background:var(--card-background-color, #fff); color:var(--primary-text-color, #212121); font-size:14px;">
-                <option value="any">Any light</option>
-                <option value="all">All lights</option>
-              </select>
-            </div>
-            <div class="option-row">
-              <div><div class="label">Effect Filter (selected)</div><div class="sublabel">Show effects available on any or all selected lights</div></div>
-              <select id="cfgEffectFilterSelected" style="padding:6px 10px; border-radius:6px; border:1px solid var(--divider-color, rgba(0,0,0,0.12)); background:var(--card-background-color, #fff); color:var(--primary-text-color, #212121); font-size:14px;">
-                <option value="any">Any selected</option>
-                <option value="all">All selected</option>
-              </select>
-            </div>
-            <div class="option-row">
               <div><div class="label">Always Show Controls</div><div class="sublabel">Keep brightness/color controls visible</div></div>
               <ha-switch id="cfgAlwaysControls"></ha-switch>
             </div>
@@ -6779,10 +6786,10 @@ class SpatialLightColorCardEditor extends HTMLElement {
           </div>
         </div>
 
-        <!-- Colors Section -->
+        <!-- Colors & Presets Section -->
         <div class="section collapsed" id="section-colors">
           <div class="section-header" data-section="colors">
-            <h3>Colors</h3>
+            <h3>Colors & Presets</h3>
             <span class="chevron">&#9660;</span>
           </div>
           <div class="section-body">
@@ -6832,6 +6839,38 @@ class SpatialLightColorCardEditor extends HTMLElement {
                 <button class="add-preset-btn" id="addPresetBtn" title="Add color preset">+</button>
               </div>
               <input type="color" id="presetColorPicker" style="display:none;">
+            </div>
+            <div class="option-row">
+              <div><div class="label">Show Live Colors</div><div class="sublabel">Display current light colors as presets</div></div>
+              <ha-switch id="cfgLiveColors"></ha-switch>
+            </div>
+            <div class="input-row">
+              <label>Effect Presets</label>
+              <div class="effect-presets-list" id="effectPresetsList">
+                ${(Array.isArray(config.effect_presets) ? config.effect_presets : []).map((ep, i) => `
+                  <div class="effect-preset-row" data-index="${i}">
+                    <input type="text" class="effect-name-input" data-index="${i}" value="${this._esc(ep.effect || '')}" placeholder="Effect name">
+                    <span class="effect-icon-label">Icon:</span>
+                    <input type="text" class="effect-icon-input" data-index="${i}" value="${this._esc(ep.icon || 'mdi:auto-fix')}" placeholder="mdi:auto-fix" style="max-width:140px;">
+                    <button class="remove-effect-preset" data-index="${i}" title="Remove">&times;</button>
+                  </div>
+                `).join('')}
+                <button class="add-preset-btn" id="addEffectPresetBtn" title="Add effect preset">+</button>
+              </div>
+            </div>
+            <div class="option-row">
+              <div><div class="label">Effect Filter (default)</div><div class="sublabel">Show effects available on any or all lights</div></div>
+              <select id="cfgEffectFilterDefault" style="padding:6px 10px; border-radius:6px; border:1px solid var(--divider-color, rgba(0,0,0,0.12)); background:var(--card-background-color, #fff); color:var(--primary-text-color, #212121); font-size:14px;">
+                <option value="any">Any light</option>
+                <option value="all">All lights</option>
+              </select>
+            </div>
+            <div class="option-row">
+              <div><div class="label">Effect Filter (selected)</div><div class="sublabel">Show effects available on any or all selected lights</div></div>
+              <select id="cfgEffectFilterSelected" style="padding:6px 10px; border-radius:6px; border:1px solid var(--divider-color, rgba(0,0,0,0.12)); background:var(--card-background-color, #fff); color:var(--primary-text-color, #212121); font-size:14px;">
+                <option value="any">Any selected</option>
+                <option value="all">All selected</option>
+              </select>
             </div>
           </div>
         </div>
@@ -7585,6 +7624,43 @@ class SpatialLightColorCardEditor extends HTMLElement {
         const color = e.target.value;
         if (!Array.isArray(this._config.color_presets)) this._config.color_presets = [];
         this._config.color_presets.push(color);
+        this._fireConfigChanged();
+        this._render();
+      });
+    }
+
+    // --- Effect presets ---
+    root.querySelectorAll('.effect-preset-row .remove-effect-preset').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const idx = parseInt(btn.dataset.index, 10);
+        if (!Array.isArray(this._config.effect_presets)) return;
+        this._config.effect_presets.splice(idx, 1);
+        this._fireConfigChanged();
+        this._render();
+      });
+    });
+    root.querySelectorAll('.effect-preset-row .effect-name-input').forEach(input => {
+      input.addEventListener('change', () => {
+        const idx = parseInt(input.dataset.index, 10);
+        if (!Array.isArray(this._config.effect_presets) || !this._config.effect_presets[idx]) return;
+        this._config.effect_presets[idx].effect = input.value.trim();
+        this._fireConfigChanged();
+      });
+    });
+    root.querySelectorAll('.effect-preset-row .effect-icon-input').forEach(input => {
+      input.addEventListener('change', () => {
+        const idx = parseInt(input.dataset.index, 10);
+        if (!Array.isArray(this._config.effect_presets) || !this._config.effect_presets[idx]) return;
+        this._config.effect_presets[idx].icon = input.value.trim() || 'mdi:auto-fix';
+        this._fireConfigChanged();
+      });
+    });
+    const addEffectPresetBtn = root.getElementById('addEffectPresetBtn');
+    if (addEffectPresetBtn) {
+      addEffectPresetBtn.addEventListener('click', () => {
+        if (!Array.isArray(this._config.effect_presets)) this._config.effect_presets = [];
+        this._config.effect_presets.push({ effect: '', icon: 'mdi:auto-fix' });
         this._fireConfigChanged();
         this._render();
       });

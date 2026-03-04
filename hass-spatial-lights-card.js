@@ -7017,19 +7017,20 @@ class SpatialLightColorCardEditor extends HTMLElement {
                       <span class="effect-lights-hint">${epLights.length === 0 ? '(all)' : ''}</span>
                     </div>
                     <div class="effect-filter-row" data-index="${i}">
-                      <span class="effect-filter-label">Show if</span>
+                      <span class="effect-filter-label">No selection: show if</span>
                       <select class="effect-filter-select effect-filter-default" data-index="${i}" title="Visibility when no lights are tapped">
                         <option value=""${fd === '' ? ' selected' : ''}>Global default</option>
                         <option value="any"${fd === 'any' ? ' selected' : ''}>any light has it</option>
                         <option value="all"${fd === 'all' ? ' selected' : ''}>all lights have it</option>
                       </select>
-                      <span class="effect-filter-label">no sel /</span>
+                    </div>
+                    <div class="effect-filter-row" data-index="${i}">
+                      <span class="effect-filter-label">Selection: show if</span>
                       <select class="effect-filter-select effect-filter-selected" data-index="${i}" title="Visibility when lights are selected">
                         <option value=""${fs === '' ? ' selected' : ''}>Global default</option>
                         <option value="any"${fs === 'any' ? ' selected' : ''}>any selected has it</option>
                         <option value="all"${fs === 'all' ? ' selected' : ''}>all selected have it</option>
                       </select>
-                      <span class="effect-filter-label">selected</span>
                     </div>
                   </div>`;
                 }).join('')}

@@ -5719,8 +5719,13 @@ class SpatialLightColorCardEditor extends HTMLElement {
   }
 
   set hass(hass) {
+    const hadHass = !!this._hass;
     this._hass = hass;
     this._setupEntityPickers();
+    // Re-render when hass first becomes available so effect dropdowns populate
+    if (!hadHass && hass && this._config.entities) {
+      this._render();
+    }
   }
 
   _ensureCanvasElementIds() {
@@ -5936,11 +5941,14 @@ class SpatialLightColorCardEditor extends HTMLElement {
 
   _renderPerLightEffectsEditor(config) {
     const selectStyle = 'padding:4px 6px; border-radius:4px; border:1px solid var(--divider-color, rgba(0,0,0,0.12)); background:var(--card-background-color, #fff); color:var(--primary-text-color, #212121); font-size:12px;';
+    const effectSelectStyle = 'flex:1; min-width:0; padding:4px 8px; border:1px solid var(--divider-color, rgba(0,0,0,0.12)); border-radius:4px; font-size:13px; box-sizing:border-box; background:var(--card-background-color, #fff); color:var(--primary-text-color, #212121);';
     const ple = config.per_light_effects || {};
     const entries = Object.entries(ple).filter(([, effects]) => Array.isArray(effects) && effects.length > 0);
     if (entries.length === 0) return '';
     return entries.map(([entityId, effects]) => {
       const name = this._getEntityName(entityId);
+      const st = this._hass?.states?.[entityId];
+      const effectList = (st && Array.isArray(st.attributes.effect_list)) ? st.attributes.effect_list : [];
       return `
         <div class="per-light-entity-group" data-entity="${this._esc(entityId)}">
           <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:4px;">
@@ -5950,9 +5958,14 @@ class SpatialLightColorCardEditor extends HTMLElement {
           ${effects.map((entry, i) => {
             const eff = typeof entry === 'object' ? entry.effect : entry;
             const mode = typeof entry === 'object' ? (entry.mode || 'any') : 'any';
+            const isCustom = eff && !effectList.includes(eff);
             return `
             <div class="effect-preset-row" data-entity="${this._esc(entityId)}" data-effect-index="${i}">
-              <input type="text" class="per-light-effect-input" data-entity="${this._esc(entityId)}" data-effect-index="${i}" value="${this._esc(eff || '')}" placeholder="Effect name">
+              <select class="per-light-effect-select" data-entity="${this._esc(entityId)}" data-effect-index="${i}" style="${effectSelectStyle}">
+                <option value=""${!eff ? ' selected' : ''}>Select effect...</option>
+                ${effectList.map(e => `<option value="${this._esc(e)}"${e === eff ? ' selected' : ''}>${this._esc(e)}</option>`).join('')}
+                ${isCustom ? `<option value="${this._esc(eff)}" selected>${this._esc(eff)}</option>` : ''}
+              </select>
               <select class="per-light-effect-mode" data-entity="${this._esc(entityId)}" data-effect-index="${i}" style="${selectStyle}">
                 <option value="any"${mode === 'any' ? ' selected' : ''}>Any</option>
                 <option value="all"${mode === 'all' ? ' selected' : ''}>All</option>
@@ -6954,10 +6967,16 @@ class SpatialLightColorCardEditor extends HTMLElement {
             </div>
             <div class="input-row">
               <label>Effect Presets</label>
+              <datalist id="allEffectsList">
+                ${[...new Set(entities.flatMap(id => {
+                  const st = this._hass?.states?.[id];
+                  return (st && Array.isArray(st.attributes.effect_list)) ? st.attributes.effect_list : [];
+                }))].map(e => `<option value="${this._esc(e)}">`).join('')}
+              </datalist>
               <div class="effect-presets-list" id="effectPresetsList">
                 ${(Array.isArray(config.effect_presets) ? config.effect_presets : []).map((ep, i) => `
                   <div class="effect-preset-row" data-index="${i}">
-                    <input type="text" class="effect-name-input" data-index="${i}" value="${this._esc(ep.effect || '')}" placeholder="Effect name">
+                    <input type="text" class="effect-name-input" data-index="${i}" value="${this._esc(ep.effect || '')}" placeholder="Effect name" list="allEffectsList">
                     <span class="effect-icon-label">Icon:</span>
                     <input type="text" class="effect-icon-input" data-index="${i}" value="${this._esc(ep.icon || 'mdi:auto-fix')}" placeholder="mdi:auto-fix" style="max-width:140px;">
                     <button class="remove-effect-preset" data-index="${i}" title="Remove">&times;</button>
@@ -7816,13 +7835,13 @@ class SpatialLightColorCardEditor extends HTMLElement {
         this._render();
       });
     });
-    root.querySelectorAll('.per-light-effect-input').forEach(input => {
-      input.addEventListener('change', () => {
-        const entityId = input.dataset.entity;
-        const idx = parseInt(input.dataset.effectIndex, 10);
+    root.querySelectorAll('.per-light-effect-select').forEach(select => {
+      select.addEventListener('change', () => {
+        const entityId = select.dataset.entity;
+        const idx = parseInt(select.dataset.effectIndex, 10);
         const entry = this._config.per_light_effects?.[entityId]?.[idx];
         if (!entry) return;
-        entry.effect = input.value.trim();
+        entry.effect = select.value;
         this._fireConfigChanged();
       });
     });

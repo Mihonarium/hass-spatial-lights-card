@@ -4153,52 +4153,32 @@ class SpatialLightColorCard extends HTMLElement {
     // If no entities have effect_list, show nothing
     if (entityEffectSets.size === 0) return [];
 
-    const perLightEffects = this._config.per_light_effects || {};
-
-    // Global filter mode (used when no per-light entries override it)
+    // Global filter mode
     const globalMode = hasSelection
       ? (this._config.effect_filter_selected || 'all')
       : (this._config.effect_filter_default || 'any');
 
     return presets.filter(preset => {
-      // If the preset has a lights restriction, narrow the pool to those lights
+      // Determine the relevant lights for this preset
       const presetLights = preset.lights && preset.lights.length > 0 ? preset.lights : null;
-      const effectPool = presetLights
-        ? new Map([...entityEffectSets].filter(([id]) => presetLights.includes(id)))
-        : entityEffectSets;
+      const relevantIds = presetLights
+        ? pool.filter(id => presetLights.includes(id))
+        : [...pool];
+      if (relevantIds.length === 0) return false;
 
-      // If preset is restricted to lights not in the current pool, hide it
-      if (effectPool.size === 0) return false;
-
-      // Collect per-light entries for this effect
-      const perLightEntries = []; // { entityId, mode }
-      for (const [id, entries] of Object.entries(perLightEffects)) {
-        if (!Array.isArray(entries)) continue;
-        for (const entry of entries) {
-          if (entry.effect === preset.effect) {
-            perLightEntries.push({ entityId: id, mode: entry.mode || 'any' });
-          }
-        }
-      }
-
-      // Determine effective filter mode for this effect.
-      // Priority: per-preset setting > per-light entries > global setting
+      // Determine effective filter mode: per-preset override > global
       const presetFilterKey = hasSelection ? 'filter_selected' : 'filter_default';
-      let effectiveMode;
-      if (preset[presetFilterKey]) {
-        effectiveMode = preset[presetFilterKey];
-      } else if (perLightEntries.length > 0) {
-        effectiveMode = perLightEntries.some(e => e.mode === 'any') ? 'any' : 'all';
-      } else {
-        effectiveMode = globalMode;
-      }
+      const effectiveMode = preset[presetFilterKey] || globalMode;
 
-      // Check which entities in the (possibly restricted) pool support this effect
-      const supporting = [...effectPool.entries()]
-        .filter(([, s]) => s.has(preset.effect));
+      // Count how many relevant lights actually support this effect
+      // Lights without effect_list count as "doesn't support"
+      const supporting = relevantIds.filter(id => {
+        const effects = entityEffectSets.get(id);
+        return effects && effects.has(preset.effect);
+      });
 
       if (effectiveMode === 'all') {
-        return supporting.length === effectPool.size;
+        return supporting.length === relevantIds.length;
       }
       return supporting.length > 0;
     });
@@ -4251,7 +4231,12 @@ class SpatialLightColorCard extends HTMLElement {
     let html = '';
     available.forEach(preset => {
       const isActive = activeEffect && activeEffect === preset.effect;
-      const entities = effectEntities[preset.effect] || [];
+      let entities = effectEntities[preset.effect] || [];
+      // Only highlight entities within the preset's lights restriction
+      if (preset.lights && preset.lights.length > 0) {
+        const allowed = new Set(preset.lights);
+        entities = entities.filter(id => allowed.has(id));
+      }
       const entitiesAttr = entities.length ? ` data-preset-entities="${entities.join(',')}"` : '';
       const escapedEffect = this._escapeHtml(preset.effect);
       html += `<div class="effect-preset${isActive ? ' active' : ''}" data-preset-effect="${escapedEffect}" data-preset-icon="${this._escapeHtml(preset.icon)}"${entitiesAttr} title="${escapedEffect}"><ha-icon icon="${this._escapeHtml(preset.icon)}"></ha-icon><span class="effect-label">${escapedEffect}</span></div>`;
@@ -4639,19 +4624,25 @@ class SpatialLightColorCard extends HTMLElement {
   }
 
   _applyEffectPreset(effectName) {
-    const controlled = this._selectedLights.size > 0
-      ? [...this._selectedLights]
-      : (this._config.default_entity ? [this._config.default_entity] : []);
-    if (controlled.length === 0 || !effectName) return;
-
-    // Find the preset to check for lights restriction
+    if (!effectName) return;
     const preset = (this._config.effect_presets || []).find(p => p.effect === effectName);
     const restrictedLights = preset && preset.lights && preset.lights.length > 0 ? new Set(preset.lights) : null;
 
-    // Apply to controlled lights that have this effect in their effect_list
-    // and are within the preset's lights restriction (if any)
-    controlled.forEach(entity_id => {
-      if (restrictedLights && !restrictedLights.has(entity_id)) return;
+    let targets;
+    if (this._selectedLights.size > 0) {
+      // User explicitly selected lights — intersect with restriction
+      targets = [...this._selectedLights];
+      if (restrictedLights) targets = targets.filter(id => restrictedLights.has(id));
+    } else if (restrictedLights) {
+      // Nothing selected but preset is restricted — apply to all restricted lights
+      targets = [...restrictedLights];
+    } else if (this._config.default_entity) {
+      targets = [this._config.default_entity];
+    } else {
+      return;
+    }
+
+    targets.forEach(entity_id => {
       const st = this._hass?.states?.[entity_id];
       if (!st) return;
       const effectList = st.attributes.effect_list;
@@ -5824,6 +5815,20 @@ class SpatialLightColorCardEditor extends HTMLElement {
   _fireConfigChanged() {
     this._configFromEditor = true;
     const config = JSON.parse(JSON.stringify(this._config));
+    // Clean effect_presets: omit empty default values for clean YAML
+    if (Array.isArray(config.effect_presets)) {
+      config.effect_presets = config.effect_presets.map(ep => {
+        const clean = { effect: ep.effect, icon: ep.icon };
+        if (Array.isArray(ep.lights) && ep.lights.length > 0) clean.lights = ep.lights;
+        if (ep.filter_default) clean.filter_default = ep.filter_default;
+        if (ep.filter_selected) clean.filter_selected = ep.filter_selected;
+        return clean;
+      });
+    }
+    // Clean per_light_effects: omit if empty
+    if (config.per_light_effects && Object.keys(config.per_light_effects).length === 0) {
+      delete config.per_light_effects;
+    }
     this.dispatchEvent(new CustomEvent('config-changed', {
       detail: { config },
       bubbles: true,
@@ -5959,45 +5964,6 @@ class SpatialLightColorCardEditor extends HTMLElement {
     return (st && st.attributes.friendly_name) || entityId;
   }
 
-  _renderPerLightEffectsEditor(config) {
-    const selectStyle = 'padding:4px 6px; border-radius:4px; border:1px solid var(--divider-color, rgba(0,0,0,0.12)); background:var(--card-background-color, #fff); color:var(--primary-text-color, #212121); font-size:12px;';
-    const effectSelectStyle = 'flex:1 1 auto; min-width:120px; padding:4px 8px; border:1px solid var(--divider-color, rgba(0,0,0,0.12)); border-radius:4px; font-size:13px; box-sizing:border-box; background:var(--card-background-color, #fff); color:var(--primary-text-color, #212121);';
-    const ple = config.per_light_effects || {};
-    const entries = Object.entries(ple).filter(([, effects]) => Array.isArray(effects) && effects.length > 0);
-    if (entries.length === 0) return '';
-    return entries.map(([entityId, effects]) => {
-      const name = this._getEntityName(entityId);
-      const st = this._hass?.states?.[entityId];
-      const effectList = (st && Array.isArray(st.attributes.effect_list)) ? st.attributes.effect_list : [];
-      return `
-        <div class="per-light-entity-group" data-entity="${this._esc(entityId)}">
-          <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:4px;">
-            <span style="font-size:13px; font-weight:500; color:var(--primary-text-color, #212121);">${this._esc(name)}</span>
-            <button class="remove-effect-preset remove-per-light-entity" data-entity="${this._esc(entityId)}" title="Remove all effects for this light">&times;</button>
-          </div>
-          ${effects.map((entry, i) => {
-            const eff = typeof entry === 'object' ? entry.effect : entry;
-            const mode = typeof entry === 'object' ? (entry.mode || 'any') : 'any';
-            const isCustom = eff && !effectList.includes(eff);
-            return `
-            <div class="effect-preset-row" data-entity="${this._esc(entityId)}" data-effect-index="${i}">
-              <select class="per-light-effect-select" data-entity="${this._esc(entityId)}" data-effect-index="${i}" style="${effectSelectStyle}">
-                <option value=""${!eff ? ' selected' : ''}>Select effect...</option>
-                ${effectList.map(e => `<option value="${this._esc(e)}"${e === eff ? ' selected' : ''}>${this._esc(e)}</option>`).join('')}
-                ${isCustom ? `<option value="${this._esc(eff)}" selected>${this._esc(eff)}</option>` : ''}
-              </select>
-              <select class="per-light-effect-mode" data-entity="${this._esc(entityId)}" data-effect-index="${i}" style="${selectStyle}">
-                <option value="any"${mode === 'any' ? ' selected' : ''}>Any</option>
-                <option value="all"${mode === 'all' ? ' selected' : ''}>All</option>
-              </select>
-              <button class="remove-effect-preset remove-per-light-effect" data-entity="${this._esc(entityId)}" data-effect-index="${i}" title="Remove">&times;</button>
-            </div>`;
-          }).join('')}
-          <button class="add-preset-btn add-per-light-effect" data-entity="${this._esc(entityId)}" title="Add effect" style="width:28px;height:28px;margin-top:4px;">+</button>
-        </div>
-      `;
-    }).join('');
-  }
 
   _esc(str) {
     return String(str).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -6224,7 +6190,7 @@ class SpatialLightColorCardEditor extends HTMLElement {
       }
       .effect-lights-row {
         display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px;
-        padding: 2px 8px 6px; border-top: 1px solid var(--divider-color, rgba(0,0,0,0.06));
+        padding: 4px 8px; border-top: 1px solid var(--divider-color, rgba(0,0,0,0.06));
       }
       .effect-lights-label {
         font-size: 11px; color: var(--secondary-text-color, #727272); margin-right: 2px;
@@ -6238,8 +6204,8 @@ class SpatialLightColorCardEditor extends HTMLElement {
         font-size: 11px; color: var(--secondary-text-color, #727272); font-style: italic;
       }
       .effect-filter-row {
-        display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px;
-        padding: 2px 8px 4px; border-top: 1px solid var(--divider-color, rgba(0,0,0,0.06));
+        display: flex; align-items: center; flex-wrap: wrap; gap: 4px 6px;
+        padding: 4px 8px; border-top: 1px solid var(--divider-color, rgba(0,0,0,0.06));
       }
       .effect-filter-label {
         font-size: 11px; color: var(--secondary-text-color, #727272); margin-right: 2px;
@@ -7037,19 +7003,6 @@ class SpatialLightColorCardEditor extends HTMLElement {
                       <input type="text" class="effect-icon-input" data-index="${i}" value="${this._esc(ep.icon || 'mdi:auto-fix')}" placeholder="mdi:auto-fix" style="max-width:140px;">
                       <button class="remove-effect-preset" data-index="${i}" title="Remove">&times;</button>
                     </div>
-                    <div class="effect-filter-row" data-index="${i}">
-                      <span class="effect-filter-label">Visible:</span>
-                      <select class="effect-filter-select effect-filter-default" data-index="${i}">
-                        <option value=""${fd === '' ? ' selected' : ''}>Default (no selection)</option>
-                        <option value="any"${fd === 'any' ? ' selected' : ''}>Any light</option>
-                        <option value="all"${fd === 'all' ? ' selected' : ''}>All lights</option>
-                      </select>
-                      <select class="effect-filter-select effect-filter-selected" data-index="${i}">
-                        <option value=""${fs === '' ? ' selected' : ''}>Default (selected)</option>
-                        <option value="any"${fs === 'any' ? ' selected' : ''}>Any selected</option>
-                        <option value="all"${fs === 'all' ? ' selected' : ''}>All selected</option>
-                      </select>
-                    </div>
                     <div class="effect-lights-row" data-index="${i}">
                       <span class="effect-lights-label">Lights:</span>
                       ${entities.map(id => {
@@ -7059,41 +7012,39 @@ class SpatialLightColorCardEditor extends HTMLElement {
                       }).join('')}
                       <span class="effect-lights-hint">${epLights.length === 0 ? '(all)' : ''}</span>
                     </div>
+                    <div class="effect-filter-row" data-index="${i}">
+                      <span class="effect-filter-label">Show if</span>
+                      <select class="effect-filter-select effect-filter-default" data-index="${i}" title="Visibility when no lights are tapped">
+                        <option value=""${fd === '' ? ' selected' : ''}>Global default</option>
+                        <option value="any"${fd === 'any' ? ' selected' : ''}>any light has it</option>
+                        <option value="all"${fd === 'all' ? ' selected' : ''}>all lights have it</option>
+                      </select>
+                      <span class="effect-filter-label">no sel /</span>
+                      <select class="effect-filter-select effect-filter-selected" data-index="${i}" title="Visibility when lights are selected">
+                        <option value=""${fs === '' ? ' selected' : ''}>Global default</option>
+                        <option value="any"${fs === 'any' ? ' selected' : ''}>any selected has it</option>
+                        <option value="all"${fs === 'all' ? ' selected' : ''}>all selected have it</option>
+                      </select>
+                      <span class="effect-filter-label">selected</span>
+                    </div>
                   </div>`;
                 }).join('')}
                 <button class="add-preset-btn" id="addEffectPresetBtn" title="Add effect preset">+</button>
               </div>
             </div>
             <div class="option-row">
-              <div><div class="label">Effect Filter (default)</div><div class="sublabel">Show effects on any or all lights when none selected</div></div>
+              <div><div class="label">Effect visibility (no selection)</div><div class="sublabel">Show effect if any or all lights on the card have it</div></div>
               <select id="cfgEffectFilterDefault" style="padding:6px 10px; border-radius:6px; border:1px solid var(--divider-color, rgba(0,0,0,0.12)); background:var(--card-background-color, #fff); color:var(--primary-text-color, #212121); font-size:14px;">
-                <option value="any">Any light</option>
-                <option value="all">All lights</option>
+                <option value="any">If any light has it</option>
+                <option value="all">If all lights have it</option>
               </select>
             </div>
             <div class="option-row">
-              <div><div class="label">Effect Filter (selected)</div><div class="sublabel">Show effects on any or all selected lights</div></div>
+              <div><div class="label">Effect visibility (selected)</div><div class="sublabel">Show effect if any or all selected lights have it</div></div>
               <select id="cfgEffectFilterSelected" style="padding:6px 10px; border-radius:6px; border:1px solid var(--divider-color, rgba(0,0,0,0.12)); background:var(--card-background-color, #fff); color:var(--primary-text-color, #212121); font-size:14px;">
-                <option value="any">Any selected</option>
-                <option value="all">All selected</option>
+                <option value="any">If any selected has it</option>
+                <option value="all">If all selected have it</option>
               </select>
-            </div>
-            <div class="input-row">
-              <label>Per-Light Effects</label>
-              <div class="sublabel" style="margin-bottom:6px;">Assign effects to specific lights. "Any" means the effect shows if any selected light has it; "All" means all selected lights must have it. Clicking applies to all selected lights that support the effect.</div>
-              <div class="effect-presets-list" id="perLightEffectsList">
-                ${this._renderPerLightEffectsEditor(config)}
-              </div>
-              <div style="display:flex; gap:8px; align-items:center; margin-top:6px;">
-                <select id="perLightEffectEntity" style="flex:1; padding:6px 10px; border-radius:6px; border:1px solid var(--divider-color, rgba(0,0,0,0.12)); background:var(--card-background-color, #fff); color:var(--primary-text-color, #212121); font-size:13px;">
-                  <option value="">Select light...</option>
-                  ${entities.filter(id => {
-                    const ple = config.per_light_effects || {};
-                    return !ple[id] || ple[id].length === 0;
-                  }).map(id => `<option value="${this._esc(id)}">${this._esc(this._getEntityName(id))}</option>`).join('')}
-                </select>
-                <button class="add-preset-btn" id="addPerLightEffectBtn" title="Add per-light effect" style="width:28px;height:28px;">+</button>
-              </div>
             </div>
           </div>
         </div>
@@ -7918,76 +7869,6 @@ class SpatialLightColorCardEditor extends HTMLElement {
       addEffectPresetBtn.addEventListener('click', () => {
         if (!Array.isArray(this._config.effect_presets)) this._config.effect_presets = [];
         this._config.effect_presets.push({ effect: '', icon: 'mdi:auto-fix', lights: [], filter_default: '', filter_selected: '' });
-        this._fireConfigChanged();
-        this._render();
-      });
-    }
-
-    // --- Per-light effects ---
-    root.querySelectorAll('.remove-per-light-entity').forEach(btn => {
-      btn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        const entityId = btn.dataset.entity;
-        if (!this._config.per_light_effects) return;
-        delete this._config.per_light_effects[entityId];
-        this._fireConfigChanged();
-        this._render();
-      });
-    });
-    root.querySelectorAll('.remove-per-light-effect').forEach(btn => {
-      btn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        const entityId = btn.dataset.entity;
-        const idx = parseInt(btn.dataset.effectIndex, 10);
-        if (!this._config.per_light_effects?.[entityId]) return;
-        this._config.per_light_effects[entityId].splice(idx, 1);
-        if (this._config.per_light_effects[entityId].length === 0) {
-          delete this._config.per_light_effects[entityId];
-        }
-        this._fireConfigChanged();
-        this._render();
-      });
-    });
-    root.querySelectorAll('.per-light-effect-select').forEach(select => {
-      select.addEventListener('change', () => {
-        const entityId = select.dataset.entity;
-        const idx = parseInt(select.dataset.effectIndex, 10);
-        const entry = this._config.per_light_effects?.[entityId]?.[idx];
-        if (!entry) return;
-        entry.effect = select.value;
-        this._fireConfigChanged();
-      });
-    });
-    root.querySelectorAll('.per-light-effect-mode').forEach(select => {
-      select.addEventListener('change', () => {
-        const entityId = select.dataset.entity;
-        const idx = parseInt(select.dataset.effectIndex, 10);
-        const entry = this._config.per_light_effects?.[entityId]?.[idx];
-        if (!entry) return;
-        entry.mode = select.value;
-        this._fireConfigChanged();
-      });
-    });
-    root.querySelectorAll('.add-per-light-effect').forEach(btn => {
-      btn.addEventListener('click', () => {
-        const entityId = btn.dataset.entity;
-        if (!this._config.per_light_effects) this._config.per_light_effects = {};
-        if (!Array.isArray(this._config.per_light_effects[entityId])) this._config.per_light_effects[entityId] = [];
-        this._config.per_light_effects[entityId].push({ effect: '', mode: 'any' });
-        this._fireConfigChanged();
-        this._render();
-      });
-    });
-    const addPerLightBtn = root.getElementById('addPerLightEffectBtn');
-    const perLightSelect = root.getElementById('perLightEffectEntity');
-    if (addPerLightBtn && perLightSelect) {
-      addPerLightBtn.addEventListener('click', () => {
-        const entityId = perLightSelect.value;
-        if (!entityId) return;
-        if (!this._config.per_light_effects) this._config.per_light_effects = {};
-        if (!Array.isArray(this._config.per_light_effects[entityId])) {
-          this._config.per_light_effects[entityId] = [{ effect: '', mode: 'any' }];
-        }
         this._fireConfigChanged();
         this._render();
       });

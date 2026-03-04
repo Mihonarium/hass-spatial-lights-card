@@ -216,6 +216,7 @@ class SpatialLightColorCard extends HTMLElement {
             .map(e => ({
               effect: e.effect.trim(),
               icon: (typeof e.icon === 'string' && e.icon.trim()) ? e.icon.trim() : 'mdi:auto-fix',
+              lights: Array.isArray(e.lights) ? e.lights.filter(l => typeof l === 'string' && l.trim()).map(l => l.trim()) : [],
             }))
         : [],
       // Effect filtering mode: 'any' = show if available on any light, 'all' = only if on all lights
@@ -4137,7 +4138,7 @@ class SpatialLightColorCard extends HTMLElement {
     const pool = hasSelection ? [...this._selectedLights] : this._config.entities;
     if (pool.length === 0) return presets;
 
-    // Collect effect_list from each entity in the pool
+    // Collect effect_list from each entity in the full pool
     const entityEffectSets = new Map(); // entity_id -> Set of effects
     for (const id of pool) {
       const st = this._hass?.states?.[id];
@@ -4158,6 +4159,15 @@ class SpatialLightColorCard extends HTMLElement {
       : (this._config.effect_filter_default || 'any');
 
     return presets.filter(preset => {
+      // If the preset has a lights restriction, narrow the pool to those lights
+      const presetLights = preset.lights && preset.lights.length > 0 ? preset.lights : null;
+      const effectPool = presetLights
+        ? new Map([...entityEffectSets].filter(([id]) => presetLights.includes(id)))
+        : entityEffectSets;
+
+      // If preset is restricted to lights not in the current pool, hide it
+      if (effectPool.size === 0) return false;
+
       // Collect per-light entries for this effect
       const perLightEntries = []; // { entityId, mode }
       for (const [id, entries] of Object.entries(perLightEffects)) {
@@ -4179,12 +4189,12 @@ class SpatialLightColorCard extends HTMLElement {
         effectiveMode = globalMode;
       }
 
-      // Check which entities in pool support this effect
-      const supporting = [...entityEffectSets.entries()]
+      // Check which entities in the (possibly restricted) pool support this effect
+      const supporting = [...effectPool.entries()]
         .filter(([, s]) => s.has(preset.effect));
 
       if (effectiveMode === 'all') {
-        return supporting.length === entityEffectSets.size;
+        return supporting.length === effectPool.size;
       }
       return supporting.length > 0;
     });
@@ -4630,8 +4640,14 @@ class SpatialLightColorCard extends HTMLElement {
       : (this._config.default_entity ? [this._config.default_entity] : []);
     if (controlled.length === 0 || !effectName) return;
 
-    // Apply to all controlled lights that have this effect in their effect_list
+    // Find the preset to check for lights restriction
+    const preset = (this._config.effect_presets || []).find(p => p.effect === effectName);
+    const restrictedLights = preset && preset.lights && preset.lights.length > 0 ? new Set(preset.lights) : null;
+
+    // Apply to controlled lights that have this effect in their effect_list
+    // and are within the preset's lights restriction (if any)
     controlled.forEach(entity_id => {
+      if (restrictedLights && !restrictedLights.has(entity_id)) return;
       const st = this._hass?.states?.[entity_id];
       if (!st) return;
       const effectList = st.attributes.effect_list;
@@ -6193,10 +6209,29 @@ class SpatialLightColorCardEditor extends HTMLElement {
       .effect-presets-list {
         display: flex; flex-direction: column; gap: 6px;
       }
+      .effect-preset-block {
+        border: 1px solid var(--divider-color, rgba(0,0,0,0.12));
+        border-radius: 6px; background: var(--secondary-background-color, #f5f5f5);
+        overflow: hidden;
+      }
       .effect-preset-row {
         display: flex; align-items: center; gap: 8px;
-        padding: 6px 8px; border: 1px solid var(--divider-color, rgba(0,0,0,0.12));
-        border-radius: 6px; background: var(--secondary-background-color, #f5f5f5);
+        padding: 6px 8px;
+      }
+      .effect-lights-row {
+        display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px;
+        padding: 2px 8px 6px; border-top: 1px solid var(--divider-color, rgba(0,0,0,0.06));
+      }
+      .effect-lights-label {
+        font-size: 11px; color: var(--secondary-text-color, #727272); margin-right: 2px;
+      }
+      .effect-light-check {
+        display: flex; align-items: center; gap: 3px; font-size: 11px;
+        color: var(--primary-text-color, #212121); cursor: pointer; white-space: nowrap;
+      }
+      .effect-light-check input { margin: 0; cursor: pointer; }
+      .effect-lights-hint {
+        font-size: 11px; color: var(--secondary-text-color, #727272); font-style: italic;
       }
       .effect-preset-row input[type="text"] {
         flex: 1; min-width: 0; padding: 4px 8px; border: 1px solid var(--divider-color, rgba(0,0,0,0.12));
@@ -6974,14 +7009,27 @@ class SpatialLightColorCardEditor extends HTMLElement {
                 }))].map(e => `<option value="${this._esc(e)}">`).join('')}
               </datalist>
               <div class="effect-presets-list" id="effectPresetsList">
-                ${(Array.isArray(config.effect_presets) ? config.effect_presets : []).map((ep, i) => `
-                  <div class="effect-preset-row" data-index="${i}">
-                    <input type="text" class="effect-name-input" data-index="${i}" value="${this._esc(ep.effect || '')}" placeholder="Effect name" list="allEffectsList">
-                    <span class="effect-icon-label">Icon:</span>
-                    <input type="text" class="effect-icon-input" data-index="${i}" value="${this._esc(ep.icon || 'mdi:auto-fix')}" placeholder="mdi:auto-fix" style="max-width:140px;">
-                    <button class="remove-effect-preset" data-index="${i}" title="Remove">&times;</button>
-                  </div>
-                `).join('')}
+                ${(Array.isArray(config.effect_presets) ? config.effect_presets : []).map((ep, i) => {
+                  const epLights = Array.isArray(ep.lights) ? ep.lights : [];
+                  return `
+                  <div class="effect-preset-block" data-index="${i}">
+                    <div class="effect-preset-row" data-index="${i}">
+                      <input type="text" class="effect-name-input" data-index="${i}" value="${this._esc(ep.effect || '')}" placeholder="Effect name" list="allEffectsList">
+                      <span class="effect-icon-label">Icon:</span>
+                      <input type="text" class="effect-icon-input" data-index="${i}" value="${this._esc(ep.icon || 'mdi:auto-fix')}" placeholder="mdi:auto-fix" style="max-width:140px;">
+                      <button class="remove-effect-preset" data-index="${i}" title="Remove">&times;</button>
+                    </div>
+                    <div class="effect-lights-row" data-index="${i}">
+                      <span class="effect-lights-label">Lights:</span>
+                      ${entities.map(id => {
+                        const checked = epLights.includes(id);
+                        const lname = this._getEntityName(id);
+                        return `<label class="effect-light-check"><input type="checkbox" class="effect-light-cb" data-index="${i}" data-entity="${this._esc(id)}"${checked ? ' checked' : ''}><span>${this._esc(lname)}</span></label>`;
+                      }).join('')}
+                      <span class="effect-lights-hint">${epLights.length === 0 ? '(all)' : ''}</span>
+                    </div>
+                  </div>`;
+                }).join('')}
                 <button class="add-preset-btn" id="addEffectPresetBtn" title="Add effect preset">+</button>
               </div>
             </div>
@@ -7800,11 +7848,29 @@ class SpatialLightColorCardEditor extends HTMLElement {
         this._fireConfigChanged();
       });
     });
+    root.querySelectorAll('.effect-light-cb').forEach(cb => {
+      cb.addEventListener('change', () => {
+        const idx = parseInt(cb.dataset.index, 10);
+        if (!Array.isArray(this._config.effect_presets) || !this._config.effect_presets[idx]) return;
+        const preset = this._config.effect_presets[idx];
+        if (!Array.isArray(preset.lights)) preset.lights = [];
+        const entityId = cb.dataset.entity;
+        if (cb.checked) {
+          if (!preset.lights.includes(entityId)) preset.lights.push(entityId);
+        } else {
+          preset.lights = preset.lights.filter(l => l !== entityId);
+        }
+        // Update the "(all)" hint
+        const hintEl = cb.closest('.effect-lights-row')?.querySelector('.effect-lights-hint');
+        if (hintEl) hintEl.textContent = preset.lights.length === 0 ? '(all)' : '';
+        this._fireConfigChanged();
+      });
+    });
     const addEffectPresetBtn = root.getElementById('addEffectPresetBtn');
     if (addEffectPresetBtn) {
       addEffectPresetBtn.addEventListener('click', () => {
         if (!Array.isArray(this._config.effect_presets)) this._config.effect_presets = [];
-        this._config.effect_presets.push({ effect: '', icon: 'mdi:auto-fix' });
+        this._config.effect_presets.push({ effect: '', icon: 'mdi:auto-fix', lights: [] });
         this._fireConfigChanged();
         this._render();
       });

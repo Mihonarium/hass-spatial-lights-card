@@ -217,6 +217,8 @@ class SpatialLightColorCard extends HTMLElement {
               effect: e.effect.trim(),
               icon: (typeof e.icon === 'string' && e.icon.trim()) ? e.icon.trim() : 'mdi:auto-fix',
               lights: Array.isArray(e.lights) ? e.lights.filter(l => typeof l === 'string' && l.trim()).map(l => l.trim()) : [],
+              filter_default: ['any', 'all'].includes(e.filter_default) ? e.filter_default : '',
+              filter_selected: ['any', 'all'].includes(e.filter_selected) ? e.filter_selected : '',
             }))
         : [],
       // Effect filtering mode: 'any' = show if available on any light, 'all' = only if on all lights
@@ -4179,11 +4181,13 @@ class SpatialLightColorCard extends HTMLElement {
         }
       }
 
-      // Determine effective filter mode for this effect:
-      // If any per-light entry has mode "any", use "any"; otherwise use per-light "all"
-      // If no per-light entries, fall back to global filter
+      // Determine effective filter mode for this effect.
+      // Priority: per-preset setting > per-light entries > global setting
+      const presetFilterKey = hasSelection ? 'filter_selected' : 'filter_default';
       let effectiveMode;
-      if (perLightEntries.length > 0) {
+      if (preset[presetFilterKey]) {
+        effectiveMode = preset[presetFilterKey];
+      } else if (perLightEntries.length > 0) {
         effectiveMode = perLightEntries.some(e => e.mode === 'any') ? 'any' : 'all';
       } else {
         effectiveMode = globalMode;
@@ -6233,6 +6237,18 @@ class SpatialLightColorCardEditor extends HTMLElement {
       .effect-lights-hint {
         font-size: 11px; color: var(--secondary-text-color, #727272); font-style: italic;
       }
+      .effect-filter-row {
+        display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px;
+        padding: 2px 8px 4px; border-top: 1px solid var(--divider-color, rgba(0,0,0,0.06));
+      }
+      .effect-filter-label {
+        font-size: 11px; color: var(--secondary-text-color, #727272); margin-right: 2px;
+      }
+      .effect-filter-select {
+        padding: 2px 4px; border-radius: 4px; font-size: 11px;
+        border: 1px solid var(--divider-color, rgba(0,0,0,0.12));
+        background: var(--card-background-color, #fff); color: var(--primary-text-color, #212121);
+      }
       .effect-preset-row input[type="text"] {
         flex: 1; min-width: 0; padding: 4px 8px; border: 1px solid var(--divider-color, rgba(0,0,0,0.12));
         border-radius: 4px; font-size: 13px; box-sizing: border-box;
@@ -7011,6 +7027,8 @@ class SpatialLightColorCardEditor extends HTMLElement {
               <div class="effect-presets-list" id="effectPresetsList">
                 ${(Array.isArray(config.effect_presets) ? config.effect_presets : []).map((ep, i) => {
                   const epLights = Array.isArray(ep.lights) ? ep.lights : [];
+                  const fd = ep.filter_default || '';
+                  const fs = ep.filter_selected || '';
                   return `
                   <div class="effect-preset-block" data-index="${i}">
                     <div class="effect-preset-row" data-index="${i}">
@@ -7018,6 +7036,19 @@ class SpatialLightColorCardEditor extends HTMLElement {
                       <span class="effect-icon-label">Icon:</span>
                       <input type="text" class="effect-icon-input" data-index="${i}" value="${this._esc(ep.icon || 'mdi:auto-fix')}" placeholder="mdi:auto-fix" style="max-width:140px;">
                       <button class="remove-effect-preset" data-index="${i}" title="Remove">&times;</button>
+                    </div>
+                    <div class="effect-filter-row" data-index="${i}">
+                      <span class="effect-filter-label">Visible:</span>
+                      <select class="effect-filter-select effect-filter-default" data-index="${i}">
+                        <option value=""${fd === '' ? ' selected' : ''}>Default (no selection)</option>
+                        <option value="any"${fd === 'any' ? ' selected' : ''}>Any light</option>
+                        <option value="all"${fd === 'all' ? ' selected' : ''}>All lights</option>
+                      </select>
+                      <select class="effect-filter-select effect-filter-selected" data-index="${i}">
+                        <option value=""${fs === '' ? ' selected' : ''}>Default (selected)</option>
+                        <option value="any"${fs === 'any' ? ' selected' : ''}>Any selected</option>
+                        <option value="all"${fs === 'all' ? ' selected' : ''}>All selected</option>
+                      </select>
                     </div>
                     <div class="effect-lights-row" data-index="${i}">
                       <span class="effect-lights-label">Lights:</span>
@@ -7848,6 +7879,22 @@ class SpatialLightColorCardEditor extends HTMLElement {
         this._fireConfigChanged();
       });
     });
+    root.querySelectorAll('.effect-filter-default').forEach(sel => {
+      sel.addEventListener('change', () => {
+        const idx = parseInt(sel.dataset.index, 10);
+        if (!Array.isArray(this._config.effect_presets) || !this._config.effect_presets[idx]) return;
+        this._config.effect_presets[idx].filter_default = sel.value || '';
+        this._fireConfigChanged();
+      });
+    });
+    root.querySelectorAll('.effect-filter-selected').forEach(sel => {
+      sel.addEventListener('change', () => {
+        const idx = parseInt(sel.dataset.index, 10);
+        if (!Array.isArray(this._config.effect_presets) || !this._config.effect_presets[idx]) return;
+        this._config.effect_presets[idx].filter_selected = sel.value || '';
+        this._fireConfigChanged();
+      });
+    });
     root.querySelectorAll('.effect-light-cb').forEach(cb => {
       cb.addEventListener('change', () => {
         const idx = parseInt(cb.dataset.index, 10);
@@ -7870,7 +7917,7 @@ class SpatialLightColorCardEditor extends HTMLElement {
     if (addEffectPresetBtn) {
       addEffectPresetBtn.addEventListener('click', () => {
         if (!Array.isArray(this._config.effect_presets)) this._config.effect_presets = [];
-        this._config.effect_presets.push({ effect: '', icon: 'mdi:auto-fix', lights: [] });
+        this._config.effect_presets.push({ effect: '', icon: 'mdi:auto-fix', lights: [], filter_default: '', filter_selected: '' });
         this._fireConfigChanged();
         this._render();
       });

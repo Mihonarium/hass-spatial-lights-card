@@ -5941,7 +5941,7 @@ class SpatialLightColorCardEditor extends HTMLElement {
 
   _renderPerLightEffectsEditor(config) {
     const selectStyle = 'padding:4px 6px; border-radius:4px; border:1px solid var(--divider-color, rgba(0,0,0,0.12)); background:var(--card-background-color, #fff); color:var(--primary-text-color, #212121); font-size:12px;';
-    const effectSelectStyle = 'flex:1; min-width:0; padding:4px 8px; border:1px solid var(--divider-color, rgba(0,0,0,0.12)); border-radius:4px; font-size:13px; box-sizing:border-box; background:var(--card-background-color, #fff); color:var(--primary-text-color, #212121);';
+    const effectSelectStyle = 'flex:1 1 auto; min-width:120px; padding:4px 8px; border:1px solid var(--divider-color, rgba(0,0,0,0.12)); border-radius:4px; font-size:13px; box-sizing:border-box; background:var(--card-background-color, #fff); color:var(--primary-text-color, #212121);';
     const ple = config.per_light_effects || {};
     const entries = Object.entries(ple).filter(([, effects]) => Array.isArray(effects) && effects.length > 0);
     if (entries.length === 0) return '';

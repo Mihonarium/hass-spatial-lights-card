@@ -209,6 +209,25 @@ class SpatialLightColorCard extends HTMLElement {
         : [],
       show_live_colors: config.show_live_colors === true,
 
+      // Effect presets (array of {effect, icon?} shown as icon circles next to color presets)
+      effect_presets: Array.isArray(config.effect_presets)
+        ? config.effect_presets
+            .filter(e => e && typeof e === 'object' && typeof e.effect === 'string' && e.effect.trim())
+            .map(e => ({
+              effect: e.effect.trim(),
+              icon: (typeof e.icon === 'string' && e.icon.trim()) ? e.icon.trim() : 'mdi:auto-fix',
+              lights: Array.isArray(e.lights) ? e.lights.filter(l => typeof l === 'string' && l.trim()).map(l => l.trim()) : [],
+              filter_default: ['any', 'all'].includes(e.filter_default) ? e.filter_default : '',
+              filter_selected: ['any', 'all'].includes(e.filter_selected) ? e.filter_selected : '',
+            }))
+        : [],
+      // Effect filtering mode: 'any' = show if available on any light, 'all' = only if on all lights
+      effect_filter_default: ['any', 'all'].includes(config.effect_filter_default) ? config.effect_filter_default : 'any',
+      effect_filter_selected: ['any', 'all'].includes(config.effect_filter_selected) ? config.effect_filter_selected : 'all',
+
+      // Per-light effect assignments: { entity_id: ['effect1', 'effect2'], ... }
+      per_light_effects: this._normalizePerLightEffects(config.per_light_effects),
+
       // Canvas elements (non-entity elements: links, sensors, templates)
       canvas_elements: this._normalizeCanvasElements(config.canvas_elements),
 
@@ -243,6 +262,27 @@ class SpatialLightColorCard extends HTMLElement {
     if (this._hass) {
       this._renderAll();
     }
+  }
+
+  _normalizePerLightEffects(obj) {
+    const result = {};
+    if (obj && typeof obj === 'object') {
+      Object.entries(obj).forEach(([entity, val]) => {
+        if (Array.isArray(val)) {
+          const effects = val
+            .map(e => {
+              if (typeof e === 'string' && e.trim()) return { effect: e.trim(), mode: 'any' };
+              if (e && typeof e === 'object' && typeof e.effect === 'string' && e.effect.trim()) {
+                return { effect: e.effect.trim(), mode: ['any', 'all'].includes(e.mode) ? e.mode : 'any' };
+              }
+              return null;
+            })
+            .filter(Boolean);
+          if (effects.length > 0) result[entity] = effects;
+        }
+      });
+    }
+    return result;
   }
 
   _normalizeNumberOverrides(obj) {
@@ -2131,6 +2171,34 @@ class SpatialLightColorCard extends HTMLElement {
       }
       .temp-preset:hover .temp-label { opacity: 1; }
 
+      .effect-preset {
+        width: 36px; height: 36px; border-radius: 9999px; cursor: pointer;
+        flex-shrink: 0; position: relative; background: transparent !important;
+        display: flex; align-items: center; justify-content: center;
+      }
+      .effect-preset::after {
+        content: ''; position: absolute; inset: 4px; border-radius: 9999px;
+        background: rgba(255,255,255,0.08); border: 2px solid rgba(255,255,255,0.15);
+        box-shadow: var(--shadow-sm);
+        transition: transform var(--transition-fast), border-color var(--transition-fast), box-shadow var(--transition-fast);
+      }
+      .effect-preset:hover::after { transform: scale(1.15); border-color: rgba(255,255,255,0.5); box-shadow: 0 0 8px rgba(255,255,255,0.2); }
+      .effect-preset:active::after { transform: scale(0.92); }
+      .effect-preset.active::after { box-shadow: 0 0 0 2px rgba(255,255,255,0.5); background: rgba(255,255,255,0.15); }
+      .effect-preset.active:hover::after { box-shadow: 0 0 0 2px rgba(255,255,255,0.5), 0 0 8px rgba(255,255,255,0.2); }
+      .effect-preset ha-icon {
+        position: relative; z-index: 1;
+        --mdc-icon-size: 18px; color: rgba(255,255,255,0.7);
+        pointer-events: none;
+      }
+      .effect-preset.active ha-icon { color: rgba(255,255,255,0.95); }
+      .effect-preset .effect-label {
+        position: absolute; top: calc(100% + 2px); left: 50%; transform: translateX(-50%);
+        font-size: 9px; color: var(--text-tertiary); white-space: nowrap; pointer-events: none;
+        opacity: 0; transition: opacity var(--transition-fast);
+      }
+      .effect-preset:hover .effect-label { opacity: 1; }
+
       .slider-group { display:flex; flex-direction:column; gap:10px; min-width: 240px; grid-column: 2; grid-row: 1; }
       .slider-row { display:flex; align-items:center; gap:8px; width:100%; padding: 2px 0; }
 
@@ -3837,8 +3905,16 @@ class SpatialLightColorCard extends HTMLElement {
       const presetsAreas = this.shadowRoot.querySelectorAll('.presets-area');
       presetsAreas.forEach(area => { area.innerHTML = combinedHtml; });
       this._bindPresetHandlers();
+      this._refreshEffectPresetIcons();
       requestAnimationFrame(() => this._updateSeparatorVisibility());
     }
+  }
+
+  _refreshEffectPresetIcons() {
+    if (!this.shadowRoot || !this._hass) return;
+    this.shadowRoot.querySelectorAll('.effect-preset ha-icon').forEach(iconEl => {
+      if (iconEl.hass !== this._hass) iconEl.hass = this._hass;
+    });
   }
 
   _highlightEntities(entityList) {
@@ -3907,6 +3983,16 @@ class SpatialLightColorCard extends HTMLElement {
         e.stopPropagation();
         const kelvin = parseInt(el.dataset.presetKelvin, 10);
         if (Number.isFinite(kelvin)) this._applyTemperaturePreset(kelvin);
+      });
+      this._bindPresetHighlight(el);
+    });
+    this.shadowRoot.querySelectorAll('.effect-preset').forEach(el => {
+      if (el._presetBound) return;
+      el._presetBound = true;
+      el.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const effectName = el.dataset.presetEffect;
+        if (effectName) this._applyEffectPreset(effectName);
       });
       this._bindPresetHighlight(el);
     });
@@ -4045,15 +4131,138 @@ class SpatialLightColorCard extends HTMLElement {
     return html;
   }
 
+  _getAvailableEffects() {
+    const presets = this._config.effect_presets;
+    if (!presets || presets.length === 0) return [];
+
+    // "selected" means the user explicitly selected lights (not just default_entity)
+    const hasSelection = this._selectedLights.size > 0;
+    const pool = hasSelection ? [...this._selectedLights] : (this._config.entities || []);
+    if (pool.length === 0) return [];
+
+    // Collect effect_list from each entity in the full pool
+    const entityEffectSets = new Map(); // entity_id -> Set of effects
+    for (const id of pool) {
+      const st = this._hass?.states?.[id];
+      if (!st) continue;
+      const effectList = st.attributes.effect_list;
+      if (!Array.isArray(effectList)) continue;
+      entityEffectSets.set(id, new Set(effectList));
+    }
+
+    // If no entities have effect_list, show nothing
+    if (entityEffectSets.size === 0) return [];
+
+    // Global filter mode
+    const globalMode = hasSelection
+      ? (this._config.effect_filter_selected || 'all')
+      : (this._config.effect_filter_default || 'any');
+
+    return presets.filter(preset => {
+      const presetLights = preset.lights && preset.lights.length > 0 ? preset.lights : null;
+
+      // Prerequisite: if preset has a lights restriction, at least one
+      // restricted light must be in the pool for the effect to be relevant
+      if (presetLights && !pool.some(id => presetLights.includes(id))) return false;
+
+      // Determine effective filter mode: per-preset override > global
+      const presetFilterKey = hasSelection ? 'filter_selected' : 'filter_default';
+      const effectiveMode = preset[presetFilterKey] || globalMode;
+
+      // Visibility is always checked against the full pool (all selected,
+      // or all card entities). The lights restriction only gates relevance
+      // (prerequisite above) and controls which lights get the effect applied.
+      const checkIds = [...pool];
+
+      // Count how many check-lights actually support this effect
+      const supporting = checkIds.filter(id => {
+        const effects = entityEffectSets.get(id);
+        return effects && effects.has(preset.effect);
+      });
+
+      if (effectiveMode === 'all') {
+        return supporting.length === checkIds.length;
+      }
+      return supporting.length > 0;
+    });
+  }
+
+  _getActivePresetEffect() {
+    const controlled = this._getControlledEntities();
+    if (controlled.length === 0) return null;
+
+    const entitiesToCheck = this._selectedLights.size > 0
+      ? controlled
+      : this._config.entities;
+
+    let referenceEffect = null;
+    let anyEffectOn = false;
+
+    for (const id of entitiesToCheck) {
+      const st = this._hass?.states?.[id];
+      if (!st || st.state !== 'on') continue;
+      const effect = st.attributes.effect;
+      if (!effect) continue;
+      anyEffectOn = true;
+      if (!referenceEffect) {
+        referenceEffect = effect;
+      } else if (referenceEffect !== effect) {
+        return null;
+      }
+    }
+    if (!anyEffectOn || !referenceEffect) return null;
+    return referenceEffect;
+  }
+
+  _renderEffectPresets() {
+    const available = this._getAvailableEffects();
+    if (available.length === 0) return '';
+
+    const activeEffect = this._getActivePresetEffect();
+
+    // Find which entities currently have each effect active (for highlighting)
+    const effectEntities = {};
+    for (const id of this._config.entities) {
+      const st = this._hass?.states?.[id];
+      if (!st || st.state !== 'on') continue;
+      const eff = st.attributes.effect;
+      if (!eff) continue;
+      if (!effectEntities[eff]) effectEntities[eff] = [];
+      effectEntities[eff].push(id);
+    }
+
+    let html = '';
+    available.forEach(preset => {
+      const isActive = activeEffect && activeEffect === preset.effect;
+      let entities = effectEntities[preset.effect] || [];
+      // Only highlight entities within the preset's lights restriction
+      if (preset.lights && preset.lights.length > 0) {
+        const allowed = new Set(preset.lights);
+        entities = entities.filter(id => allowed.has(id));
+      }
+      const entitiesAttr = entities.length ? ` data-preset-entities="${entities.join(',')}"` : '';
+      const escapedEffect = this._escapeHtml(preset.effect);
+      html += `<div class="effect-preset${isActive ? ' active' : ''}" data-preset-effect="${escapedEffect}" data-preset-icon="${this._escapeHtml(preset.icon)}"${entitiesAttr} title="${escapedEffect}"><ha-icon icon="${this._escapeHtml(preset.icon)}"></ha-icon><span class="effect-label">${escapedEffect}</span></div>`;
+    });
+
+    return html;
+  }
+
   _renderPresetsContent() {
     const colorHtml = this._renderColorPresets();
     const tempHtml = this._renderTemperaturePresets();
-    if (!colorHtml && !tempHtml) return '';
+    const effectHtml = this._renderEffectPresets();
+    if (!colorHtml && !tempHtml && !effectHtml) return '';
     let html = colorHtml || '';
     if (colorHtml && tempHtml) {
       html += '<div class="preset-separator" aria-hidden="true"></div>';
     }
     html += tempHtml || '';
+    const beforeEffect = colorHtml || tempHtml;
+    if (beforeEffect && effectHtml) {
+      html += '<div class="preset-separator" aria-hidden="true"></div>';
+    }
+    html += effectHtml || '';
     return html;
   }
 
@@ -4415,6 +4624,34 @@ class SpatialLightColorCard extends HTMLElement {
     if (this._els.temperatureValue) {
       this._els.temperatureValue.textContent = `${kelvin}K`;
     }
+  }
+
+  _applyEffectPreset(effectName) {
+    if (!effectName) return;
+    const preset = (this._config.effect_presets || []).find(p => p.effect === effectName);
+    const restrictedLights = preset && preset.lights && preset.lights.length > 0 ? new Set(preset.lights) : null;
+
+    let targets;
+    if (this._selectedLights.size > 0) {
+      // User explicitly selected lights — intersect with restriction
+      targets = [...this._selectedLights];
+      if (restrictedLights) targets = targets.filter(id => restrictedLights.has(id));
+    } else if (restrictedLights) {
+      // Nothing selected but preset is restricted — apply to all restricted lights
+      targets = [...restrictedLights];
+    } else {
+      // Nothing selected, no restriction — apply to all canvas entities
+      targets = [...(this._config.entities || [])];
+    }
+    if (targets.length === 0) return;
+
+    targets.forEach(entity_id => {
+      const st = this._hass?.states?.[entity_id];
+      if (!st) return;
+      const effectList = st.attributes.effect_list;
+      if (!Array.isArray(effectList) || !effectList.includes(effectName)) return;
+      this._hass.callService('light', 'turn_on', { entity_id, effect: effectName });
+    });
   }
 
   _handleBrightnessInput(e) {
@@ -5496,8 +5733,13 @@ class SpatialLightColorCardEditor extends HTMLElement {
   }
 
   set hass(hass) {
+    const hadHass = !!this._hass;
     this._hass = hass;
     this._setupEntityPickers();
+    // Re-render when hass first becomes available so effect dropdowns populate
+    if (!hadHass && hass && this._config.entities) {
+      this._render();
+    }
   }
 
   _ensureCanvasElementIds() {
@@ -5576,6 +5818,20 @@ class SpatialLightColorCardEditor extends HTMLElement {
   _fireConfigChanged() {
     this._configFromEditor = true;
     const config = JSON.parse(JSON.stringify(this._config));
+    // Clean effect_presets: omit empty default values for clean YAML
+    if (Array.isArray(config.effect_presets)) {
+      config.effect_presets = config.effect_presets.map(ep => {
+        const clean = { effect: ep.effect, icon: ep.icon };
+        if (Array.isArray(ep.lights) && ep.lights.length > 0) clean.lights = ep.lights;
+        if (ep.filter_default) clean.filter_default = ep.filter_default;
+        if (ep.filter_selected) clean.filter_selected = ep.filter_selected;
+        return clean;
+      });
+    }
+    // Clean per_light_effects: omit if empty
+    if (config.per_light_effects && Object.keys(config.per_light_effects).length === 0) {
+      delete config.per_light_effects;
+    }
     this.dispatchEvent(new CustomEvent('config-changed', {
       detail: { config },
       bubbles: true,
@@ -5705,6 +5961,12 @@ class SpatialLightColorCardEditor extends HTMLElement {
     const map = { light: 'mdi:lightbulb', switch: 'mdi:toggle-switch', scene: 'mdi:palette', input_boolean: 'mdi:toggle-switch-outline', binary_sensor: 'mdi:eye' };
     return map[domain] || 'mdi:help-circle';
   }
+
+  _getEntityName(entityId) {
+    const st = this._hass?.states?.[entityId];
+    return (st && st.attributes.friendly_name) || entityId;
+  }
+
 
   _esc(str) {
     return String(str).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -5916,6 +6178,67 @@ class SpatialLightColorCardEditor extends HTMLElement {
         display: flex; align-items: center; justify-content: center; font-size: 16px;
       }
       .add-preset-btn:hover { border-color: var(--primary-color, #03a9f4); color: var(--primary-color, #03a9f4); }
+
+      .effect-presets-list {
+        display: flex; flex-direction: column; gap: 6px;
+      }
+      .effect-preset-block {
+        border: 1px solid var(--divider-color, rgba(0,0,0,0.12));
+        border-radius: 6px; background: var(--secondary-background-color, #f5f5f5);
+        overflow: hidden;
+      }
+      .effect-preset-row {
+        display: flex; align-items: center; gap: 8px;
+        padding: 6px 8px;
+      }
+      .effect-lights-row {
+        display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px;
+        padding: 4px 8px; border-top: 1px solid var(--divider-color, rgba(0,0,0,0.06));
+      }
+      .effect-lights-label {
+        font-size: 11px; color: var(--secondary-text-color, #727272); margin-right: 2px;
+      }
+      .effect-light-check {
+        display: flex; align-items: center; gap: 3px; font-size: 11px;
+        color: var(--primary-text-color, #212121); cursor: pointer; white-space: nowrap;
+      }
+      .effect-light-check input { margin: 0; cursor: pointer; }
+      .effect-lights-hint {
+        font-size: 11px; color: var(--secondary-text-color, #727272); font-style: italic;
+      }
+      .effect-filter-row {
+        display: flex; align-items: center; flex-wrap: wrap; gap: 4px 6px;
+        padding: 4px 8px; border-top: 1px solid var(--divider-color, rgba(0,0,0,0.06));
+      }
+      .effect-filter-label {
+        font-size: 11px; color: var(--secondary-text-color, #727272); margin-right: 2px;
+      }
+      .effect-filter-select {
+        padding: 2px 4px; border-radius: 4px; font-size: 11px;
+        border: 1px solid var(--divider-color, rgba(0,0,0,0.12));
+        background: var(--card-background-color, #fff); color: var(--primary-text-color, #212121);
+      }
+      .effect-preset-row input[type="text"] {
+        flex: 1; min-width: 0; padding: 4px 8px; border: 1px solid var(--divider-color, rgba(0,0,0,0.12));
+        border-radius: 4px; font-size: 13px; box-sizing: border-box;
+        background: var(--card-background-color, #fff); color: var(--primary-text-color, #212121);
+      }
+      .effect-preset-row .effect-icon-label {
+        font-size: 12px; color: var(--secondary-text-color, #727272); white-space: nowrap;
+      }
+      .effect-preset-row .remove-effect-preset {
+        width: 24px; height: 24px; border: none; background: transparent; cursor: pointer;
+        color: var(--secondary-text-color, #727272); font-size: 16px; border-radius: 4px;
+        display: flex; align-items: center; justify-content: center; flex-shrink: 0;
+      }
+      .effect-preset-row .remove-effect-preset:hover {
+        background: rgba(255,0,0,0.1); color: var(--error-color, #db4437);
+      }
+      .per-light-entity-group {
+        padding: 8px; border: 1px solid var(--divider-color, rgba(0,0,0,0.12));
+        border-radius: 8px; background: var(--secondary-background-color, #f5f5f5);
+      }
+      .per-light-entity-group + .per-light-entity-group { margin-top: 8px; }
 
       /* Canvas element editor styles */
       .ce-list { display: flex; flex-direction: column; gap: 4px; }
@@ -6565,10 +6888,6 @@ class SpatialLightColorCardEditor extends HTMLElement {
               <ha-switch id="cfgIconOnly"></ha-switch>
             </div>
             <div class="option-row">
-              <div><div class="label">Show Live Colors</div><div class="sublabel">Display current light colors as presets</div></div>
-              <ha-switch id="cfgLiveColors"></ha-switch>
-            </div>
-            <div class="option-row">
               <div><div class="label">Always Show Controls</div><div class="sublabel">Keep brightness/color controls visible</div></div>
               <ha-switch id="cfgAlwaysControls"></ha-switch>
             </div>
@@ -6640,6 +6959,16 @@ class SpatialLightColorCardEditor extends HTMLElement {
                 <input type="text" id="cfgBinarySensorOffColor" placeholder="#2a2a2a">
               </div>
             </div>
+          </div>
+        </div>
+
+        <!-- Presets Section -->
+        <div class="section collapsed" id="section-presets">
+          <div class="section-header" data-section="presets">
+            <h3>Presets</h3>
+            <span class="chevron">&#9660;</span>
+          </div>
+          <div class="section-body">
             <div class="input-row">
               <label>Color Presets</label>
               <div class="color-presets-list" id="colorPresetsList">
@@ -6651,6 +6980,75 @@ class SpatialLightColorCardEditor extends HTMLElement {
                 <button class="add-preset-btn" id="addPresetBtn" title="Add color preset">+</button>
               </div>
               <input type="color" id="presetColorPicker" style="display:none;">
+            </div>
+            <div class="option-row">
+              <div><div class="label">Show Live Colors</div><div class="sublabel">Display current light colors as presets</div></div>
+              <ha-switch id="cfgLiveColors"></ha-switch>
+            </div>
+            <div class="input-row">
+              <label>Effect Presets</label>
+              <datalist id="allEffectsList">
+                ${[...new Set(entities.flatMap(id => {
+                  const st = this._hass?.states?.[id];
+                  return (st && Array.isArray(st.attributes.effect_list)) ? st.attributes.effect_list : [];
+                }))].map(e => `<option value="${this._esc(e)}">`).join('')}
+              </datalist>
+              <div class="effect-presets-list" id="effectPresetsList">
+                ${(Array.isArray(config.effect_presets) ? config.effect_presets : []).map((ep, i) => {
+                  const epLights = Array.isArray(ep.lights) ? ep.lights : [];
+                  const fd = ep.filter_default || '';
+                  const fs = ep.filter_selected || '';
+                  return `
+                  <div class="effect-preset-block" data-index="${i}">
+                    <div class="effect-preset-row" data-index="${i}">
+                      <input type="text" class="effect-name-input" data-index="${i}" value="${this._esc(ep.effect || '')}" placeholder="Effect name" list="allEffectsList">
+                      <span class="effect-icon-label">Icon:</span>
+                      <input type="text" class="effect-icon-input" data-index="${i}" value="${this._esc(ep.icon || 'mdi:auto-fix')}" placeholder="mdi:auto-fix" style="max-width:140px;">
+                      <button class="remove-effect-preset" data-index="${i}" title="Remove">&times;</button>
+                    </div>
+                    <div class="effect-lights-row" data-index="${i}">
+                      <span class="effect-lights-label">Lights:</span>
+                      ${entities.map(id => {
+                        const checked = epLights.includes(id);
+                        const lname = this._getEntityName(id);
+                        return `<label class="effect-light-check"><input type="checkbox" class="effect-light-cb" data-index="${i}" data-entity="${this._esc(id)}"${checked ? ' checked' : ''}><span>${this._esc(lname)}</span></label>`;
+                      }).join('')}
+                      <span class="effect-lights-hint">${epLights.length === 0 ? '(all)' : ''}</span>
+                    </div>
+                    <div class="effect-filter-row" data-index="${i}">
+                      <span class="effect-filter-label">No selection: show if</span>
+                      <select class="effect-filter-select effect-filter-default" data-index="${i}" title="Visibility when no lights are tapped">
+                        <option value=""${fd === '' ? ' selected' : ''}>Global default</option>
+                        <option value="any"${fd === 'any' ? ' selected' : ''}>any light has it</option>
+                        <option value="all"${fd === 'all' ? ' selected' : ''}>all lights have it</option>
+                      </select>
+                    </div>
+                    <div class="effect-filter-row" data-index="${i}">
+                      <span class="effect-filter-label">Selection: show if</span>
+                      <select class="effect-filter-select effect-filter-selected" data-index="${i}" title="Visibility when lights are selected">
+                        <option value=""${fs === '' ? ' selected' : ''}>Global default</option>
+                        <option value="any"${fs === 'any' ? ' selected' : ''}>any selected has it</option>
+                        <option value="all"${fs === 'all' ? ' selected' : ''}>all selected have it</option>
+                      </select>
+                    </div>
+                  </div>`;
+                }).join('')}
+                <button class="add-preset-btn" id="addEffectPresetBtn" title="Add effect preset">+</button>
+              </div>
+            </div>
+            <div class="option-row">
+              <div><div class="label">Effect visibility (no selection)</div><div class="sublabel">Show effect if any or all lights on the card have it</div></div>
+              <select id="cfgEffectFilterDefault" style="padding:6px 10px; border-radius:6px; border:1px solid var(--divider-color, rgba(0,0,0,0.12)); background:var(--card-background-color, #fff); color:var(--primary-text-color, #212121); font-size:14px;">
+                <option value="any">If any light has it</option>
+                <option value="all">If all lights have it</option>
+              </select>
+            </div>
+            <div class="option-row">
+              <div><div class="label">Effect visibility (selected)</div><div class="sublabel">Show effect if any or all selected lights have it</div></div>
+              <select id="cfgEffectFilterSelected" style="padding:6px 10px; border-radius:6px; border:1px solid var(--divider-color, rgba(0,0,0,0.12)); background:var(--card-background-color, #fff); color:var(--primary-text-color, #212121); font-size:14px;">
+                <option value="any">If any selected has it</option>
+                <option value="all">If all selected have it</option>
+              </select>
             </div>
           </div>
         </div>
@@ -6888,6 +7286,8 @@ class SpatialLightColorCardEditor extends HTMLElement {
     const irv = root.getElementById('cfgIconRotationValue');
     if (irv) irv.textContent = `${c.icon_rotation || 0}°`;
     setVal('cfgIconMirror', c.icon_mirror || 'none');
+    setVal('cfgEffectFilterDefault', c.effect_filter_default || 'any');
+    setVal('cfgEffectFilterSelected', c.effect_filter_selected || 'all');
 
     // Background image (ha-picture-upload created programmatically after lazy load)
     let bgUrl = '';
@@ -7359,6 +7759,22 @@ class SpatialLightColorCardEditor extends HTMLElement {
       });
     }
 
+    // --- Effect filter dropdowns ---
+    const efDefault = root.getElementById('cfgEffectFilterDefault');
+    if (efDefault) {
+      efDefault.addEventListener('change', () => {
+        this._config.effect_filter_default = efDefault.value;
+        this._fireConfigChanged();
+      });
+    }
+    const efSelected = root.getElementById('cfgEffectFilterSelected');
+    if (efSelected) {
+      efSelected.addEventListener('change', () => {
+        this._config.effect_filter_selected = efSelected.value;
+        this._fireConfigChanged();
+      });
+    }
+
     // --- Color inputs (synced picker + text) ---
     this._bindColorPair('cfgSwitchOnColor', 'cfgSwitchOnColorPicker', 'switch_on_color', '#ffa500');
     this._bindColorPair('cfgSwitchOffColor', 'cfgSwitchOffColorPicker', 'switch_off_color', '#3a3a3a');
@@ -7386,6 +7802,77 @@ class SpatialLightColorCardEditor extends HTMLElement {
         const color = e.target.value;
         if (!Array.isArray(this._config.color_presets)) this._config.color_presets = [];
         this._config.color_presets.push(color);
+        this._fireConfigChanged();
+        this._render();
+      });
+    }
+
+    // --- Effect presets ---
+    root.querySelectorAll('.effect-preset-row .remove-effect-preset').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const idx = parseInt(btn.dataset.index, 10);
+        if (!Array.isArray(this._config.effect_presets)) return;
+        this._config.effect_presets.splice(idx, 1);
+        this._fireConfigChanged();
+        this._render();
+      });
+    });
+    root.querySelectorAll('.effect-preset-row .effect-name-input').forEach(input => {
+      input.addEventListener('change', () => {
+        const idx = parseInt(input.dataset.index, 10);
+        if (!Array.isArray(this._config.effect_presets) || !this._config.effect_presets[idx]) return;
+        this._config.effect_presets[idx].effect = input.value.trim();
+        this._fireConfigChanged();
+      });
+    });
+    root.querySelectorAll('.effect-preset-row .effect-icon-input').forEach(input => {
+      input.addEventListener('change', () => {
+        const idx = parseInt(input.dataset.index, 10);
+        if (!Array.isArray(this._config.effect_presets) || !this._config.effect_presets[idx]) return;
+        this._config.effect_presets[idx].icon = input.value.trim() || 'mdi:auto-fix';
+        this._fireConfigChanged();
+      });
+    });
+    root.querySelectorAll('.effect-filter-default').forEach(sel => {
+      sel.addEventListener('change', () => {
+        const idx = parseInt(sel.dataset.index, 10);
+        if (!Array.isArray(this._config.effect_presets) || !this._config.effect_presets[idx]) return;
+        this._config.effect_presets[idx].filter_default = sel.value || '';
+        this._fireConfigChanged();
+      });
+    });
+    root.querySelectorAll('.effect-filter-selected').forEach(sel => {
+      sel.addEventListener('change', () => {
+        const idx = parseInt(sel.dataset.index, 10);
+        if (!Array.isArray(this._config.effect_presets) || !this._config.effect_presets[idx]) return;
+        this._config.effect_presets[idx].filter_selected = sel.value || '';
+        this._fireConfigChanged();
+      });
+    });
+    root.querySelectorAll('.effect-light-cb').forEach(cb => {
+      cb.addEventListener('change', () => {
+        const idx = parseInt(cb.dataset.index, 10);
+        if (!Array.isArray(this._config.effect_presets) || !this._config.effect_presets[idx]) return;
+        const preset = this._config.effect_presets[idx];
+        if (!Array.isArray(preset.lights)) preset.lights = [];
+        const entityId = cb.dataset.entity;
+        if (cb.checked) {
+          if (!preset.lights.includes(entityId)) preset.lights.push(entityId);
+        } else {
+          preset.lights = preset.lights.filter(l => l !== entityId);
+        }
+        // Update the "(all)" hint
+        const hintEl = cb.closest('.effect-lights-row')?.querySelector('.effect-lights-hint');
+        if (hintEl) hintEl.textContent = preset.lights.length === 0 ? '(all)' : '';
+        this._fireConfigChanged();
+      });
+    });
+    const addEffectPresetBtn = root.getElementById('addEffectPresetBtn');
+    if (addEffectPresetBtn) {
+      addEffectPresetBtn.addEventListener('click', () => {
+        if (!Array.isArray(this._config.effect_presets)) this._config.effect_presets = [];
+        this._config.effect_presets.push({ effect: '', icon: 'mdi:auto-fix', lights: [], filter_default: '', filter_selected: '' });
         this._fireConfigChanged();
         this._render();
       });

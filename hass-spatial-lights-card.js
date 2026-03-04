@@ -266,7 +266,15 @@ class SpatialLightColorCard extends HTMLElement {
     if (obj && typeof obj === 'object') {
       Object.entries(obj).forEach(([entity, val]) => {
         if (Array.isArray(val)) {
-          const effects = val.filter(e => typeof e === 'string' && e.trim()).map(e => e.trim());
+          const effects = val
+            .map(e => {
+              if (typeof e === 'string' && e.trim()) return { effect: e.trim(), mode: 'any' };
+              if (e && typeof e === 'object' && typeof e.effect === 'string' && e.effect.trim()) {
+                return { effect: e.effect.trim(), mode: ['any', 'all'].includes(e.mode) ? e.mode : 'any' };
+              }
+              return null;
+            })
+            .filter(Boolean);
           if (effects.length > 0) result[entity] = effects;
         }
       });
@@ -4144,42 +4152,41 @@ class SpatialLightColorCard extends HTMLElement {
 
     const perLightEffects = this._config.per_light_effects || {};
 
-    // Use configured filter mode: 'any' or 'all'
-    const mode = hasSelection
+    // Global filter mode (used when no per-light entries override it)
+    const globalMode = hasSelection
       ? (this._config.effect_filter_selected || 'all')
       : (this._config.effect_filter_default || 'any');
 
     return presets.filter(preset => {
-      // Check if this effect has per-light assignments
-      const assignedEntities = [];
-      for (const [id, effects] of Object.entries(perLightEffects)) {
-        if (Array.isArray(effects) && effects.includes(preset.effect)) {
-          assignedEntities.push(id);
+      // Collect per-light entries for this effect
+      const perLightEntries = []; // { entityId, mode }
+      for (const [id, entries] of Object.entries(perLightEffects)) {
+        if (!Array.isArray(entries)) continue;
+        for (const entry of entries) {
+          if (entry.effect === preset.effect) {
+            perLightEntries.push({ entityId: id, mode: entry.mode || 'any' });
+          }
         }
       }
-      const isPerLight = assignedEntities.length > 0;
 
-      if (isPerLight) {
-        // Per-light effect: only consider entities that have it assigned
-        // AND are in the current pool AND have it in their HA effect_list
-        const relevantInPool = assignedEntities.filter(id =>
-          entityEffectSets.has(id) && entityEffectSets.get(id).has(preset.effect)
-        );
-        if (mode === 'all') {
-          // All assigned entities in pool must support it
-          const assignedInPool = assignedEntities.filter(id => entityEffectSets.has(id));
-          return assignedInPool.length > 0 && assignedInPool.every(id =>
-            entityEffectSets.get(id).has(preset.effect)
-          );
-        }
-        return relevantInPool.length > 0;
+      // Determine effective filter mode for this effect:
+      // If any per-light entry has mode "any", use "any"; otherwise use per-light "all"
+      // If no per-light entries, fall back to global filter
+      let effectiveMode;
+      if (perLightEntries.length > 0) {
+        effectiveMode = perLightEntries.some(e => e.mode === 'any') ? 'any' : 'all';
       } else {
-        // Global effect: check against all entities in pool
-        if (mode === 'all') {
-          return [...entityEffectSets.values()].every(s => s.has(preset.effect));
-        }
-        return [...entityEffectSets.values()].some(s => s.has(preset.effect));
+        effectiveMode = globalMode;
       }
+
+      // Check which entities in pool support this effect
+      const supporting = [...entityEffectSets.entries()]
+        .filter(([, s]) => s.has(preset.effect));
+
+      if (effectiveMode === 'all') {
+        return supporting.length === entityEffectSets.size;
+      }
+      return supporting.length > 0;
     });
   }
 
@@ -4623,18 +4630,12 @@ class SpatialLightColorCard extends HTMLElement {
       : (this._config.default_entity ? [this._config.default_entity] : []);
     if (controlled.length === 0 || !effectName) return;
 
-    const perLightEffects = this._config.per_light_effects || {};
-    // Check if this effect has per-light assignments
-    const hasPerLight = Object.values(perLightEffects).some(
-      effects => Array.isArray(effects) && effects.includes(effectName)
-    );
-
+    // Apply to all controlled lights that have this effect in their effect_list
     controlled.forEach(entity_id => {
-      // For per-light effects, only apply to entities that have it assigned
-      if (hasPerLight) {
-        const entityEffects = perLightEffects[entity_id];
-        if (!Array.isArray(entityEffects) || !entityEffects.includes(effectName)) return;
-      }
+      const st = this._hass?.states?.[entity_id];
+      if (!st) return;
+      const effectList = st.attributes.effect_list;
+      if (!Array.isArray(effectList) || !effectList.includes(effectName)) return;
       this._hass.callService('light', 'turn_on', { entity_id, effect: effectName });
     });
   }
@@ -5934,6 +5935,7 @@ class SpatialLightColorCardEditor extends HTMLElement {
   }
 
   _renderPerLightEffectsEditor(config) {
+    const selectStyle = 'padding:4px 6px; border-radius:4px; border:1px solid var(--divider-color, rgba(0,0,0,0.12)); background:var(--card-background-color, #fff); color:var(--primary-text-color, #212121); font-size:12px;';
     const ple = config.per_light_effects || {};
     const entries = Object.entries(ple).filter(([, effects]) => Array.isArray(effects) && effects.length > 0);
     if (entries.length === 0) return '';
@@ -5945,12 +5947,19 @@ class SpatialLightColorCardEditor extends HTMLElement {
             <span style="font-size:13px; font-weight:500; color:var(--primary-text-color, #212121);">${this._esc(name)}</span>
             <button class="remove-effect-preset remove-per-light-entity" data-entity="${this._esc(entityId)}" title="Remove all effects for this light">&times;</button>
           </div>
-          ${effects.map((eff, i) => `
+          ${effects.map((entry, i) => {
+            const eff = typeof entry === 'object' ? entry.effect : entry;
+            const mode = typeof entry === 'object' ? (entry.mode || 'any') : 'any';
+            return `
             <div class="effect-preset-row" data-entity="${this._esc(entityId)}" data-effect-index="${i}">
-              <input type="text" class="per-light-effect-input" data-entity="${this._esc(entityId)}" data-effect-index="${i}" value="${this._esc(eff)}" placeholder="Effect name">
+              <input type="text" class="per-light-effect-input" data-entity="${this._esc(entityId)}" data-effect-index="${i}" value="${this._esc(eff || '')}" placeholder="Effect name">
+              <select class="per-light-effect-mode" data-entity="${this._esc(entityId)}" data-effect-index="${i}" style="${selectStyle}">
+                <option value="any"${mode === 'any' ? ' selected' : ''}>Any</option>
+                <option value="all"${mode === 'all' ? ' selected' : ''}>All</option>
+              </select>
               <button class="remove-effect-preset remove-per-light-effect" data-entity="${this._esc(entityId)}" data-effect-index="${i}" title="Remove">&times;</button>
-            </div>
-          `).join('')}
+            </div>`;
+          }).join('')}
           <button class="add-preset-btn add-per-light-effect" data-entity="${this._esc(entityId)}" title="Add effect" style="width:28px;height:28px;margin-top:4px;">+</button>
         </div>
       `;
@@ -6973,7 +6982,7 @@ class SpatialLightColorCardEditor extends HTMLElement {
             </div>
             <div class="input-row">
               <label>Per-Light Effects</label>
-              <div class="sublabel" style="margin-bottom:6px;">Assign effects to specific lights. Per-light effects are only applied to lights that have them assigned.</div>
+              <div class="sublabel" style="margin-bottom:6px;">Assign effects to specific lights. "Any" means the effect shows if any selected light has it; "All" means all selected lights must have it. Clicking applies to all selected lights that support the effect.</div>
               <div class="effect-presets-list" id="perLightEffectsList">
                 ${this._renderPerLightEffectsEditor(config)}
               </div>
@@ -7811,8 +7820,19 @@ class SpatialLightColorCardEditor extends HTMLElement {
       input.addEventListener('change', () => {
         const entityId = input.dataset.entity;
         const idx = parseInt(input.dataset.effectIndex, 10);
-        if (!this._config.per_light_effects?.[entityId]) return;
-        this._config.per_light_effects[entityId][idx] = input.value.trim();
+        const entry = this._config.per_light_effects?.[entityId]?.[idx];
+        if (!entry) return;
+        entry.effect = input.value.trim();
+        this._fireConfigChanged();
+      });
+    });
+    root.querySelectorAll('.per-light-effect-mode').forEach(select => {
+      select.addEventListener('change', () => {
+        const entityId = select.dataset.entity;
+        const idx = parseInt(select.dataset.effectIndex, 10);
+        const entry = this._config.per_light_effects?.[entityId]?.[idx];
+        if (!entry) return;
+        entry.mode = select.value;
         this._fireConfigChanged();
       });
     });
@@ -7821,7 +7841,7 @@ class SpatialLightColorCardEditor extends HTMLElement {
         const entityId = btn.dataset.entity;
         if (!this._config.per_light_effects) this._config.per_light_effects = {};
         if (!Array.isArray(this._config.per_light_effects[entityId])) this._config.per_light_effects[entityId] = [];
-        this._config.per_light_effects[entityId].push('');
+        this._config.per_light_effects[entityId].push({ effect: '', mode: 'any' });
         this._fireConfigChanged();
         this._render();
       });
@@ -7834,7 +7854,7 @@ class SpatialLightColorCardEditor extends HTMLElement {
         if (!entityId) return;
         if (!this._config.per_light_effects) this._config.per_light_effects = {};
         if (!Array.isArray(this._config.per_light_effects[entityId])) {
-          this._config.per_light_effects[entityId] = [''];
+          this._config.per_light_effects[entityId] = [{ effect: '', mode: 'any' }];
         }
         this._fireConfigChanged();
         this._render();

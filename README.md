@@ -28,11 +28,12 @@ Very useful when you have a lot of lights, and searching for the one you need by
 4. [Usage](#-usage) — Selecting, toggling, color wheel, sliders, presets, moving lights, keyboard shortcuts
 5. [Configuration Reference](#-all-configuration-options)
 6. [Custom Colors & Backgrounds](#-custom-colors--backgrounds)
-7. [Glow Effects](#-glow-effects) — Shapes, walls, custom polar shapes, per-entity overrides
-8. [Canvas Elements](#canvas-elements) — Links, sensors, and template elements on the canvas
-9. [Custom CSS](#-custom-css) — Global and per-entity style customization
-10. [Visual Layout Options](#-visual-options)
-11. [Troubleshooting](#troubleshooting)
+7. [Effect Presets](#-effect-presets) — Quick-apply named light effects with filtering
+8. [Glow Effects](#-glow-effects) — Shapes, walls, custom polar shapes, per-entity overrides
+9. [Canvas Elements](#canvas-elements) — Links, sensors, and template elements on the canvas
+10. [Custom CSS](#-custom-css) — Global and per-entity style customization
+11. [Visual Layout Options](#-visual-options)
+12. [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -47,6 +48,7 @@ Very useful when you have a lot of lights, and searching for the one you need by
 - Glow effects with multiple shapes (cone, round, oval, beam, spotlight, bar, custom polar) and wall occlusion.
 - Canvas elements: place sensor readouts, navigation links, and text labels alongside your lights.
 - Icon rotation, mirroring, and per-entity style customization.
+- Effect presets: quick-apply named effects (e.g., colorloop, fireplace) with per-preset light restrictions and filtering.
 - Custom CSS injection for full visual control.
 
 ---
@@ -222,6 +224,9 @@ Position history stores up to 50 steps.
 | `background_image` | string/map | `null` | URL string or object `{url, size, position, blend_mode}`. |
 | `color_presets` | list | `[]` | Hex color strings to show as quick-select circles (e.g., `["#ff0000", "#00ff00"]`). |
 | `show_live_colors` | boolean | `false` | Show the current colors of your lights as additional preset circles. |
+| `effect_presets` | list | `[]` | Named effect presets with icons and optional light restrictions (see [Effect Presets](#-effect-presets)). |
+| `effect_filter_default` | string | `"any"` | Effect visibility when nothing selected: `any` (show if any light supports it) or `all` (only if all lights support it). |
+| `effect_filter_selected` | string | `"all"` | Effect visibility when lights are selected: `any` or `all`. |
 | `binary_sensor_on_color` | string | `"#4caf50"` | Default color for binary sensors in the `on` state. |
 | `binary_sensor_off_color` | string | `"#2a2a2a"` | Default color for binary sensors in the `off` state. |
 | `temperature_min` | number | `null` | Override minimum Kelvin for temperature slider. |
@@ -337,6 +342,70 @@ When icon-only mode is enabled:
 - A subtle border ring shows the light's color when on
 - Off lights remain visible with a dimmed appearance
 - Great for cleaner layouts or when using background images
+
+---
+
+## ✨ Effect Presets
+
+Add quick-apply buttons for named light effects (e.g., colorloop, fireplace, candle). Each preset shows as a labeled icon button alongside color presets.
+
+### Basic Usage
+
+```yaml
+effect_presets:
+  - effect: colorloop
+    icon: mdi:palette
+  - effect: fireplace
+    icon: mdi:fireplace
+```
+
+### Preset Properties
+
+| Property | Type | Default | Description |
+|----------|------|---------|-------------|
+| `effect` | string | **required** | The effect name (must match the light's `effect_list`). |
+| `icon` | string | `"mdi:auto-fix"` | MDI icon displayed on the button. |
+| `lights` | list | `[]` (all) | Restrict this effect to specific entities. When empty, the effect applies to all canvas entities that support it. |
+| `filter_default` | string | `""` (use global) | Per-preset override for visibility when nothing is selected: `any`, `all`, or empty to use the global `effect_filter_default`. |
+| `filter_selected` | string | `""` (use global) | Per-preset override for visibility when lights are selected: `any`, `all`, or empty to use the global `effect_filter_selected`. |
+
+### Filtering Logic
+
+Effect presets are only shown when relevant. Two global settings control visibility:
+
+- **`effect_filter_default`** (default: `any`): When nothing is selected, show the effect if **any** canvas entity supports it.
+- **`effect_filter_selected`** (default: `all`): When lights are selected, show the effect only if **all** selected lights support it.
+
+Each preset can override the global mode with its own `filter_default` / `filter_selected`.
+
+### Light Restrictions
+
+Use `lights` to restrict which entities an effect applies to. This is useful when an effect is only available on certain lights:
+
+```yaml
+effect_presets:
+  - effect: colorloop
+    icon: mdi:palette
+    lights:
+      - light.led_strip_1
+      - light.led_strip_2
+    filter_default: any
+  - effect: fireplace
+    icon: mdi:fireplace
+    lights:
+      - light.table_lamp
+    filter_default: all
+    filter_selected: all
+```
+
+- **Visibility**: A preset with a `lights` restriction is only shown when at least one restricted light is in the current pool (all entities when nothing selected, or the selected lights).
+- **Applying**: When clicked, the effect is applied to the intersection of the selected lights and the restriction. With no selection, it applies to all restricted lights.
+
+### Active Indicator
+
+When all controlled lights share the same active effect, the matching preset button shows a ring indicator — the same behavior as color presets.
+
+Effect presets can be configured in the visual editor's **Effect Presets** section.
 
 ---
 
@@ -662,7 +731,7 @@ This card made turning dozens of lights to nice colors in arbitrary ways much ea
 
 ## ToDo
 - [ ] Think about adding arbitrary templates/HTML
-- [ ] Color effects (not just colors) among presets (with icons?)
+- [x] Color effects (not just colors) among presets (with icons?)
 - [ ] Add a setting for toggling lights with a single tap
 - [ ] Toggling selected lights in a (double-?) tap (somewhere? on a button?)
 - [ ] Think about a way to toggle groups of lights/the default entity?

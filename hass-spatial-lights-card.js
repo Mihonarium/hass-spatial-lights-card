@@ -4159,26 +4159,32 @@ class SpatialLightColorCard extends HTMLElement {
       : (this._config.effect_filter_default || 'any');
 
     return presets.filter(preset => {
-      // Determine the relevant lights for this preset
       const presetLights = preset.lights && preset.lights.length > 0 ? preset.lights : null;
-      const relevantIds = presetLights
-        ? pool.filter(id => presetLights.includes(id))
-        : [...pool];
-      if (relevantIds.length === 0) return false;
+
+      // Prerequisite: if preset has a lights restriction, at least one
+      // restricted light must be in the pool for the effect to be relevant
+      if (presetLights && !pool.some(id => presetLights.includes(id))) return false;
 
       // Determine effective filter mode: per-preset override > global
       const presetFilterKey = hasSelection ? 'filter_selected' : 'filter_default';
       const effectiveMode = preset[presetFilterKey] || globalMode;
 
-      // Count how many relevant lights actually support this effect
-      // Lights without effect_list count as "doesn't support"
-      const supporting = relevantIds.filter(id => {
+      // Which lights to check visibility against:
+      // - With selection: check ALL selected lights (user explicitly chose them)
+      // - Without selection: check lights in restriction (or all if no restriction)
+      const checkIds = hasSelection
+        ? [...pool]
+        : (presetLights ? pool.filter(id => presetLights.includes(id)) : [...pool]);
+      if (checkIds.length === 0) return false;
+
+      // Count how many check-lights actually support this effect
+      const supporting = checkIds.filter(id => {
         const effects = entityEffectSets.get(id);
         return effects && effects.has(preset.effect);
       });
 
       if (effectiveMode === 'all') {
-        return supporting.length === relevantIds.length;
+        return supporting.length === checkIds.length;
       }
       return supporting.length > 0;
     });

@@ -4611,9 +4611,8 @@ class SpatialLightColorCard extends HTMLElement {
       : (this._config.default_entity ? [this._config.default_entity] : []);
     if (controlled.length === 0 || !Number.isFinite(kelvin)) return;
 
-    const mireds = Math.round(1000000 / kelvin);
     controlled.forEach(entity_id => {
-      this._hass.callService('light', 'turn_on', { entity_id, color_temp: mireds });
+      this._hass.callService('light', 'turn_on', { entity_id, color_temp_kelvin: kelvin });
     });
 
     // Update slider to reflect the new temp
@@ -4705,9 +4704,8 @@ class SpatialLightColorCard extends HTMLElement {
       : (this._config.default_entity ? [this._config.default_entity] : []);
     if (controlled.length === 0) { this._pendingTemperature = null; return; }
 
-    const mireds = Math.round(1000000 / this._pendingTemperature);
     controlled.forEach(entity_id => {
-      this._hass.callService('light', 'turn_on', { entity_id, color_temp: mireds });
+      this._hass.callService('light', 'turn_on', { entity_id, color_temp_kelvin: this._pendingTemperature });
     });
     this._pendingTemperature = null;
   }

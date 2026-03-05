@@ -1568,6 +1568,14 @@ class SpatialLightColorCard extends HTMLElement {
       if (!st) return;
       const attrs = st.attributes || {};
 
+      const minKelvinAttr = attrs.min_color_temp_kelvin != null ? Number(attrs.min_color_temp_kelvin) : NaN;
+      const maxKelvinAttr = attrs.max_color_temp_kelvin != null ? Number(attrs.max_color_temp_kelvin) : NaN;
+      if (Number.isFinite(minKelvinAttr) && Number.isFinite(maxKelvinAttr)) {
+        minK = Math.min(minK, Math.round(minKelvinAttr));
+        maxK = Math.max(maxK, Math.round(maxKelvinAttr));
+        return;
+      }
+
       const maxMireds = attrs.max_mireds != null ? Number(attrs.max_mireds) : NaN;
       const minMireds = attrs.min_mireds != null ? Number(attrs.min_mireds) : NaN;
       if (Number.isFinite(maxMireds) && Number.isFinite(minMireds)) {
@@ -1625,9 +1633,10 @@ class SpatialLightColorCard extends HTMLElement {
       if (st.attributes.brightness != null) {
         bTot += st.attributes.brightness; bCnt++;
       }
-      if (st.attributes.color_temp != null) {
-        const kelvin = Math.round(1000000 / st.attributes.color_temp);
-        tTot += kelvin; tCnt++;
+      if (st.attributes.color_temp_kelvin != null) {
+        tTot += Math.round(Number(st.attributes.color_temp_kelvin)); tCnt++;
+      } else if (st.attributes.color_temp != null) {
+        tTot += Math.round(1000000 / st.attributes.color_temp); tCnt++;
       }
       if (Array.isArray(st.attributes.rgb_color)) {
         lastRGB = st.attributes.rgb_color;
@@ -3863,8 +3872,9 @@ class SpatialLightColorCard extends HTMLElement {
       const colorMode = st.attributes.color_mode;
       // Only include lights actually in temperature mode
       if (colorMode !== 'color_temp') return;
-      if (st.attributes.color_temp == null) return;
-      const kelvin = Math.round(1000000 / st.attributes.color_temp);
+      const kelvin = st.attributes.color_temp_kelvin != null
+        ? Math.round(Number(st.attributes.color_temp_kelvin))
+        : (st.attributes.color_temp != null ? Math.round(1000000 / st.attributes.color_temp) : NaN);
       if (!Number.isFinite(kelvin)) return;
 
       const isDupe = temps.some(t => Math.abs(t.kelvin - kelvin) < TEMP_TOLERANCE);
@@ -4044,9 +4054,11 @@ class SpatialLightColorCard extends HTMLElement {
       const st = this._hass?.states?.[id];
       if (!st || st.state !== 'on') continue;
       if (st.attributes.color_mode !== 'color_temp') continue;
-      if (st.attributes.color_temp == null) continue;
+      const kelvin = st.attributes.color_temp_kelvin != null
+        ? Math.round(Number(st.attributes.color_temp_kelvin))
+        : (st.attributes.color_temp != null ? Math.round(1000000 / st.attributes.color_temp) : NaN);
+      if (!Number.isFinite(kelvin)) continue;
       anyTempOn = true;
-      const kelvin = Math.round(1000000 / st.attributes.color_temp);
       if (referenceKelvin === null) {
         referenceKelvin = kelvin;
       } else if (Math.abs(referenceKelvin - kelvin) >= 100) {

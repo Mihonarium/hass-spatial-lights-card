@@ -587,28 +587,6 @@ class SpatialLightColorCard extends HTMLElement {
   }
 
   /**
-   * Test whether a ray from (ox,oy) toward (px,py) is blocked by segment (ax,ay)-(bx,by)
-   * before reaching the target pixel. Uses parametric ray-segment intersection.
-   * Returns true if the segment blocks the line of sight.
-   */
-  _isRayBlockedBySegment(ox, oy, px, py, ax, ay, bx, by) {
-    const dx = px - ox;
-    const dy = py - oy;
-    const ex = bx - ax;
-    const ey = by - ay;
-
-    const denom = dx * ey - dy * ex;
-    if (Math.abs(denom) < 1e-10) return false; // parallel
-
-    const t = ((ax - ox) * ey - (ay - oy) * ex) / denom; // ray parameter
-    const u = ((ax - ox) * dy - (ay - oy) * dx) / denom; // segment parameter
-
-    // t in (0,1): hit is between light and pixel
-    // u in [0,1]: hit is on the wall segment
-    return t > 0.005 && t < 0.995 && u >= 0 && u <= 1;
-  }
-
-  /**
    * Get a cached wall shadow mask for a specific light + wall configuration.
    * The mask is white where the light is visible, transparent where walls cast shadows.
    *
@@ -991,7 +969,7 @@ class SpatialLightColorCard extends HTMLElement {
     if (!bg) return '';
     const vars = [];
     if (bg.url) {
-      const escaped = String(bg.url).replace(/"/g, '%22').replace(/'/g, "\\'");
+      const escaped = String(bg.url).replace(/"/g, '%22').replace(/'/g, "\\'").replace(/\)/g, '%29');
       vars.push(`--canvas-background-image:url('${escaped}')`);
     }
     if (bg.size) vars.push(`--canvas-background-size:${bg.size}`);
@@ -1481,7 +1459,6 @@ class SpatialLightColorCard extends HTMLElement {
 
     this._config.positions = newPositions;
     this._saveHistory(previousPositions);
-    this._saveHistory(newPositions);
     this._smoothApplyPositions();
     this.updateLights();
   }
@@ -2611,7 +2588,7 @@ class SpatialLightColorCard extends HTMLElement {
            tabindex="0"
            aria-label="${this._escapeHtml(el.label || 'Link')}">
         <div class="ce-icon-wrap" style="${sizeStyle}">
-          <ha-icon icon="${el.icon}"></ha-icon>
+          <ha-icon icon="${this._escapeHtml(el.icon)}"></ha-icon>
         </div>
         ${label}
       </div>
@@ -2624,7 +2601,7 @@ class SpatialLightColorCard extends HTMLElement {
     const unit = el.suffix !== null ? el.suffix : (st?.attributes?.unit_of_measurement || '');
     const displayValue = `${el.prefix}${value}${unit}`;
     const icon = el.show_icon
-      ? `<ha-icon icon="${el.icon || st?.attributes?.icon || 'mdi:eye'}"></ha-icon>`
+      ? `<ha-icon icon="${this._escapeHtml(el.icon || st?.attributes?.icon || 'mdi:eye')}"></ha-icon>`
       : '';
     const label = el.label
       ? `<div class="ce-label">${this._escapeHtml(el.label)}</div>`
@@ -2650,7 +2627,7 @@ class SpatialLightColorCard extends HTMLElement {
 
   _renderCanvasTemplate(el, style) {
     const rendered = this._templateResults.get(el.id) || '';
-    const icon = el.icon ? `<ha-icon icon="${el.icon}"></ha-icon>` : '';
+    const icon = el.icon ? `<ha-icon icon="${this._escapeHtml(el.icon)}"></ha-icon>` : '';
     const label = el.label ? `<div class="ce-label">${this._escapeHtml(el.label)}</div>` : '';
     return `
       <div class="canvas-element canvas-element-template"
@@ -2939,7 +2916,10 @@ class SpatialLightColorCard extends HTMLElement {
       if (this._boundMoreInfo) window.removeEventListener('hass-more-info', this._boundMoreInfo);
       this._boundMoreInfo = (event) => {
         if (event.detail && 'entityId' in event.detail) {
-          this._moreInfoOpen = Boolean(event.detail.entityId);
+          const entityId = event.detail.entityId;
+          // Only track more-info state for entities that belong to this card
+          if (entityId && this._config.entities && !this._config.entities.includes(entityId)) return;
+          this._moreInfoOpen = Boolean(entityId);
           this._syncOverlayState();
         }
       };
@@ -5545,7 +5525,7 @@ class SpatialLightColorCard extends HTMLElement {
 
     // Colors
     if (this._config.switch_on_color !== '#ffa500') yamlLines.push(`switch_on_color: "${this._config.switch_on_color}"`);
-    if (this._config.switch_off_color !== '#2a2a2a') yamlLines.push(`switch_off_color: "${this._config.switch_off_color}"`);
+    if (this._config.switch_off_color !== '#3a3a3a') yamlLines.push(`switch_off_color: "${this._config.switch_off_color}"`);
     if (this._config.scene_color !== '#6366f1') yamlLines.push(`scene_color: "${this._config.scene_color}"`);
     if (this._config.binary_sensor_on_color !== '#4caf50') yamlLines.push(`binary_sensor_on_color: "${this._config.binary_sensor_on_color}"`);
     if (this._config.binary_sensor_off_color !== '#2a2a2a') yamlLines.push(`binary_sensor_off_color: "${this._config.binary_sensor_off_color}"`);

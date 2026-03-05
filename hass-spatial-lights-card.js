@@ -159,8 +159,8 @@ class SpatialLightColorCard extends HTMLElement {
       entities: config.entities,
       positions: normalizedPositions,
       title: config.title || '',
-      canvas_height: config.canvas_height || 450,
-      grid_size: config.grid_size || 25,
+      canvas_height: config.canvas_height ?? 450,
+      grid_size: config.grid_size ?? 25,
       label_mode: config.label_mode || 'smart',
       label_overrides: config.label_overrides || {},
       always_show_controls: config.always_show_controls || false,
@@ -244,6 +244,7 @@ class SpatialLightColorCard extends HTMLElement {
     // Bump wall config version to invalidate per-entity wall mask caches
     this._wallConfigVersion = (this._wallConfigVersion || 0) + 1;
     this._wallMaskPerEntity = {};
+    if (this._wallMaskCache) this._wallMaskCache.clear();
 
     this._gridSize = this._config.grid_size;
 
@@ -718,14 +719,30 @@ class SpatialLightColorCard extends HTMLElement {
    * @param {number} lightMaskY - light y in mask pixels
    * @returns {Array} [{ax,ay,bx,by}] in mask pixel coordinates
    */
-  _convertWallsToMaskCoords(walls, lightXPct, lightYPct, glowWPx, glowHPx, canvasWPx, canvasHPx, maskSize, lightMaskX, lightMaskY) {
+  _convertWallsToMaskCoords(walls, lightXPct, lightYPct, glowWPx, glowHPx, canvasWPx, canvasHPx, maskSize, lightMaskX, lightMaskY, glowRotationDeg) {
     const result = [];
+    // When the glow element has CSS rotation, the mask rotates with it.
+    // Counter-rotate wall coordinates by -direction so shadows stay fixed in canvas space.
+    const needsRotation = glowRotationDeg && glowRotationDeg !== 0;
+    const rad = needsRotation ? -glowRotationDeg * Math.PI / 180 : 0;
+    const cosR = needsRotation ? Math.cos(rad) : 1;
+    const sinR = needsRotation ? Math.sin(rad) : 0;
     for (const w of walls) {
       // Wall endpoint in canvas pixels, relative to light
-      const relX1 = (w.x1 - lightXPct) / 100 * canvasWPx;
-      const relY1 = (w.y1 - lightYPct) / 100 * canvasHPx;
-      const relX2 = (w.x2 - lightXPct) / 100 * canvasWPx;
-      const relY2 = (w.y2 - lightYPct) / 100 * canvasHPx;
+      let relX1 = (w.x1 - lightXPct) / 100 * canvasWPx;
+      let relY1 = (w.y1 - lightYPct) / 100 * canvasHPx;
+      let relX2 = (w.x2 - lightXPct) / 100 * canvasWPx;
+      let relY2 = (w.y2 - lightYPct) / 100 * canvasHPx;
+
+      // Counter-rotate wall positions into the glow element's local (pre-rotation) space
+      if (needsRotation) {
+        const rx1 = relX1 * cosR - relY1 * sinR;
+        const ry1 = relX1 * sinR + relY1 * cosR;
+        const rx2 = relX2 * cosR - relY2 * sinR;
+        const ry2 = relX2 * sinR + relY2 * cosR;
+        relX1 = rx1; relY1 = ry1;
+        relX2 = rx2; relY2 = ry2;
+      }
 
       // Convert to mask pixel coordinates
       const ax = lightMaskX + relX1 / glowWPx * maskSize;
@@ -874,7 +891,7 @@ class SpatialLightColorCard extends HTMLElement {
 
       // Position (required)
       const pos = el.position && typeof el.position === 'object'
-        ? { x: parseFloat(el.position.x) || 50, y: parseFloat(el.position.y) || 50 }
+        ? { x: Number.isFinite(parseFloat(el.position.x)) ? parseFloat(el.position.x) : 50, y: Number.isFinite(parseFloat(el.position.y)) ? parseFloat(el.position.y) : 50 }
         : { x: 50, y: 50 };
 
       // Auto-generate ID
@@ -1247,7 +1264,7 @@ class SpatialLightColorCard extends HTMLElement {
 
   _renderIcon(iconData) {
     if (iconData.type === 'mdi') {
-      return `<ha-icon class="light-icon light-icon-mdi" data-icon="${iconData.value}" icon="${iconData.value}"></ha-icon>`;
+      return `<ha-icon class="light-icon light-icon-mdi" data-icon="${this._escapeHtml(iconData.value)}" icon="${this._escapeHtml(iconData.value)}"></ha-icon>`;
     }
     if (iconData.type === 'emoji') {
       return `<div class="light-icon light-icon-emoji">${iconData.value}</div>`;
@@ -1341,7 +1358,7 @@ class SpatialLightColorCard extends HTMLElement {
     const raf = typeof requestAnimationFrame === 'function'
       ? requestAnimationFrame
       : (cb) => setTimeout(cb, 16);
-    raf(() => this._refreshEntityIcons());
+    raf(() => this._refreshEntityIcons(7));
   }
 
   _toggleEntity(entity) {
@@ -1625,7 +1642,7 @@ class SpatialLightColorCard extends HTMLElement {
 
     let bTot = 0, bCnt = 0;
     let tTot = 0, tCnt = 0;
-    let lastRGB = null;
+    let rgbTot = [0, 0, 0], rgbCnt = 0;
 
     controlled.forEach(id => {
       const st = this._hass?.states?.[id];
@@ -1634,14 +1651,23 @@ class SpatialLightColorCard extends HTMLElement {
         bTot += st.attributes.brightness; bCnt++;
       }
       if (st.attributes.color_temp_kelvin != null) {
-        tTot += Math.round(Number(st.attributes.color_temp_kelvin)); tCnt++;
-      } else if (st.attributes.color_temp != null) {
-        tTot += Math.round(1000000 / st.attributes.color_temp); tCnt++;
+        const k = Math.round(Number(st.attributes.color_temp_kelvin));
+        if (Number.isFinite(k)) { tTot += k; tCnt++; }
+      } else if (st.attributes.color_temp != null && Number(st.attributes.color_temp) > 0) {
+        const k = Math.round(1000000 / Number(st.attributes.color_temp));
+        if (Number.isFinite(k)) { tTot += k; tCnt++; }
       }
       if (Array.isArray(st.attributes.rgb_color)) {
-        lastRGB = st.attributes.rgb_color;
+        rgbTot[0] += st.attributes.rgb_color[0];
+        rgbTot[1] += st.attributes.rgb_color[1];
+        rgbTot[2] += st.attributes.rgb_color[2];
+        rgbCnt++;
       }
     });
+
+    const lastRGB = rgbCnt > 0
+      ? [Math.round(rgbTot[0] / rgbCnt), Math.round(rgbTot[1] / rgbCnt), Math.round(rgbTot[2] / rgbCnt)]
+      : null;
 
     const range = this._resolveTemperatureRange(controlled);
 
@@ -1735,8 +1761,9 @@ class SpatialLightColorCard extends HTMLElement {
 
   _styles() {
     return `
-      * { box-sizing: border-box; margin: 0; padding: 0; }
+      *, *::before, *::after { box-sizing: border-box; }
       :host {
+        margin: 0; padding: 0;
         --surface-primary: #0a0a0a;
         --surface-secondary: #141414;
         --surface-tertiary: #1a1a1a;
@@ -2391,14 +2418,14 @@ class SpatialLightColorCard extends HTMLElement {
       }
 
       /* User custom CSS */
-      ${this._config.custom_css || ''}
+      ${(this._config.custom_css || '').replace(/<\/style/gi, '<\\/style')}
     `;
   }
 
   _renderHeader() {
     return `
       <div class="header">
-        <div class="title">${this._config.title}</div>
+        <div class="title">${this._escapeHtml(this._config.title)}</div>
       </div>
     `;
   }
@@ -2512,7 +2539,7 @@ class SpatialLightColorCard extends HTMLElement {
         if (color !== 'transparent') {
           style += `background:${color};`;
         } else {
-          style += `background:`; // Allow CSS gradient fallback
+          // Omit background property entirely — let CSS gradient fallback handle it
         }
       }
 
@@ -2534,11 +2561,11 @@ class SpatialLightColorCard extends HTMLElement {
              data-entity="${entity_id}"
              tabindex="0"
              role="button"
-             aria-label="${st.attributes.friendly_name || entity_id}"
+             aria-label="${this._escapeHtml(st.attributes.friendly_name || entity_id)}"
              aria-pressed="${isSelected}">
           ${glowHtml}
           ${iconData ? this._renderIcon(iconData) : ''}
-          <div class="light-label">${label}</div>
+          <div class="light-label">${this._escapeHtml(label)}</div>
         </div>
       `;
     }).join('');
@@ -2682,7 +2709,7 @@ class SpatialLightColorCard extends HTMLElement {
       : 0;
     const brightnessColor = Array.isArray(avgState.color) ? `rgb(${avgState.color.join(',')})` : 'var(--accent-primary)';
     return `
-      <div class="controls-below" id="controlsBelow" role="region" aria-label="Light controls" aria-live="polite">
+      <div class="controls-below ${(this._config.always_show_controls || this._selectedLights.size > 0 || this._config.default_entity) ? 'visible' : ''}" id="controlsBelow" role="region" aria-label="Light controls" aria-live="polite">
         <canvas id="colorWheelMini" class="color-wheel-mini" width="256" height="256" role="img" aria-label="Color picker"></canvas>
         <div class="slider-group">
           <div class="slider-row">
@@ -2874,21 +2901,27 @@ class SpatialLightColorCard extends HTMLElement {
     const rect = el.getBoundingClientRect();
     const min = parseFloat(el.min);
     const max = parseFloat(el.max);
-    
+
     // The thumb size matches CSS --slider-thumb-size: 26px
     const thumbSize = 26;
-    
+
     // Calculate the effective travel distance of the thumb's center
     const availableWidth = rect.width - thumbSize;
-    
+
     // Offset relative to the start of the travel area
-    const offset = clientX - rect.left - (thumbSize / 2);
-    
+    let offset = clientX - rect.left - (thumbSize / 2);
+
+    // In RTL layouts, the slider direction is reversed
+    const isRTL = getComputedStyle(el).direction === 'rtl';
+    if (isRTL) {
+      offset = availableWidth - offset;
+    }
+
     let pct = 0;
     if (availableWidth > 0) {
       pct = offset / availableWidth;
     }
-    
+
     pct = Math.max(0, Math.min(1, pct));
     el.value = Math.round(min + pct * (max - min));
   }
@@ -2900,8 +2933,10 @@ class SpatialLightColorCard extends HTMLElement {
       document.addEventListener('keydown', this._boundKeyDown);
     }
     if (typeof window !== 'undefined') {
+      if (this._boundIconsetAdded) window.removeEventListener('iron-iconset-added', this._boundIconsetAdded);
       this._boundIconsetAdded = () => this._refreshEntityIcons();
       window.addEventListener('iron-iconset-added', this._boundIconsetAdded);
+      if (this._boundMoreInfo) window.removeEventListener('hass-more-info', this._boundMoreInfo);
       this._boundMoreInfo = (event) => {
         if (event.detail && 'entityId' in event.detail) {
           this._moreInfoOpen = Boolean(event.detail.entityId);
@@ -3225,6 +3260,13 @@ class SpatialLightColorCard extends HTMLElement {
 
   /** ---------- Keyboard ---------- */
   _handleKeyDown(e) {
+    // Only handle keys when this card (or its shadow DOM) has focus, or no editable element is active
+    const active = document.activeElement;
+    if (active) {
+      const isOurCard = active === this || (this.shadowRoot && this.shadowRoot.contains(active.shadowRoot ? active : active));
+      const isEditable = active.tagName === 'INPUT' || active.tagName === 'TEXTAREA' || active.tagName === 'SELECT' || active.isContentEditable;
+      if (isEditable && !isOurCard) return;
+    }
     // Undo/Redo
     if ((e.ctrlKey || e.metaKey) && e.key === 'z' && !e.shiftKey) { e.preventDefault(); this._undo(); }
     if ((e.ctrlKey || e.metaKey) && (e.key === 'y' || (e.key === 'Z' && e.shiftKey))) { e.preventDefault(); this._redo(); }
@@ -3506,6 +3548,7 @@ class SpatialLightColorCard extends HTMLElement {
       if (this._raf) cancelAnimationFrame(this._raf);
       this._raf = requestAnimationFrame(() => {
         this._raf = null;
+        if (!this._dragState) return;
         const { rect, startX, startY, initialLeft, initialTop } = this._dragState;
         const dx = e.clientX - startX;
         const dy = e.clientY - startY;
@@ -3552,7 +3595,7 @@ class SpatialLightColorCard extends HTMLElement {
   }
 
   _onPointerUp(e) {
-    e.target.releasePointerCapture?.(e.pointerId);
+    try { e.target.releasePointerCapture?.(e.pointerId); } catch (_) { /* may not have capture */ }
     if (this._dragState) {
       if (this._dragState.isCanvasElement) {
         // Canvas element drag completion
@@ -3568,14 +3611,17 @@ class SpatialLightColorCard extends HTMLElement {
             elConfig.position = { x: finalLeft, y: finalTop };
           }
         }
-        if (moved && this._editPositionsMode && this._editorId) {
-          window.dispatchEvent(new CustomEvent('spatial-card-positions-changed', {
-            detail: {
-              editorId: this._editorId,
-              positions: JSON.parse(JSON.stringify(this._config.positions)),
-              canvas_elements: JSON.parse(JSON.stringify(this._config.canvas_elements)),
-            },
-          }));
+        if (moved) {
+          this._saveHistory();
+          if (this._editPositionsMode && this._editorId) {
+            window.dispatchEvent(new CustomEvent('spatial-card-positions-changed', {
+              detail: {
+                editorId: this._editorId,
+                positions: JSON.parse(JSON.stringify(this._config.positions)),
+                canvas_elements: JSON.parse(JSON.stringify(this._config.canvas_elements)),
+              },
+            }));
+          }
         }
       } else {
         // Light entity drag completion
@@ -3751,10 +3797,15 @@ class SpatialLightColorCard extends HTMLElement {
     }
     this._pendingElementTap = null;
     this._elementLongPressTriggered = false;
+    if (this._elementTapTimeout) {
+      clearTimeout(this._elementTapTimeout);
+      this._elementTapTimeout = null;
+    }
     if (this._selectionBox) {
       this._selectionBox.remove();
       this._selectionBox = null;
     }
+    this._selectionStart = null;
     this._selectionBase = null;
     this._selectionModeAdditive = false;
     if (this._longPressTimer) {
@@ -3950,18 +4001,25 @@ class SpatialLightColorCard extends HTMLElement {
     // Mobile: long-press (300ms) to highlight, release to clear
     // Uses document-level listeners so highlight clears even if DOM is replaced mid-touch
     let holdTimer = null;
+    let clearHighlight = null;
     el.addEventListener('pointerdown', (e) => {
       if (e.pointerType === 'mouse') return; // handled by pointerenter
+      // Clean up any leftover listeners from a prior interaction
+      if (clearHighlight) {
+        document.removeEventListener('pointerup', clearHighlight);
+        document.removeEventListener('pointercancel', clearHighlight);
+      }
       holdTimer = setTimeout(() => {
         holdTimer = null;
         this._highlightEntities(entities);
         if (typeof navigator !== 'undefined' && navigator.vibrate) navigator.vibrate(15);
       }, 300);
-      const clearHighlight = () => {
+      clearHighlight = () => {
         if (holdTimer) { clearTimeout(holdTimer); holdTimer = null; }
         this._highlightEntities(null);
         document.removeEventListener('pointerup', clearHighlight);
         document.removeEventListener('pointercancel', clearHighlight);
+        clearHighlight = null;
       };
       document.addEventListener('pointerup', clearHighlight);
       document.addEventListener('pointercancel', clearHighlight);
@@ -4108,6 +4166,7 @@ class SpatialLightColorCard extends HTMLElement {
 
   _kelvinToRgb(kelvin) {
     // Attempt Tanner Helland approximation
+    if (!Number.isFinite(kelvin) || kelvin <= 0) return [255, 169, 0]; // fallback warm
     const temp = kelvin / 100;
     let r, g, b;
     if (temp <= 66) {
@@ -4689,7 +4748,11 @@ class SpatialLightColorCard extends HTMLElement {
 
     const b = this._pendingBrightness;
     controlled.forEach(entity_id => {
-      this._hass.callService('light', 'turn_on', { entity_id, brightness: b });
+      if (b <= 0) {
+        this._hass.callService('light', 'turn_off', { entity_id });
+      } else {
+        this._hass.callService('light', 'turn_on', { entity_id, brightness: b });
+      }
     });
     this._pendingBrightness = null;
   }
@@ -4837,7 +4900,7 @@ class SpatialLightColorCard extends HTMLElement {
    * Build gradient stops based on falloff mode and optional custom stops.
    * Returns a CSS gradient string fragment for rgba(r,g,b,...) stops.
    */
-  _buildGlowGradientStops(r, g, b, falloff, customStops, origin) {
+  _buildGlowGradientStops(r, g, b, falloff, customStops) {
     // Custom stops take priority
     if (customStops && customStops.length >= 2) {
       return customStops.map(([pos, op]) =>
@@ -5171,7 +5234,7 @@ class SpatialLightColorCard extends HTMLElement {
     const glowH = parseFloat(glowEl.style.height) || gc.length;
     if (glowW <= 0 || glowH <= 0) return;
 
-    const versionKey = `${(pos.x * 10) | 0},${(pos.y * 10) | 0},${glowW | 0},${glowH | 0},${canvasW | 0},${canvasH | 0},${gc.shape},${this._wallConfigVersion || 0}`;
+    const versionKey = `${(pos.x * 10) | 0},${(pos.y * 10) | 0},${glowW | 0},${glowH | 0},${canvasW | 0},${canvasH | 0},${gc.shape},${gc.direction || 0},${this._wallConfigVersion || 0}`;
     const cached = this._wallMaskPerEntity[entityId];
     if (cached && cached.versionKey === versionKey) {
       // Reuse previous mask URL — skip all computation
@@ -5213,9 +5276,10 @@ class SpatialLightColorCard extends HTMLElement {
     const lightMaskX = maskSize / 2;
     const lightMaskY = isCentered ? maskSize / 2 : 0;
 
-    // Convert only the relevant wall segments to mask pixel coordinates
+    // Convert only the relevant wall segments to mask pixel coordinates.
+    // Pass glow rotation so walls are counter-rotated into the glow's local space.
     const wallSegments = this._convertWallsToMaskCoords(
-      relevantWalls, pos.x, pos.y, glowW, glowH, canvasW, canvasH, maskSize, lightMaskX, lightMaskY
+      relevantWalls, pos.x, pos.y, glowW, glowH, canvasW, canvasH, maskSize, lightMaskX, lightMaskY, gc.direction || 0
     );
 
     // Generate (or retrieve cached) wall shadow mask
@@ -5971,12 +6035,6 @@ class SpatialLightColorCardEditor extends HTMLElement {
     const map = { light: 'mdi:lightbulb', switch: 'mdi:toggle-switch', scene: 'mdi:palette', input_boolean: 'mdi:toggle-switch-outline', binary_sensor: 'mdi:eye' };
     return map[domain] || 'mdi:help-circle';
   }
-
-  _getEntityName(entityId) {
-    const st = this._hass?.states?.[entityId];
-    return (st && st.attributes.friendly_name) || entityId;
-  }
-
 
   _esc(str) {
     return String(str).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -7490,10 +7548,9 @@ class SpatialLightColorCardEditor extends HTMLElement {
         const positions = this._config.positions || {};
         const gridSize = this._config.grid_size || 25;
         const canvasHeight = this._config.canvas_height || 450;
-        // Assume a roughly square-ish canvas; use height for both axes as an approximation.
-        // Grid snapping works in pixel space, so we convert % -> px, snap, convert back.
-        // We don't have the actual canvas width, so estimate from a typical card (~450px wide).
-        const canvasWidth = canvasHeight; // reasonable default; grid is square anyway
+        // Estimate canvas width from the editor panel width, falling back to a typical card width (450px)
+        const editorWidth = root.host ? root.host.offsetWidth : 0;
+        const canvasWidth = editorWidth > 0 ? editorWidth : 450;
         const newPositions = {};
         entities.forEach((entity) => {
           const pos = positions[entity];

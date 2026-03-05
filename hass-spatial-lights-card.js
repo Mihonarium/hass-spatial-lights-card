@@ -1459,6 +1459,7 @@ class SpatialLightColorCard extends HTMLElement {
 
     this._config.positions = newPositions;
     this._saveHistory(previousPositions);
+    this._saveHistory(newPositions);
     this._smoothApplyPositions();
     this.updateLights();
   }
@@ -2649,7 +2650,7 @@ class SpatialLightColorCard extends HTMLElement {
     return String(text).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
   }
 
-  _renderControlsFloating(visible, controlContext) {
+  _renderControlsInner(controlContext) {
     const { avgState, tempRange } = controlContext;
     const clampedTemp = this._clampTemperature(avgState.temperature, tempRange);
     const brightnessPercent = Math.min(100, Math.max(0, (avgState.brightness / 255) * 100));
@@ -2658,7 +2659,6 @@ class SpatialLightColorCard extends HTMLElement {
       : 0;
     const brightnessColor = Array.isArray(avgState.color) ? `rgb(${avgState.color.join(',')})` : 'var(--accent-primary)';
     return `
-      <div class="controls-floating ${visible ? 'visible' : ''}" id="controlsFloating" role="region" aria-label="Light controls" aria-live="polite">
         <canvas id="colorWheelMini" class="color-wheel-mini" width="256" height="256" role="img" aria-label="Color picker"></canvas>
         <div class="slider-group">
           <div class="slider-row">
@@ -2673,34 +2673,22 @@ class SpatialLightColorCard extends HTMLElement {
         <div class="presets-area">
           ${this._renderPresetsContent()}
         </div>
+    `;
+  }
+
+  _renderControlsFloating(visible, controlContext) {
+    return `
+      <div class="controls-floating ${visible ? 'visible' : ''}" id="controlsFloating" role="region" aria-label="Light controls" aria-live="polite">
+        ${this._renderControlsInner(controlContext)}
       </div>
     `;
   }
 
   _renderControlsBelow(controlContext) {
-    const { avgState, tempRange } = controlContext;
-    const clampedTemp = this._clampTemperature(avgState.temperature, tempRange);
-    const brightnessPercent = Math.min(100, Math.max(0, (avgState.brightness / 255) * 100));
-    const tempPercent = (tempRange.max > tempRange.min)
-      ? Math.min(100, Math.max(0, ((clampedTemp - tempRange.min) / (tempRange.max - tempRange.min)) * 100))
-      : 0;
-    const brightnessColor = Array.isArray(avgState.color) ? `rgb(${avgState.color.join(',')})` : 'var(--accent-primary)';
+    const belowVisible = this._config.always_show_controls || this._selectedLights.size > 0 || this._config.default_entity;
     return `
-      <div class="controls-below ${(this._config.always_show_controls || this._selectedLights.size > 0 || this._config.default_entity) ? 'visible' : ''}" id="controlsBelow" role="region" aria-label="Light controls" aria-live="polite">
-        <canvas id="colorWheelMini" class="color-wheel-mini" width="256" height="256" role="img" aria-label="Color picker"></canvas>
-        <div class="slider-group">
-          <div class="slider-row">
-            <input type="range" class="slider" id="brightnessSlider" min="0" max="255" value="${avgState.brightness}" aria-label="Brightness" style="--slider-percent:${brightnessPercent}%;--slider-ratio:${brightnessPercent/100};--slider-fill:${brightnessColor};">
-            <span class="slider-value" id="brightnessValue">${Math.round((avgState.brightness/255)*100)}%</span>
-          </div>
-          <div class="slider-row">
-            <input type="range" class="slider temperature" id="temperatureSlider" min="${tempRange.min}" max="${tempRange.max}" value="${clampedTemp}" aria-label="Color temperature" style="--slider-percent:${tempPercent}%;--slider-ratio:${tempPercent/100};">
-            <span class="slider-value" id="temperatureValue">${clampedTemp}K</span>
-          </div>
-        </div>
-        <div class="presets-area">
-          ${this._renderPresetsContent()}
-        </div>
+      <div class="controls-below ${belowVisible ? 'visible' : ''}" id="controlsBelow" role="region" aria-label="Light controls" aria-live="polite">
+        ${this._renderControlsInner(controlContext)}
       </div>
     `;
   }
@@ -3846,6 +3834,20 @@ class SpatialLightColorCard extends HTMLElement {
     return [r, g, b];
   }
 
+  _hslToRgb(h, s, l) {
+    if (s === 0) { const val = Math.round(l * 255); return [val, val, val]; }
+    const hue2rgb = (p, q, t) => {
+      if (t < 0) t += 1; if (t > 1) t -= 1;
+      if (t < 1/6) return p + (q-p)*6*t;
+      if (t < 1/2) return q;
+      if (t < 2/3) return p + (q-p)*(2/3-t)*6;
+      return p;
+    };
+    const q = l < 0.5 ? l*(1+s) : l+s-l*s;
+    const p = 2*l-q;
+    return [Math.round(hue2rgb(p,q,h+1/3)*255), Math.round(hue2rgb(p,q,h)*255), Math.round(hue2rgb(p,q,h-1/3)*255)];
+  }
+
   _hexToRgb(hex) {
     if (!hex) return null;
     const h = hex.replace('#', '');
@@ -4429,20 +4431,6 @@ class SpatialLightColorCard extends HTMLElement {
     const imageData = ctx.createImageData(pixelSize, pixelSize);
     const data = imageData.data;
 
-    const hslToRgb = (h, s, l) => {
-      if (s === 0) { const val = Math.round(l * 255); return [val, val, val]; }
-      const hue2rgb = (p, q, t) => {
-        if (t < 0) t += 1; if (t > 1) t -= 1;
-        if (t < 1/6) return p + (q-p)*6*t;
-        if (t < 1/2) return q;
-        if (t < 2/3) return p + (q-p)*(2/3-t)*6;
-        return p;
-      };
-      const q = l < 0.5 ? l*(1+s) : l+s-l*s;
-      const p = 2*l-q;
-      return [Math.round(hue2rgb(p,q,h+1/3)*255), Math.round(hue2rgb(p,q,h)*255), Math.round(hue2rgb(p,q,h-1/3)*255)];
-    };
-
     for (let y = 0; y < pixelSize; y++) {
       for (let x = 0; x < pixelSize; x++) {
         const dx = x + 0.5 - radius;
@@ -4453,7 +4441,7 @@ class SpatialLightColorCard extends HTMLElement {
         const sat = Math.min(1, dist / radius);
         const hue = (Math.atan2(dy, dx) * 180 / Math.PI + 360) % 360;
         const lightness = 0.45 + (1-sat) * 0.35;
-        const [r, g, b] = hslToRgb(hue/360, sat, lightness);
+        const [r, g, b] = this._hslToRgb(hue/360, sat, lightness);
 
         const idx = (y * pixelSize + x) * 4;
         data[idx] = r; data[idx+1] = g; data[idx+2] = b; data[idx+3] = 255;
@@ -4818,27 +4806,6 @@ class SpatialLightColorCard extends HTMLElement {
     const imageData = ctx.createImageData(pixelSize, pixelSize);
     const data = imageData.data;
 
-    const hslToRgb = (h, s, l) => {
-      if (s === 0) {
-        const val = Math.round(l * 255);
-        return [val, val, val];
-      }
-      const hue2rgb = (p, q, t) => {
-        if (t < 0) t += 1;
-        if (t > 1) t -= 1;
-        if (t < 1 / 6) return p + (q - p) * 6 * t;
-        if (t < 1 / 2) return q;
-        if (t < 2 / 3) return p + (q - p) * (2 / 3 - t) * 6;
-        return p;
-      };
-      const q = l < 0.5 ? l * (1 + s) : l + s - l * s;
-      const p = 2 * l - q;
-      const r = hue2rgb(p, q, h + 1 / 3);
-      const g = hue2rgb(p, q, h);
-      const b = hue2rgb(p, q, h - 1 / 3);
-      return [Math.round(r * 255), Math.round(g * 255), Math.round(b * 255)];
-    };
-
     for (let y = 0; y < pixelSize; y += 1) {
       for (let x = 0; x < pixelSize; x += 1) {
         const dx = x + 0.5 - radius;
@@ -4849,7 +4816,7 @@ class SpatialLightColorCard extends HTMLElement {
         const sat = Math.min(1, dist / radius);
         const hue = (Math.atan2(dy, dx) * 180 / Math.PI + 360) % 360;
         const lightness = 0.45 + (1 - sat) * 0.35;
-        const [r, g, b] = hslToRgb(hue / 360, sat, lightness);
+        const [r, g, b] = this._hslToRgb(hue / 360, sat, lightness);
 
         const idx = (y * pixelSize + x) * 4;
         data[idx] = r;
@@ -5627,7 +5594,13 @@ class SpatialLightColorCard extends HTMLElement {
     return `${yamlLines.join('\n')}\n`;
   }
 
-  getCardSize() { return 8; }
+  getCardSize() {
+    const canvasHeight = this._config?.canvas_height || 450;
+    let size = Math.ceil(canvasHeight / 50);
+    if (this._config?.title) size += 1;
+    if (this._config?.controls_below) size += 2;
+    return size;
+  }
   static getConfigElement() {
     return document.createElement('spatial-light-color-card-editor');
   }

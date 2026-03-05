@@ -662,9 +662,10 @@ This card made turning dozens of lights to nice colors in arbitrary ways much ea
 
 ## ToDo
 - [ ] Think about adding arbitrary templates/HTML
-- [ ] Color effects (not just colors) among presets (with icons?)
+- [x] Color effects (not just colors) among presets (with icons?)
 - [ ] Add a setting for toggling lights with a single tap
 - [ ] Toggling selected lights in a (double-?) tap (somewhere? on a button?)
 - [ ] Think about a way to toggle groups of lights/the default entity?
 - [ ] Possibly remove the global wall occlusion and do local walls for specific lights instead
+- [ ] A mode to avoid accidental clicks on all lights? (e.g., requiring confirmation or long tap to open the wheel to set anything)
 

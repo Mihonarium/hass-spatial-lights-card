@@ -4748,11 +4748,7 @@ class SpatialLightColorCard extends HTMLElement {
 
     const b = this._pendingBrightness;
     controlled.forEach(entity_id => {
-      if (b <= 0) {
-        this._hass.callService('light', 'turn_off', { entity_id });
-      } else {
-        this._hass.callService('light', 'turn_on', { entity_id, brightness: b });
-      }
+      this._hass.callService('light', 'turn_on', { entity_id, brightness: b });
     });
     this._pendingBrightness = null;
   }

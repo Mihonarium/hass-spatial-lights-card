@@ -969,7 +969,7 @@ class SpatialLightColorCard extends HTMLElement {
     if (!bg) return '';
     const vars = [];
     if (bg.url) {
-      const escaped = String(bg.url).replace(/"/g, '%22').replace(/'/g, "\\'").replace(/\)/g, '%29');
+      const escaped = String(bg.url).replace(/\\/g, '%5C').replace(/"/g, '%22').replace(/'/g, '%27').replace(/\)/g, '%29').replace(/[\n\r]/g, '');
       vars.push(`--canvas-background-image:url('${escaped}')`);
     }
     if (bg.size) vars.push(`--canvas-background-size:${bg.size}`);
@@ -5595,7 +5595,7 @@ class SpatialLightColorCard extends HTMLElement {
   }
 
   getCardSize() {
-    const canvasHeight = this._config?.canvas_height || 450;
+    const canvasHeight = this._config?.canvas_height ?? 450;
     let size = Math.ceil(canvasHeight / 50);
     if (this._config?.title) size += 1;
     if (this._config?.controls_below) size += 2;
@@ -5612,7 +5612,7 @@ class SpatialLightColorCard extends HTMLElement {
       default_entity: null, show_entity_icons: true, icon_style: 'mdi',
       light_size: 56, icon_only_mode: false, size_overrides: {}, icon_only_overrides: {},
       icon_rotation: 0, icon_rotation_overrides: {}, icon_mirror: 'none', icon_mirror_overrides: {},
-      switch_on_color: '#ffa500', switch_off_color: '#2a2a2a', scene_color: '#6366f1',
+      switch_on_color: '#ffa500', switch_off_color: '#3a3a3a', scene_color: '#6366f1',
       binary_sensor_on_color: '#4caf50', binary_sensor_off_color: '#2a2a2a',
       color_presets: [],
       show_live_colors: false,

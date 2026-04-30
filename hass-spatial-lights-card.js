@@ -58,6 +58,7 @@ class SpatialLightColorCard extends HTMLElement {
     this._raf = null;
     this._colorWheelActive = false;
     this._colorWheelObserver = null;
+    this._canvasObserver = null;
     this._colorWheelFrame = null;
     this._colorWheelLastSize = null;
     this._colorWheelCancel = null;
@@ -1824,6 +1825,26 @@ class SpatialLightColorCard extends HTMLElement {
       this._colorWheelObserver.observe(this._els.colorWheel);
     }
 
+    // Watch the main canvas so glow walls re-render when its size changes
+    // (initial layout flush, browser resize, dashboard tab becoming visible).
+    // Previously the original code happened to recompute walls on the next
+    // `set hass` push — but with the relevance-diff in `set hass`, an
+    // unrelated state push would no longer trigger that, so walls could stay
+    // unrendered for a long time after first paint. This observer makes wall
+    // rendering independent of HA state events.
+    if (this._canvasObserver) {
+      this._canvasObserver.disconnect();
+      this._canvasObserver = null;
+    }
+    if (this._els.canvas && typeof window !== 'undefined' && 'ResizeObserver' in window) {
+      this._canvasObserver = new ResizeObserver(() => {
+        // Cheap when nothing actually needs to change — `_applyWallShadows`
+        // version-keys per entity and bails out on cache hit.
+        this._updateAllGlows();
+      });
+      this._canvasObserver.observe(this._els.canvas);
+    }
+
     this._attachEventListeners();
     if ((showControls || this._config.always_show_controls) && this._els.colorWheel) {
       const raf = typeof requestAnimationFrame === 'function'
@@ -1838,6 +1859,11 @@ class SpatialLightColorCard extends HTMLElement {
     this.updateLights();
     this._refreshEntityIcons();
     requestAnimationFrame(() => this._updateSeparatorVisibility());
+    // After the next layout flush, run `_updateAllGlows` again. The
+    // synchronous `updateLights()` above may have run while the canvas was
+    // 0x0 (e.g. before the dashboard tab became visible), in which case
+    // `_applyWallShadows` bails out on a null `canvasRect`.
+    requestAnimationFrame(() => this._updateAllGlows());
     this._subscribeTemplates();
   }
 
@@ -3230,6 +3256,10 @@ class SpatialLightColorCard extends HTMLElement {
     if (this._colorWheelObserver) {
       this._colorWheelObserver.disconnect();
       this._colorWheelObserver = null;
+    }
+    if (this._canvasObserver) {
+      this._canvasObserver.disconnect();
+      this._canvasObserver = null;
     }
     if (this._colorWheelFrame) {
       const cancel = this._colorWheelCancel || (typeof cancelAnimationFrame === 'function' ? cancelAnimationFrame : clearTimeout);

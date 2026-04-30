@@ -3664,15 +3664,17 @@ class SpatialLightColorCard extends HTMLElement {
         if (!entity) return;
         const [domain] = entity.split('.');
         const toggleOnSingleTap = this._config.switch_single_tap && (domain === 'switch' || domain === 'input_boolean' || domain === 'scene');
-        if (isSpace || toggleOnSingleTap) {
-          // Space → toggle the entity on/off. Also covers `switch_single_tap`
-          // for Enter, where Enter is supposed to mirror tap. If the focused
-          // light is part of a selection, treat the whole selection as a
-          // group: pick a single target on/off state, then drive every
-          // selected entity to it. Convention: if any are off, turn them all
-          // on; if all are on, turn them all off. That way Space first syncs
-          // everything to "on", and a second Space turns everything off.
-          if (this._selectedLights.size > 0 && this._selectedLights.has(entity)) {
+        if (toggleOnSingleTap) {
+          // Enter on a switch/scene/input_boolean with switch_single_tap:
+          // mirror tap and toggle just this entity.
+          this._toggleEntity(entity);
+        } else if (isSpace) {
+          // Space → group action. If there's any selection at all, drive the
+          // whole selection to a single on/off target (any-off → all on,
+          // all-on → all off). Otherwise act on the focused entity. The
+          // focused light doesn't need to be a member of the selection — the
+          // selection is the operand.
+          if (this._selectedLights.size > 0) {
             this._toggleSelection([...this._selectedLights]);
           } else {
             this._toggleEntity(entity);

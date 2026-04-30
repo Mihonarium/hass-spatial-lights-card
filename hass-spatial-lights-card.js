@@ -1011,6 +1011,15 @@ class SpatialLightColorCard extends HTMLElement {
     // so `===` is sufficient to detect changes.
     if (this._isRelevantHassChange(prev, hass)) {
       this.updateLights();
+    } else {
+      // Even when no controlled entity changed, keep ha-icon refreshing —
+      // icons load lazily from the MDI iconset on initial page open, and
+      // pre-diff the constant traffic of state events kept retrying
+      // `_refreshEntityIcons` until they all rendered. The retry timer also
+      // does this but with 250ms / 500ms / 750ms backoff that's noticeable
+      // on slow loads. This call is idempotent and cheap (no DOM thrash if
+      // every icon is already correct).
+      this._refreshEntityIcons();
     }
   }
 
@@ -1904,11 +1913,9 @@ class SpatialLightColorCard extends HTMLElement {
     this.updateLights();
     this._refreshEntityIcons();
     requestAnimationFrame(() => this._updateSeparatorVisibility());
-    // After the next layout flush, run `_updateAllGlows` again. The
-    // synchronous `updateLights()` above may have run while the canvas was
-    // 0x0 (e.g. before the dashboard tab became visible), in which case
-    // `_applyWallShadows` bails out on a null `canvasRect`.
-    requestAnimationFrame(() => this._updateAllGlows());
+    // The canvas ResizeObserver registered above fires on initial observation
+    // with the post-layout size, so glow walls get a definitive recompute as
+    // soon as the canvas is laid out — no extra rAF needed here.
     this._subscribeTemplates();
   }
 

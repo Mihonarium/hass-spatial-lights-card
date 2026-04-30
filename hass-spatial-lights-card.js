@@ -2438,20 +2438,15 @@ class SpatialLightColorCard extends HTMLElement {
       }
       .slider.temperature {
         background:
-          /* Subtle filled-side tint indicating slider position. Kept low so
-             the underlying color band stays vivid. */
           linear-gradient(to right,
-            rgba(255,255,255,0.08) 0%,
-            rgba(255,255,255,0.08) 100%),
-          /* Warm → cool spectrum. A visual affordance — kept gentle so it
-             reads as plausible incandescent → daylight rather than as
-             saturated orange / saturated blue. */
+            rgba(255,255,255,0.18) 0%,
+            rgba(255,255,255,0.18) 100%),
           linear-gradient(to right,
             #ff9944 0%,
-            #ffd480 25%,
+            #ffd480 30%,
             #ffffff 50%,
-            #9fd9ff 75%,
-            #5fa9e8 100%),
+            #87ceeb 70%,
+            #4d9fff 100%),
           linear-gradient(to right, var(--surface-tertiary) 0%, var(--surface-tertiary) 100%);
         background-size:
           calc((100% - var(--slider-thumb-size)) * var(--slider-ratio) + (var(--slider-thumb-size) / 2)) 100%,

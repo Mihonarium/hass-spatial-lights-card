@@ -1407,6 +1407,45 @@ class SpatialLightColorCard extends HTMLElement {
     return domain !== 'binary_sensor';
   }
 
+  // Toggle a group of entities to a single target on/off state, batched per
+  // domain. If any entity in the group is currently off, the target is "on";
+  // if all are on, the target is "off". Scenes are always activated since
+  // they have no off-state. Unavailable entities are skipped.
+  _toggleSelection(entities) {
+    if (!this._hass || !Array.isArray(entities) || entities.length === 0) return;
+    const candidates = entities.filter(id => {
+      const [d] = id.split('.');
+      if (d === 'binary_sensor') return false;
+      return this._isEntityAvailable(id);
+    });
+    if (candidates.length === 0) return;
+
+    // Decide target state from the toggleable subset (lights, switches,
+    // input_booleans). Scenes don't contribute — they always fire turn_on.
+    const stateContributors = candidates.filter(id => {
+      const [d] = id.split('.');
+      return d === 'light' || d === 'switch' || d === 'input_boolean';
+    });
+    const anyOff = stateContributors.some(id => this._hass.states?.[id]?.state !== 'on');
+    const targetOn = stateContributors.length === 0 ? true : anyOff;
+    const service = targetOn ? 'turn_on' : 'turn_off';
+
+    // Batch by domain — `light.turn_on { entity_id: [...] }` lets the platform
+    // sync bulbs, and we still want one call per domain at most.
+    const byDomain = {};
+    for (const id of candidates) {
+      const [d] = id.split('.');
+      const svc = (d === 'scene') ? 'turn_on' : service;
+      const key = `${d}.${svc}`;
+      (byDomain[key] = byDomain[key] || []).push(id);
+    }
+    for (const key of Object.keys(byDomain)) {
+      const [d, svc] = key.split('.');
+      this._hass.callService(d, svc, { entity_id: byDomain[key] })
+        .catch(err => console.warn(`[spatial-light-card] ${d}.${svc} bulk failed:`, err));
+    }
+  }
+
   _openMoreInfo(entity) {
     this._moreInfoOpen = true;
     this._syncOverlayState();
@@ -3628,13 +3667,16 @@ class SpatialLightColorCard extends HTMLElement {
         if (isSpace || toggleOnSingleTap) {
           // Space → toggle the entity on/off. Also covers `switch_single_tap`
           // for Enter, where Enter is supposed to mirror tap. If the focused
-          // light is part of a selection, toggle every selected light at once
-          // so the keyboard matches the rest of the card's bulk-action
-          // semantics. Otherwise, just toggle the focused entity.
-          const targets = (this._selectedLights.size > 0 && this._selectedLights.has(entity))
-            ? [...this._selectedLights]
-            : [entity];
-          targets.forEach(id => this._toggleEntity(id));
+          // light is part of a selection, treat the whole selection as a
+          // group: pick a single target on/off state, then drive every
+          // selected entity to it. Convention: if any are off, turn them all
+          // on; if all are on, turn them all off. That way Space first syncs
+          // everything to "on", and a second Space turns everything off.
+          if (this._selectedLights.size > 0 && this._selectedLights.has(entity)) {
+            this._toggleSelection([...this._selectedLights]);
+          } else {
+            this._toggleEntity(entity);
+          }
         } else if (this._isSelectableEntity(entity)) {
           // Enter → toggle this entity's membership in the selection.
           const newSelection = new Set(this._selectedLights);

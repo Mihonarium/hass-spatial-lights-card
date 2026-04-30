@@ -2990,10 +2990,17 @@ class SpatialLightColorCard extends HTMLElement {
     const temperatureActive = this._activeSliderGesture === 'temperature';
 
     if (this._els.brightnessSlider) {
-      // Don't clobber the slider position while the user is actively dragging it.
-      if (!brightnessActive) this._els.brightnessSlider.value = String(brightness);
-      this._els.brightnessSlider.style.setProperty('--slider-percent', `${brightnessPercent}%`);
-      this._els.brightnessSlider.style.setProperty('--slider-ratio', `${brightnessPercent / 100}`);
+      // Don't clobber the slider position while the user is actively dragging
+      // it — the gesture handler is the source of truth for both the thumb
+      // (`value`) and the fill (`--slider-percent` / `--slider-ratio`).
+      if (!brightnessActive) {
+        this._els.brightnessSlider.value = String(brightness);
+        this._els.brightnessSlider.style.setProperty('--slider-percent', `${brightnessPercent}%`);
+        this._els.brightnessSlider.style.setProperty('--slider-ratio', `${brightnessPercent / 100}`);
+      }
+      // Fill color (`--slider-fill`) reflects the averaged color of the
+      // selected lights; safe to update at any time since brightness changes
+      // don't change the color stops.
       this._els.brightnessSlider.style.setProperty('--slider-fill', brightnessColor);
     }
     if (this._els.brightnessValue && !brightnessActive) {
@@ -3006,9 +3013,11 @@ class SpatialLightColorCard extends HTMLElement {
       if (this._els.temperatureSlider.max !== String(tempRange.max)) {
         this._els.temperatureSlider.max = String(tempRange.max);
       }
-      if (!temperatureActive) this._els.temperatureSlider.value = String(temperature);
-      this._els.temperatureSlider.style.setProperty('--slider-percent', `${tempPercent}%`);
-      this._els.temperatureSlider.style.setProperty('--slider-ratio', `${tempPercent / 100}`);
+      if (!temperatureActive) {
+        this._els.temperatureSlider.value = String(temperature);
+        this._els.temperatureSlider.style.setProperty('--slider-percent', `${tempPercent}%`);
+        this._els.temperatureSlider.style.setProperty('--slider-ratio', `${tempPercent / 100}`);
+      }
     }
     if (this._els.temperatureValue && !temperatureActive) {
       this._els.temperatureValue.textContent = `${temperature}K`;

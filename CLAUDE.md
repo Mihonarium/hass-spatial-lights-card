@@ -27,7 +27,7 @@
 
 **Visual updates:**
 - `_updateSliderVisual(el)` — sets `--slider-percent` / `--slider-ratio` from `value`/`min`/`max`.
-- `_updateControlValues(controlContext)` — full sync to averaged state, dynamic temperature gradient via `--temperature-gradient`, capability gating via `_getControlCapabilities()` (toggles `disabled` attribute on sliders, `.disabled` on color wheel, `.no-rgb-support`/`.no-temp-support`/`.no-brightness-support` on the controls container).
+- `_updateControlValues(controlContext)` — full sync to averaged state, plus capability gating via `_getControlCapabilities()` (toggles `disabled` attribute on sliders, `.disabled` on color wheel, `.no-rgb-support`/`.no-temp-support`/`.no-brightness-support` on the controls container). The temperature slider's warm-to-cool gradient is a static CSS background — it's a visual affordance, not a precise color readout.
 
 ---
 

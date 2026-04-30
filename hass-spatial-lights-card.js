@@ -2441,12 +2441,12 @@ class SpatialLightColorCard extends HTMLElement {
           linear-gradient(to right,
             rgba(255,255,255,0.18) 0%,
             rgba(255,255,255,0.18) 100%),
-          var(--temperature-gradient, linear-gradient(to right,
+          linear-gradient(to right,
             #ff9944 0%,
             #ffd480 30%,
             #ffffff 50%,
             #87ceeb 70%,
-            #4d9fff 100%)),
+            #4d9fff 100%),
           linear-gradient(to right, var(--surface-tertiary) 0%, var(--surface-tertiary) 100%);
         background-size:
           calc((100% - var(--slider-thumb-size)) * var(--slider-ratio) + (var(--slider-thumb-size) / 2)) 100%,
@@ -2983,24 +2983,6 @@ class SpatialLightColorCard extends HTMLElement {
       if (!temperatureActive) this._els.temperatureSlider.value = String(temperature);
       this._els.temperatureSlider.style.setProperty('--slider-percent', `${tempPercent}%`);
       this._els.temperatureSlider.style.setProperty('--slider-ratio', `${tempPercent / 100}`);
-      // M5: build the temperature slider gradient from the actual Kelvin range
-      // so the visual spectrum matches what the slider's value at 50% truly
-      // represents. Cached on the slider — only recomputed when the range changes.
-      const rangeKey = `${tempRange.min}-${tempRange.max}`;
-      if (this._els.temperatureSlider._tempGradKey !== rangeKey) {
-        this._els.temperatureSlider._tempGradKey = rangeKey;
-        const stops = [];
-        const N = 6;
-        for (let i = 0; i <= N; i++) {
-          const k = tempRange.min + (tempRange.max - tempRange.min) * (i / N);
-          const [r, g, b] = this._kelvinToRgb(k);
-          stops.push(`rgb(${r},${g},${b}) ${(i / N) * 100}%`);
-        }
-        this._els.temperatureSlider.style.setProperty(
-          '--temperature-gradient',
-          `linear-gradient(to right, ${stops.join(', ')})`
-        );
-      }
     }
     if (this._els.temperatureValue && !temperatureActive) {
       this._els.temperatureValue.textContent = `${temperature}K`;

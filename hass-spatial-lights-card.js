@@ -1765,6 +1765,12 @@ class SpatialLightColorCard extends HTMLElement {
     // to destroy and the user's pending input is lost).
     this._cancelActiveInteractions();
 
+    // The shadow DOM is about to be wiped — the new canvas elements will be
+    // blank, so any cached "last drawn at this size" key from the previous
+    // render is now stale. Without clearing this, the cache check in
+    // `drawColorWheel` would short-circuit and leave the new canvas empty.
+    this._colorWheelLastSize = null;
+
     const controlContext = this._getControlContext();
     const avgState = controlContext.avgState;
     const showControls = this._config.always_show_controls || this._selectedLights.size > 0 || this._config.default_entity;
@@ -3209,19 +3215,6 @@ class SpatialLightColorCard extends HTMLElement {
       if (this._boundWindowBlur) window.removeEventListener('blur', this._boundWindowBlur);
       this._boundWindowBlur = () => this._cancelActiveInteractions();
       window.addEventListener('blur', this._boundWindowBlur);
-      // M11: clear the large-color-wheel "suppress next click" flag when the
-      // user lifts the finger that opened the overlay. The next click on the
-      // overlay backdrop is then a deliberate close.
-      if (this._boundDocPointerUp) document.removeEventListener('pointerup', this._boundDocPointerUp);
-      this._boundDocPointerUp = () => {
-        if (this._largeColorWheelSuppressClick) {
-          // Defer one frame so the synthetic `click` from this very pointerup
-          // (which fires AFTER pointerup in the dispatch sequence) still sees
-          // the suppress flag and skips closing.
-          requestAnimationFrame(() => { this._largeColorWheelSuppressClick = false; });
-        }
-      };
-      document.addEventListener('pointerup', this._boundDocPointerUp, { passive: true });
     }
   }
   disconnectedCallback() {
@@ -3245,10 +3238,6 @@ class SpatialLightColorCard extends HTMLElement {
     if (this._boundWindowBlur && typeof window !== 'undefined') {
       window.removeEventListener('blur', this._boundWindowBlur);
       this._boundWindowBlur = null;
-    }
-    if (this._boundDocPointerUp) {
-      document.removeEventListener('pointerup', this._boundDocPointerUp);
-      this._boundDocPointerUp = null;
     }
     if (this._longPressTimer) {
       clearTimeout(this._longPressTimer);
@@ -4783,12 +4772,12 @@ class SpatialLightColorCard extends HTMLElement {
   _openLargeColorWheel() {
     this._largeColorWheelOpen = true;
     this._largeColorWheelOpenedAt = Date.now();
-    // M11: when the overlay is opened by a long-press, the user's finger is
-    // still down. The eventual `pointerup` triggers a `click` on the overlay
-    // backdrop, which would close the freshly-opened wheel. Set a suppress
-    // flag that's cleared on the first pointerup, so the open-gesture's
-    // release doesn't immediately close the overlay.
-    this._largeColorWheelSuppressClick = true;
+    // The overlay close-on-backdrop logic uses `_largeWheelBackdropArmed`,
+    // which only flips true on a fresh pointerdown directly on the backdrop.
+    // The long-press release that opened this overlay isn't a pointerdown on
+    // the overlay (the original pointerdown was on the mini wheel before the
+    // overlay even existed), so the synthesized click is automatically ignored.
+    this._largeWheelBackdropArmed = false;
     const overlay = this._els.colorWheelOverlay;
     if (!overlay) return;
 
@@ -5080,14 +5069,25 @@ class SpatialLightColorCard extends HTMLElement {
       if (mag) mag.classList.remove('visible');
     });
 
-    // Close on backdrop click — but ignore the synthetic click that fires when
-    // the user releases the long-press that opened the overlay. The flag is
-    // cleared on the document's first pointerup after open (see
-    // `connectedCallback`), so the *next* deliberate backdrop click closes.
+    // Close on backdrop click — but only when a deliberate pointerdown landed
+    // on the overlay backdrop itself. The long-press that opened this overlay
+    // was a pointerdown on the mini wheel; the synthesized click after the
+    // user's release also targets the backdrop, but we never saw a backdrop
+    // pointerdown for it, so this check filters it out. Movement / no-movement
+    // doesn't matter — what matters is that a pointer was deliberately put
+    // down on the backdrop here.
     if (overlay) {
+      overlay.addEventListener('pointerdown', (e) => {
+        // Only count pointers that land directly on the backdrop, not on the
+        // canvas, swatch, hint, or done button.
+        if (e.target === overlay) {
+          this._largeWheelBackdropArmed = true;
+        }
+      });
       overlay.addEventListener('click', (e) => {
         if (e.target !== overlay) return;
-        if (this._largeColorWheelSuppressClick) return;
+        if (!this._largeWheelBackdropArmed) return;
+        this._largeWheelBackdropArmed = false;
         this._closeLargeColorWheel();
       });
     }
@@ -5215,6 +5215,11 @@ class SpatialLightColorCard extends HTMLElement {
   }
 
   _requestColorWheelDraw(force = false) {
+    // Coalesce multiple requests into a single frame, but accumulate force —
+    // a `force=true` request must take effect even if a non-force request
+    // was already pending. Otherwise an explicit "the canvas is fresh and
+    // empty" caller can be dropped, leaving the wheel unpainted.
+    this._colorWheelPendingForce = (this._colorWheelPendingForce || false) || force;
     if (this._colorWheelFrame) return;
     const schedule = typeof requestAnimationFrame === 'function'
       ? requestAnimationFrame
@@ -5223,7 +5228,9 @@ class SpatialLightColorCard extends HTMLElement {
     this._colorWheelCancel = cancel;
     this._colorWheelFrame = schedule(() => {
       this._colorWheelFrame = null;
-      this.drawColorWheel(force);
+      const eff = this._colorWheelPendingForce;
+      this._colorWheelPendingForce = false;
+      this.drawColorWheel(eff);
     });
   }
 

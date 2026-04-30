@@ -1818,6 +1818,7 @@ class SpatialLightColorCard extends HTMLElement {
     // render is now stale. Without clearing this, the cache check in
     // `drawColorWheel` would short-circuit and leave the new canvas empty.
     this._colorWheelLastSize = null;
+    this._colorWheelZeroRetries = 0;
 
     const controlContext = this._getControlContext();
     const avgState = controlContext.avgState;
@@ -1917,16 +1918,23 @@ class SpatialLightColorCard extends HTMLElement {
     // with the post-layout size, so glow walls get a definitive recompute as
     // soon as the canvas is laid out — no extra rAF needed here.
     // ha-icon often upgrades over several frames as the MDI iconset loads;
-    // the existing 250ms retry timer is too slow to catch every icon as it
-    // becomes ready. Schedule a handful of cheap rAF-chained retries (each
-    // call is idempotent and bails out as soon as every icon is rendered).
-    let icoRetries = 0;
-    const tickIcons = () => {
-      if (icoRetries++ >= 6 || !this.shadowRoot) return;
+    // and the color-wheel canvas needs the parent controls box to be laid
+    // out before it has a non-zero size. Both can be intermittent on cold
+    // loads. Run a short rAF-chained recovery — each call is idempotent and
+    // bails as soon as everything is rendered.
+    let recoveryTicks = 0;
+    const recoveryTick = () => {
+      if (recoveryTicks++ >= 8 || !this.shadowRoot) return;
       this._refreshEntityIcons();
-      requestAnimationFrame(tickIcons);
+      // Force-redraw the wheel each tick. `drawColorWheel` skips when the
+      // canvas size hasn't changed, so this is a no-op once the wheel is
+      // painted. When the parent controls box transitions from
+      // `display: none` → `display: grid` (selection arrives), the canvas
+      // gets a real size and the next tick paints it.
+      if (this._els.colorWheel) this._requestColorWheelDraw(true);
+      requestAnimationFrame(recoveryTick);
     };
-    requestAnimationFrame(tickIcons);
+    requestAnimationFrame(recoveryTick);
     this._subscribeTemplates();
   }
 
@@ -5316,14 +5324,19 @@ class SpatialLightColorCard extends HTMLElement {
     // tab was hidden when this fired, ResizeObserver hasn't fired yet),
     // re-arm for the next frame instead of giving up. Without this the wheel
     // can stay blank until something else triggers another draw request.
+    // Cap the retry count so we don't spin forever when the canvas is
+    // intentionally never displayed (e.g. no selection / no default_entity /
+    // no always_show_controls). The ResizeObserver on the canvas will still
+    // fire when it eventually gets a real size, kicking off a fresh request.
     const rect = canvas.getBoundingClientRect();
-    if (rect.width === 0 && rect.height === 0) {
-      if (typeof requestAnimationFrame === 'function') {
-        // Use the standard request path so the force flag is preserved.
+    if (rect.width === 0 || rect.height === 0) {
+      this._colorWheelZeroRetries = (this._colorWheelZeroRetries || 0) + 1;
+      if (this._colorWheelZeroRetries < 60 && typeof requestAnimationFrame === 'function') {
         requestAnimationFrame(() => this._requestColorWheelDraw(force));
       }
       return;
     }
+    this._colorWheelZeroRetries = 0;
 
     const dpr = (typeof window !== 'undefined' && window.devicePixelRatio) ? window.devicePixelRatio : 1;
     const fallbackSize = Number(canvas.getAttribute('width')) || 256;

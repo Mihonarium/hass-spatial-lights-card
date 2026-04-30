@@ -1011,6 +1011,15 @@ class SpatialLightColorCard extends HTMLElement {
     // so `===` is sufficient to detect changes.
     if (this._isRelevantHassChange(prev, hass)) {
       this.updateLights();
+    } else {
+      // Even when no controlled entity changed, keep ha-icon refreshing —
+      // icons load lazily from the MDI iconset on initial page open, and
+      // pre-diff the constant traffic of state events kept retrying
+      // `_refreshEntityIcons` until they all rendered. The retry timer also
+      // does this but with 250ms / 500ms / 750ms backoff that's noticeable
+      // on slow loads. This call is idempotent and cheap (no DOM thrash if
+      // every icon is already correct).
+      this._refreshEntityIcons();
     }
   }
 
@@ -1809,6 +1818,7 @@ class SpatialLightColorCard extends HTMLElement {
     // render is now stale. Without clearing this, the cache check in
     // `drawColorWheel` would short-circuit and leave the new canvas empty.
     this._colorWheelLastSize = null;
+    this._colorWheelZeroRetries = 0;
 
     const controlContext = this._getControlContext();
     const avgState = controlContext.avgState;
@@ -1904,11 +1914,27 @@ class SpatialLightColorCard extends HTMLElement {
     this.updateLights();
     this._refreshEntityIcons();
     requestAnimationFrame(() => this._updateSeparatorVisibility());
-    // After the next layout flush, run `_updateAllGlows` again. The
-    // synchronous `updateLights()` above may have run while the canvas was
-    // 0x0 (e.g. before the dashboard tab became visible), in which case
-    // `_applyWallShadows` bails out on a null `canvasRect`.
-    requestAnimationFrame(() => this._updateAllGlows());
+    // The canvas ResizeObserver registered above fires on initial observation
+    // with the post-layout size, so glow walls get a definitive recompute as
+    // soon as the canvas is laid out — no extra rAF needed here.
+    // ha-icon often upgrades over several frames as the MDI iconset loads;
+    // and the color-wheel canvas needs the parent controls box to be laid
+    // out before it has a non-zero size. Both can be intermittent on cold
+    // loads. Run a short rAF-chained recovery — each call is idempotent and
+    // bails as soon as everything is rendered.
+    let recoveryTicks = 0;
+    const recoveryTick = () => {
+      if (recoveryTicks++ >= 8 || !this.shadowRoot) return;
+      this._refreshEntityIcons();
+      // Force-redraw the wheel each tick. `drawColorWheel` skips when the
+      // canvas size hasn't changed, so this is a no-op once the wheel is
+      // painted. When the parent controls box transitions from
+      // `display: none` → `display: grid` (selection arrives), the canvas
+      // gets a real size and the next tick paints it.
+      if (this._els.colorWheel) this._requestColorWheelDraw(true);
+      requestAnimationFrame(recoveryTick);
+    };
+    requestAnimationFrame(recoveryTick);
     this._subscribeTemplates();
   }
 
@@ -3248,7 +3274,16 @@ class SpatialLightColorCard extends HTMLElement {
       // backgrounding, leaving `_dragState` and timers stuck.
       if (this._boundVisibilityChange) document.removeEventListener('visibilitychange', this._boundVisibilityChange);
       this._boundVisibilityChange = () => {
-        if (document.hidden) this._cancelActiveInteractions();
+        if (document.hidden) {
+          this._cancelActiveInteractions();
+        } else {
+          // Tab just became visible. While hidden, browsers throttle rAF and
+          // the ha-icon iconset may have been buffering. Force a full refresh
+          // of the canvas-y bits and icons so nothing is left stale.
+          if (this._els.colorWheel) this._requestColorWheelDraw(true);
+          this._refreshEntityIcons();
+          this._updateAllGlows();
+        }
       };
       document.addEventListener('visibilitychange', this._boundVisibilityChange);
       if (this._boundWindowBlur) window.removeEventListener('blur', this._boundWindowBlur);
@@ -5285,11 +5320,23 @@ class SpatialLightColorCard extends HTMLElement {
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
-    // Skip drawing if canvas is not visible (e.g., display: none)
+    // If the canvas isn't laid out yet (e.g. controls just toggled visible,
+    // tab was hidden when this fired, ResizeObserver hasn't fired yet),
+    // re-arm for the next frame instead of giving up. Without this the wheel
+    // can stay blank until something else triggers another draw request.
+    // Cap the retry count so we don't spin forever when the canvas is
+    // intentionally never displayed (e.g. no selection / no default_entity /
+    // no always_show_controls). The ResizeObserver on the canvas will still
+    // fire when it eventually gets a real size, kicking off a fresh request.
     const rect = canvas.getBoundingClientRect();
-    if (rect.width === 0 && rect.height === 0) {
+    if (rect.width === 0 || rect.height === 0) {
+      this._colorWheelZeroRetries = (this._colorWheelZeroRetries || 0) + 1;
+      if (this._colorWheelZeroRetries < 60 && typeof requestAnimationFrame === 'function') {
+        requestAnimationFrame(() => this._requestColorWheelDraw(force));
+      }
       return;
     }
+    this._colorWheelZeroRetries = 0;
 
     const dpr = (typeof window !== 'undefined' && window.devicePixelRatio) ? window.devicePixelRatio : 1;
     const fallbackSize = Number(canvas.getAttribute('width')) || 256;

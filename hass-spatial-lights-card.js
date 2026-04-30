@@ -1916,6 +1916,17 @@ class SpatialLightColorCard extends HTMLElement {
     // The canvas ResizeObserver registered above fires on initial observation
     // with the post-layout size, so glow walls get a definitive recompute as
     // soon as the canvas is laid out — no extra rAF needed here.
+    // ha-icon often upgrades over several frames as the MDI iconset loads;
+    // the existing 250ms retry timer is too slow to catch every icon as it
+    // becomes ready. Schedule a handful of cheap rAF-chained retries (each
+    // call is idempotent and bails out as soon as every icon is rendered).
+    let icoRetries = 0;
+    const tickIcons = () => {
+      if (icoRetries++ >= 6 || !this.shadowRoot) return;
+      this._refreshEntityIcons();
+      requestAnimationFrame(tickIcons);
+    };
+    requestAnimationFrame(tickIcons);
     this._subscribeTemplates();
   }
 
@@ -3255,7 +3266,16 @@ class SpatialLightColorCard extends HTMLElement {
       // backgrounding, leaving `_dragState` and timers stuck.
       if (this._boundVisibilityChange) document.removeEventListener('visibilitychange', this._boundVisibilityChange);
       this._boundVisibilityChange = () => {
-        if (document.hidden) this._cancelActiveInteractions();
+        if (document.hidden) {
+          this._cancelActiveInteractions();
+        } else {
+          // Tab just became visible. While hidden, browsers throttle rAF and
+          // the ha-icon iconset may have been buffering. Force a full refresh
+          // of the canvas-y bits and icons so nothing is left stale.
+          if (this._els.colorWheel) this._requestColorWheelDraw(true);
+          this._refreshEntityIcons();
+          this._updateAllGlows();
+        }
       };
       document.addEventListener('visibilitychange', this._boundVisibilityChange);
       if (this._boundWindowBlur) window.removeEventListener('blur', this._boundWindowBlur);
@@ -5292,9 +5312,16 @@ class SpatialLightColorCard extends HTMLElement {
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
-    // Skip drawing if canvas is not visible (e.g., display: none)
+    // If the canvas isn't laid out yet (e.g. controls just toggled visible,
+    // tab was hidden when this fired, ResizeObserver hasn't fired yet),
+    // re-arm for the next frame instead of giving up. Without this the wheel
+    // can stay blank until something else triggers another draw request.
     const rect = canvas.getBoundingClientRect();
     if (rect.width === 0 && rect.height === 0) {
+      if (typeof requestAnimationFrame === 'function') {
+        // Use the standard request path so the force flag is preserved.
+        requestAnimationFrame(() => this._requestColorWheelDraw(force));
+      }
       return;
     }
 

@@ -2443,15 +2443,15 @@ class SpatialLightColorCard extends HTMLElement {
           linear-gradient(to right,
             rgba(255,255,255,0.08) 0%,
             rgba(255,255,255,0.08) 100%),
-          /* Warm → cool spectrum. This is a visual affordance, not a precise
-             color readout — the stops favour vivid yellow/white/blue rather
-             than perceptually-accurate Kelvin. */
+          /* Warm → cool spectrum. A visual affordance — kept gentle so it
+             reads as plausible incandescent → daylight rather than as
+             saturated orange / saturated blue. */
           linear-gradient(to right,
-            #ff7a3a 0%,
-            #ffce4a 25%,
+            #ff9944 0%,
+            #ffd480 25%,
             #ffffff 50%,
-            #5fc3ff 75%,
-            #1e88e5 100%),
+            #9fd9ff 75%,
+            #5fa9e8 100%),
           linear-gradient(to right, var(--surface-tertiary) 0%, var(--surface-tertiary) 100%);
         background-size:
           calc((100% - var(--slider-thumb-size)) * var(--slider-ratio) + (var(--slider-thumb-size) / 2)) 100%,

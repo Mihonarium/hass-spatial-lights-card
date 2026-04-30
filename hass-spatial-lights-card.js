@@ -1,4 +1,17 @@
+/*!
+ * spatial-light-color-card — Home Assistant Lovelace custom card.
+ * Repository: https://github.com/Mihonarium/hass-spatial-lights-card
+ * License:    MIT
+ */
+
 class SpatialLightColorCard extends HTMLElement {
+  // Color modes that indicate an actual RGB color choice (not pure temperature).
+  static RGB_COLOR_MODES = new Set(['hs', 'rgb', 'xy', 'rgbw', 'rgbww']);
+  // Tolerance (sRGB Euclidean distance) for grouping live colors and matching active presets.
+  static COLOR_TOLERANCE = 30;
+  // Tolerance (Kelvin) for grouping live temperatures and matching active temp presets.
+  static TEMP_TOLERANCE = 100;
+
   constructor() {
     super();
     this.attachShadow({ mode: 'open' });
@@ -26,6 +39,13 @@ class SpatialLightColorCard extends HTMLElement {
     this._pendingBrightness = null;
     this._pendingTemperature = null;
     this._pendingColor = null;
+
+    /**
+     * Set to 'brightness' or 'temperature' while the user is mid-drag on a
+     * slider. `_updateControlValues` skips writing `el.value` for the active
+     * slider so HA state pushes don't fight the user's finger.
+     */
+    this._activeSliderGesture = null;
 
     /** Settings */
     this._gridSize = 25;
@@ -74,6 +94,8 @@ class SpatialLightColorCard extends HTMLElement {
     this._boundKeyDown = null;
     this._boundIconsetAdded = null;
     this._boundMoreInfo = null;
+    this._boundVisibilityChange = null;
+    this._boundWindowBlur = null;
 
     /** Touch affordances */
     this._longPressTimer = null;
@@ -225,9 +247,6 @@ class SpatialLightColorCard extends HTMLElement {
       effect_filter_default: ['any', 'all'].includes(config.effect_filter_default) ? config.effect_filter_default : 'any',
       effect_filter_selected: ['any', 'all'].includes(config.effect_filter_selected) ? config.effect_filter_selected : 'all',
 
-      // Per-light effect assignments: { entity_id: ['effect1', 'effect2'], ... }
-      per_light_effects: this._normalizePerLightEffects(config.per_light_effects),
-
       // Canvas elements (non-entity elements: links, sensors, templates)
       canvas_elements: this._normalizeCanvasElements(config.canvas_elements),
 
@@ -263,27 +282,6 @@ class SpatialLightColorCard extends HTMLElement {
     if (this._hass) {
       this._renderAll();
     }
-  }
-
-  _normalizePerLightEffects(obj) {
-    const result = {};
-    if (obj && typeof obj === 'object') {
-      Object.entries(obj).forEach(([entity, val]) => {
-        if (Array.isArray(val)) {
-          const effects = val
-            .map(e => {
-              if (typeof e === 'string' && e.trim()) return { effect: e.trim(), mode: 'any' };
-              if (e && typeof e === 'object' && typeof e.effect === 'string' && e.effect.trim()) {
-                return { effect: e.effect.trim(), mode: ['any', 'all'].includes(e.mode) ? e.mode : 'any' };
-              }
-              return null;
-            })
-            .filter(Boolean);
-          if (effects.length > 0) result[entity] = effects;
-        }
-      });
-    }
-    return result;
   }
 
   _normalizeNumberOverrides(obj) {
@@ -1003,13 +1001,32 @@ class SpatialLightColorCard extends HTMLElement {
   }
 
   set hass(hass) {
-    const firstTime = !this._hass;
+    const prev = this._hass;
     this._hass = hass;
-    if (firstTime) {
-      this._renderAll();
-    } else {
+    if (!prev) { this._renderAll(); return; }
+    // H3: HA fires `set hass` whenever ANY entity in the system changes. Skip
+    // the full updateLights pipeline if no entity this card cares about
+    // actually changed state. State objects are immutable per HA conventions
+    // so `===` is sufficient to detect changes.
+    if (this._isRelevantHassChange(prev, hass)) {
       this.updateLights();
     }
+  }
+
+  _isRelevantHassChange(prev, next) {
+    if (!prev || !next || !prev.states || !next.states) return true;
+    const ents = this._config.entities || [];
+    for (let i = 0; i < ents.length; i++) {
+      if (prev.states[ents[i]] !== next.states[ents[i]]) return true;
+    }
+    const ces = this._config.canvas_elements || [];
+    for (let i = 0; i < ces.length; i++) {
+      const ce = ces[i];
+      if (ce && ce.entity && prev.states[ce.entity] !== next.states[ce.entity]) return true;
+      // Sensors fall back to icon, prefix, suffix from the entity attributes;
+      // the `entity` check above covers them.
+    }
+    return false;
   }
 
   /** ---------- Label system ---------- */
@@ -1366,17 +1383,22 @@ class SpatialLightColorCard extends HTMLElement {
     const stateObj = this._hass.states?.[entity];
     if (!stateObj) return;
     const [domain] = entity.split('.');
-    
+
     if (domain === 'binary_sensor') return;
+    // Don't fire toggles against unavailable entities; HA logs a warning and
+    // nothing changes anyway.
+    if (!this._isEntityAvailable(entity)) return;
 
     if (domain === 'scene') {
-      this._hass.callService('scene', 'turn_on', { entity_id: entity });
+      this._hass.callService('scene', 'turn_on', { entity_id: entity })
+        .catch(err => console.warn(`[spatial-light-card] scene.turn_on ${entity} failed:`, err));
       return;
     }
 
     if (domain !== 'light' && domain !== 'switch' && domain !== 'input_boolean') return;
     const service = stateObj.state === 'on' ? 'turn_off' : 'turn_on';
-    this._hass.callService(domain, service, { entity_id: entity });
+    this._hass.callService(domain, service, { entity_id: entity })
+      .catch(err => console.warn(`[spatial-light-card] ${domain}.${service} ${entity} failed:`, err));
   }
 
   _isSelectableEntity(entity) {
@@ -1637,6 +1659,54 @@ class SpatialLightColorCard extends HTMLElement {
     return { min: minK, max: maxK };
   }
 
+  _isEntityAvailable(id) {
+    const st = this._hass?.states?.[id];
+    if (!st) return false;
+    return st.state !== 'unavailable' && st.state !== 'unknown';
+  }
+
+  // Returns the union of capabilities across `controlled` lights — a control
+  // surface is enabled if ANY light in the selection supports it. Switches,
+  // scenes, and unavailable entities don't contribute capabilities.
+  _getControlCapabilities(controlled) {
+    const RGB_MODES = SpatialLightColorCard.RGB_COLOR_MODES;
+    const caps = { rgb: false, color_temp: false, brightness: false, anyLight: false };
+    for (const id of controlled) {
+      if (!id.startsWith('light.')) continue;
+      if (!this._isEntityAvailable(id)) continue;
+      caps.anyLight = true;
+      const modes = this._hass?.states?.[id]?.attributes?.supported_color_modes;
+      if (!Array.isArray(modes) || modes.length === 0) {
+        // Older integrations may omit supported_color_modes — assume full capability
+        // to avoid false negatives that disable working controls.
+        caps.rgb = true; caps.color_temp = true; caps.brightness = true;
+        continue;
+      }
+      if (modes.some(m => RGB_MODES.has(m))) caps.rgb = true;
+      if (modes.includes('color_temp')) caps.color_temp = true;
+      // Anything other than ['onoff'] alone supports brightness
+      if (!(modes.length === 1 && modes[0] === 'onoff')) caps.brightness = true;
+    }
+    return caps;
+  }
+
+  // Returns the subset of `controlled` that are available `light.*` entities
+  // and (optionally) support a specific capability ('rgb', 'color_temp', 'brightness').
+  _getServiceTargets(controlled, capability) {
+    const RGB_MODES = SpatialLightColorCard.RGB_COLOR_MODES;
+    return controlled.filter(id => {
+      if (!id.startsWith('light.')) return false;
+      if (!this._isEntityAvailable(id)) return false;
+      if (!capability) return true;
+      const modes = this._hass?.states?.[id]?.attributes?.supported_color_modes;
+      if (!Array.isArray(modes) || modes.length === 0) return true; // unknown → assume yes
+      if (capability === 'rgb') return modes.some(m => RGB_MODES.has(m));
+      if (capability === 'color_temp') return modes.includes('color_temp');
+      if (capability === 'brightness') return !(modes.length === 1 && modes[0] === 'onoff');
+      return true;
+    });
+  }
+
   _getControlContext() {
     const controlled = this._getControlledEntities();
 
@@ -1688,6 +1758,12 @@ class SpatialLightColorCard extends HTMLElement {
 
   /** ---------- Rendering ---------- */
   _renderAll() {
+    // Releases any in-flight pointer capture, drag/long-press timers, and
+    // commits any pending slider value before the shadow DOM is rebuilt
+    // (otherwise the gesture's listeners are attached to elements we're about
+    // to destroy and the user's pending input is lost).
+    this._cancelActiveInteractions();
+
     const controlContext = this._getControlContext();
     const avgState = controlContext.avgState;
     const showControls = this._config.always_show_controls || this._selectedLights.size > 0 || this._config.default_entity;
@@ -1725,6 +1801,12 @@ class SpatialLightColorCard extends HTMLElement {
     this._els.colorWheel = this.shadowRoot.getElementById('colorWheelMini');
     this._els.yamlModal = this.shadowRoot.getElementById('yamlModal');
     this._els.yamlOutput = this.shadowRoot.getElementById('yamlOutput');
+    // Populate the YAML modal contents via textContent (NOT innerHTML) so that
+    // user-controlled config values (title, labels, entity IDs, etc.) cannot
+    // become HTML at render time.
+    if (this._els.yamlOutput) {
+      this._els.yamlOutput.textContent = this._generateYAML();
+    }
     this._els.colorWheelOverlay = this.shadowRoot.getElementById('colorWheelOverlay');
     this._els.colorWheelLarge = this.shadowRoot.getElementById('colorWheelLarge');
     this._els.colorWheelMagnifier = this.shadowRoot.getElementById('colorWheelMagnifier');
@@ -1991,6 +2073,85 @@ class SpatialLightColorCard extends HTMLElement {
 
       .light.dragging { cursor: grabbing; z-index: 8; transform: translate(-50%,-50%) scale(1.04); }
 
+      /* H18: visible focus rings. The card disables outlines elsewhere; these
+         rules give keyboard users a clear indicator on every interactive
+         element (only when navigating by keyboard, thanks to :focus-visible). */
+      .light:focus { outline: none; }
+      .light:focus-visible {
+        outline: 2px solid var(--accent-primary, #6366f1);
+        outline-offset: 4px;
+        z-index: 9;
+      }
+      .color-preset:focus, .temp-preset:focus, .effect-preset:focus { outline: none; }
+      .color-preset:focus-visible::after,
+      .temp-preset:focus-visible,
+      .effect-preset:focus-visible {
+        box-shadow: 0 0 0 2px var(--accent-primary, #6366f1), 0 0 0 4px rgba(99,102,241,0.35);
+      }
+      .canvas-element:focus { outline: none; }
+      .canvas-element:focus-visible {
+        outline: 2px solid var(--accent-primary, #6366f1);
+        outline-offset: 2px;
+      }
+      .slider:focus-visible {
+        outline: 2px solid var(--accent-primary, #6366f1);
+        outline-offset: 4px;
+        border-radius: 9999px;
+      }
+
+      /* H21: forced-colors / Windows High Contrast support. CSS shadows and
+         many colors are stripped in this mode, so we fall back to system
+         colors and rely on borders/outlines for state. */
+      @media (forced-colors: active) {
+        .light { border: 1px solid CanvasText; background: Canvas !important; }
+        .light.selected { outline: 2px solid Highlight; outline-offset: 2px; }
+        .light.unavailable { border-style: dashed; }
+        .light-status-badge {
+          background: ButtonFace !important;
+          color: ButtonText !important;
+          border: 1px solid CanvasText;
+        }
+        .color-preset, .temp-preset, .effect-preset { border: 1px solid CanvasText; }
+        .color-preset.active, .temp-preset.active, .effect-preset.active {
+          outline: 2px solid Highlight; outline-offset: 1px;
+        }
+        .light:focus-visible,
+        .color-preset:focus-visible,
+        .temp-preset:focus-visible,
+        .effect-preset:focus-visible,
+        .canvas-element:focus-visible,
+        .slider:focus-visible { outline: 2px solid Highlight; }
+        .selection-box { border-color: Highlight; background: transparent; }
+        .preset-separator { background: CanvasText; }
+      }
+
+      /* H10: unavailable indicator. Light is dimmed + slightly desaturated;
+         a small amber "?" badge sits in the top-right of the circle, scaled
+         relative to the light so it stays proportional at any light_size. */
+      .light.unavailable { opacity: 0.55; filter: grayscale(0.5); }
+      .light.unavailable.selected { opacity: 0.75; }
+      .light-status-badge {
+        position: absolute;
+        top: -4%; right: -4%;
+        width: 30%; height: 30%;
+        min-width: 12px; min-height: 12px;
+        max-width: 18px; max-height: 18px;
+        border-radius: 9999px;
+        background: var(--warning-color, #f59e0b);
+        color: #1a1a1a;
+        display: flex; align-items: center; justify-content: center;
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+        font-weight: 700; font-size: 10px; line-height: 1;
+        box-shadow: 0 0 0 2px var(--surface-primary, #0a0a0a), 0 1px 3px rgba(0,0,0,0.4);
+        pointer-events: none;
+        z-index: 3;
+      }
+      /* In minimal-ui / icon-only modes the circle background is transparent;
+         shift the badge into the icon's bounding box so it still reads as
+         attached to the entity. */
+      .light.icon-only .light-status-badge,
+      .light.minimal-ui .light-status-badge { top: 0; right: 0; }
+
       .selection-box {
         position: absolute; border: 1.5px solid rgba(99,102,241,0.5); background: rgba(99,102,241,0.08);
         border-radius: 8px; pointer-events: none; backdrop-filter: blur(2px);
@@ -2159,6 +2320,22 @@ class SpatialLightColorCard extends HTMLElement {
         border: 2px solid var(--border-subtle); box-shadow: var(--shadow-sm); flex-shrink: 0;
         grid-column: 1; grid-row: 1 / 3; align-self: start;
       }
+      /* H7: capability gating — keep the layout slot occupied so selection
+         changes don't reflow, but visually mute and block interaction when
+         no controlled light supports the relevant control. */
+      .color-wheel-mini.disabled {
+        opacity: 0.35; cursor: not-allowed; pointer-events: none;
+        filter: grayscale(0.7);
+      }
+      .slider:disabled { opacity: 0.4; cursor: not-allowed; }
+      .controls-floating.no-rgb-support .presets-area .color-preset,
+      .controls-below.no-rgb-support .presets-area .color-preset {
+        opacity: 0.35; pointer-events: none;
+      }
+      .controls-floating.no-temp-support .presets-area .temp-preset,
+      .controls-below.no-temp-support .presets-area .temp-preset {
+        opacity: 0.35; pointer-events: none;
+      }
 
       .presets-area {
         grid-column: 2; grid-row: 2;
@@ -2264,12 +2441,12 @@ class SpatialLightColorCard extends HTMLElement {
           linear-gradient(to right,
             rgba(255,255,255,0.18) 0%,
             rgba(255,255,255,0.18) 100%),
-          linear-gradient(to right,
+          var(--temperature-gradient, linear-gradient(to right,
             #ff9944 0%,
             #ffd480 30%,
             #ffffff 50%,
             #87ceeb 70%,
-            #4d9fff 100%),
+            #4d9fff 100%)),
           linear-gradient(to right, var(--surface-tertiary) 0%, var(--surface-tertiary) 100%);
         background-size:
           calc((100% - var(--slider-thumb-size)) * var(--slider-ratio) + (var(--slider-thumb-size) / 2)) 100%,
@@ -2493,6 +2670,7 @@ class SpatialLightColorCard extends HTMLElement {
 
       const [domain] = entity_id.split('.');
       const isOn = st.state === 'on';
+      const isUnavailable = st.state === 'unavailable' || st.state === 'unknown';
       const isSelected = this._selectedLights.has(entity_id);
       const label = this._generateLabel(entity_id);
 
@@ -2555,17 +2733,25 @@ class SpatialLightColorCard extends HTMLElement {
         style += styleOverride + (styleOverride.endsWith(';') ? '' : ';');
       }
 
+      const friendly = st.attributes.friendly_name || entity_id;
+      const ariaLabel = isUnavailable ? `${friendly} (unavailable)` : friendly;
+      const unavailableBadge = isUnavailable
+        ? '<div class="light-status-badge" aria-hidden="true" title="Unavailable">?</div>'
+        : '';
+
       return `
-        <div class="light ${stateClass} ${isSelected ? 'selected' : ''} ${iconOnlyClass}"
+        <div class="light ${stateClass} ${isSelected ? 'selected' : ''} ${iconOnlyClass}${isUnavailable ? ' unavailable' : ''}"
              style="${style}"
              data-entity="${entity_id}"
              tabindex="0"
              role="button"
-             aria-label="${this._escapeHtml(st.attributes.friendly_name || entity_id)}"
-             aria-pressed="${isSelected}">
+             aria-label="${this._escapeHtml(ariaLabel)}"
+             aria-pressed="${isSelected}"
+             aria-disabled="${isUnavailable ? 'true' : 'false'}">
           ${glowHtml}
           ${iconData ? this._renderIcon(iconData) : ''}
           <div class="light-label">${this._escapeHtml(label)}</div>
+          ${unavailableBadge}
         </div>
       `;
     }).join('');
@@ -2611,7 +2797,7 @@ class SpatialLightColorCard extends HTMLElement {
            tabindex="0"
            aria-label="${this._escapeHtml(el.label || 'Link')}">
         <div class="ce-icon-wrap" style="${sizeStyle}">
-          <ha-icon icon="${el.icon}"></ha-icon>
+          <ha-icon icon="${this._escapeHtml(el.icon)}"></ha-icon>
         </div>
         ${label}
       </div>
@@ -2624,7 +2810,7 @@ class SpatialLightColorCard extends HTMLElement {
     const unit = el.suffix !== null ? el.suffix : (st?.attributes?.unit_of_measurement || '');
     const displayValue = `${el.prefix}${value}${unit}`;
     const icon = el.show_icon
-      ? `<ha-icon icon="${el.icon || st?.attributes?.icon || 'mdi:eye'}"></ha-icon>`
+      ? `<ha-icon icon="${this._escapeHtml(el.icon || st?.attributes?.icon || 'mdi:eye')}"></ha-icon>`
       : '';
     const label = el.label
       ? `<div class="ce-label">${this._escapeHtml(el.label)}</div>`
@@ -2650,7 +2836,7 @@ class SpatialLightColorCard extends HTMLElement {
 
   _renderCanvasTemplate(el, style) {
     const rendered = this._templateResults.get(el.id) || '';
-    const icon = el.icon ? `<ha-icon icon="${el.icon}"></ha-icon>` : '';
+    const icon = el.icon ? `<ha-icon icon="${this._escapeHtml(el.icon)}"></ha-icon>` : '';
     const label = el.label ? `<div class="ce-label">${this._escapeHtml(el.label)}</div>` : '';
     return `
       <div class="canvas-element canvas-element-template"
@@ -2736,7 +2922,7 @@ class SpatialLightColorCard extends HTMLElement {
             <span class="modal-title" id="modalTitle">Configuration YAML</span>
             <button class="modal-close" id="closeModal" aria-label="Close">×</button>
           </div>
-          <div class="yaml-output" id="yamlOutput" role="textbox" aria-multiline="true" aria-readonly="true">${this._generateYAML()}</div>
+          <div class="yaml-output" id="yamlOutput" role="textbox" aria-multiline="true" aria-readonly="true"></div>
           <div class="modal-hint">Select all (Cmd/Ctrl+A) and copy (Cmd/Ctrl+C)</div>
         </div>
       </div>
@@ -2774,13 +2960,17 @@ class SpatialLightColorCard extends HTMLElement {
       : 0;
     const brightnessColor = Array.isArray(avgState?.color) ? `rgb(${avgState.color.join(',')})` : 'var(--accent-primary)';
 
+    const brightnessActive = this._activeSliderGesture === 'brightness';
+    const temperatureActive = this._activeSliderGesture === 'temperature';
+
     if (this._els.brightnessSlider) {
-      this._els.brightnessSlider.value = String(brightness);
+      // Don't clobber the slider position while the user is actively dragging it.
+      if (!brightnessActive) this._els.brightnessSlider.value = String(brightness);
       this._els.brightnessSlider.style.setProperty('--slider-percent', `${brightnessPercent}%`);
       this._els.brightnessSlider.style.setProperty('--slider-ratio', `${brightnessPercent / 100}`);
       this._els.brightnessSlider.style.setProperty('--slider-fill', brightnessColor);
     }
-    if (this._els.brightnessValue) {
+    if (this._els.brightnessValue && !brightnessActive) {
       this._els.brightnessValue.textContent = `${Math.round((brightness / 255) * 100)}%`;
     }
     if (this._els.temperatureSlider) {
@@ -2790,13 +2980,51 @@ class SpatialLightColorCard extends HTMLElement {
       if (this._els.temperatureSlider.max !== String(tempRange.max)) {
         this._els.temperatureSlider.max = String(tempRange.max);
       }
-      this._els.temperatureSlider.value = String(temperature);
+      if (!temperatureActive) this._els.temperatureSlider.value = String(temperature);
       this._els.temperatureSlider.style.setProperty('--slider-percent', `${tempPercent}%`);
       this._els.temperatureSlider.style.setProperty('--slider-ratio', `${tempPercent / 100}`);
+      // M5: build the temperature slider gradient from the actual Kelvin range
+      // so the visual spectrum matches what the slider's value at 50% truly
+      // represents. Cached on the slider — only recomputed when the range changes.
+      const rangeKey = `${tempRange.min}-${tempRange.max}`;
+      if (this._els.temperatureSlider._tempGradKey !== rangeKey) {
+        this._els.temperatureSlider._tempGradKey = rangeKey;
+        const stops = [];
+        const N = 6;
+        for (let i = 0; i <= N; i++) {
+          const k = tempRange.min + (tempRange.max - tempRange.min) * (i / N);
+          const [r, g, b] = this._kelvinToRgb(k);
+          stops.push(`rgb(${r},${g},${b}) ${(i / N) * 100}%`);
+        }
+        this._els.temperatureSlider.style.setProperty(
+          '--temperature-gradient',
+          `linear-gradient(to right, ${stops.join(', ')})`
+        );
+      }
     }
-    if (this._els.temperatureValue) {
+    if (this._els.temperatureValue && !temperatureActive) {
       this._els.temperatureValue.textContent = `${temperature}K`;
     }
+
+    // H7: capability gating — disable controls without a supported target.
+    // Layout space is preserved; only `disabled` attribute / `.disabled` class change.
+    const caps = this._getControlCapabilities(context.controlled || []);
+    if (this._els.brightnessSlider) {
+      this._els.brightnessSlider.disabled = !caps.brightness;
+    }
+    if (this._els.temperatureSlider) {
+      this._els.temperatureSlider.disabled = !caps.color_temp;
+    }
+    if (this._els.colorWheel) {
+      this._els.colorWheel.classList.toggle('disabled', !caps.rgb);
+    }
+    // Toggle classes on the controls container so preset rows can be dimmed.
+    const containers = [this._els.controlsFloating, this._els.controlsBelow].filter(Boolean);
+    containers.forEach(c => {
+      c.classList.toggle('no-rgb-support', !caps.rgb);
+      c.classList.toggle('no-temp-support', !caps.color_temp);
+      c.classList.toggle('no-brightness-support', !caps.brightness);
+    });
   }
 
   _updateSliderVisual(el) {
@@ -2834,6 +3062,10 @@ class SpatialLightColorCard extends HTMLElement {
       locked: false
     };
 
+    const gestureKind = el.id === 'brightnessSlider' ? 'brightness'
+      : el.id === 'temperatureSlider' ? 'temperature'
+      : null;
+
     el.addEventListener('pointerdown', (e) => {
       // Prevent default browser dragging to ensure we handle the gesture
       e.preventDefault();
@@ -2845,6 +3077,9 @@ class SpatialLightColorCard extends HTMLElement {
       state.startValue = el.value;
       state.isScrolling = false;
       state.locked = false;
+      // Mark gesture active so `_updateControlValues` skips clobbering this
+      // slider while the user's finger is down.
+      if (gestureKind) this._activeSliderGesture = gestureKind;
 
       // Immediate update on tap start
       this._applyPointerValue(el, e.clientX);
@@ -2866,7 +3101,8 @@ class SpatialLightColorCard extends HTMLElement {
           state.isScrolling = true;
           el.value = state.startValue;
           updateVisuals();
-          el.releasePointerCapture(e.pointerId);
+          if (this._activeSliderGesture === gestureKind) this._activeSliderGesture = null;
+          try { el.releasePointerCapture(e.pointerId); } catch (_) { /* may not have capture */ }
           return;
         }
       }
@@ -2878,8 +3114,9 @@ class SpatialLightColorCard extends HTMLElement {
 
     const endInteraction = (e) => {
       if (state.pointerId !== e.pointerId) return;
-      el.releasePointerCapture(e.pointerId);
+      try { el.releasePointerCapture(e.pointerId); } catch (_) { /* may not have capture */ }
       state.pointerId = null;
+      if (this._activeSliderGesture === gestureKind) this._activeSliderGesture = null;
 
       if (!state.isScrolling) {
         // Commit change
@@ -2944,6 +3181,30 @@ class SpatialLightColorCard extends HTMLElement {
         }
       };
       window.addEventListener('hass-more-info', this._boundMoreInfo, { passive: true });
+      // H11: cancel in-flight gestures when the tab is hidden or the window
+      // loses focus. Mobile browsers don't always emit `pointercancel` on
+      // backgrounding, leaving `_dragState` and timers stuck.
+      if (this._boundVisibilityChange) document.removeEventListener('visibilitychange', this._boundVisibilityChange);
+      this._boundVisibilityChange = () => {
+        if (document.hidden) this._cancelActiveInteractions();
+      };
+      document.addEventListener('visibilitychange', this._boundVisibilityChange);
+      if (this._boundWindowBlur) window.removeEventListener('blur', this._boundWindowBlur);
+      this._boundWindowBlur = () => this._cancelActiveInteractions();
+      window.addEventListener('blur', this._boundWindowBlur);
+      // M11: clear the large-color-wheel "suppress next click" flag when the
+      // user lifts the finger that opened the overlay. The next click on the
+      // overlay backdrop is then a deliberate close.
+      if (this._boundDocPointerUp) document.removeEventListener('pointerup', this._boundDocPointerUp);
+      this._boundDocPointerUp = () => {
+        if (this._largeColorWheelSuppressClick) {
+          // Defer one frame so the synthetic `click` from this very pointerup
+          // (which fires AFTER pointerup in the dispatch sequence) still sees
+          // the suppress flag and skips closing.
+          requestAnimationFrame(() => { this._largeColorWheelSuppressClick = false; });
+        }
+      };
+      document.addEventListener('pointerup', this._boundDocPointerUp, { passive: true });
     }
   }
   disconnectedCallback() {
@@ -2959,6 +3220,18 @@ class SpatialLightColorCard extends HTMLElement {
     if (this._boundMoreInfo && typeof window !== 'undefined') {
       window.removeEventListener('hass-more-info', this._boundMoreInfo);
       this._boundMoreInfo = null;
+    }
+    if (this._boundVisibilityChange) {
+      document.removeEventListener('visibilitychange', this._boundVisibilityChange);
+      this._boundVisibilityChange = null;
+    }
+    if (this._boundWindowBlur && typeof window !== 'undefined') {
+      window.removeEventListener('blur', this._boundWindowBlur);
+      this._boundWindowBlur = null;
+    }
+    if (this._boundDocPointerUp) {
+      document.removeEventListener('pointerup', this._boundDocPointerUp);
+      this._boundDocPointerUp = null;
     }
     if (this._longPressTimer) {
       clearTimeout(this._longPressTimer);
@@ -3260,16 +3533,29 @@ class SpatialLightColorCard extends HTMLElement {
 
   /** ---------- Keyboard ---------- */
   _handleKeyDown(e) {
-    // Only handle keys when this card (or its shadow DOM) has focus, or no editable element is active
+    // True if focus is inside this card's shadow DOM, or this card is itself
+    // the focused element. `composedPath()` walks across shadow boundaries —
+    // the previous `shadowRoot.contains(active)` check missed elements inside
+    // the shadow root because `document.activeElement` returns the host.
+    const path = (typeof e.composedPath === 'function') ? e.composedPath() : [];
+    const isOurCard = path.includes(this);
     const active = document.activeElement;
-    if (active) {
-      const isOurCard = active === this || (this.shadowRoot && this.shadowRoot.contains(active.shadowRoot ? active : active));
-      const isEditable = active.tagName === 'INPUT' || active.tagName === 'TEXTAREA' || active.tagName === 'SELECT' || active.isContentEditable;
-      if (isEditable && !isOurCard) return;
+    const isEditable = active && (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA' || active.tagName === 'SELECT' || active.isContentEditable);
+    if (isEditable && !isOurCard) return;
+
+    // Undo/Redo — only when card is focused (or has selection), to avoid
+    // hijacking these chords across the rest of the dashboard.
+    const cardEngaged = isOurCard || this._selectedLights.size > 0 || this._editPositionsMode || this._largeColorWheelOpen;
+    if ((e.ctrlKey || e.metaKey) && e.key === 'z' && !e.shiftKey) {
+      if (!cardEngaged) return;
+      e.preventDefault();
+      this._undo();
     }
-    // Undo/Redo
-    if ((e.ctrlKey || e.metaKey) && e.key === 'z' && !e.shiftKey) { e.preventDefault(); this._undo(); }
-    if ((e.ctrlKey || e.metaKey) && (e.key === 'y' || (e.key === 'Z' && e.shiftKey))) { e.preventDefault(); this._redo(); }
+    if ((e.ctrlKey || e.metaKey) && (e.key === 'y' || (e.key === 'Z' && e.shiftKey))) {
+      if (!cardEngaged) return;
+      e.preventDefault();
+      this._redo();
+    }
     // Escape → deselect and close panels
     if (e.key === 'Escape') {
       // Close large color wheel first if open
@@ -3277,6 +3563,9 @@ class SpatialLightColorCard extends HTMLElement {
         this._closeLargeColorWheel();
         return;
       }
+      // Only intercept Escape if there's something for us to close/clear,
+      // otherwise let Escape behave normally for the rest of the dashboard.
+      if (!cardEngaged && this._selectedLights.size === 0 && !this._yamlModalOpen && !this._moreInfoOpen) return;
       this._selectedLights.clear();
       if (this._yamlModalOpen) this._yamlModalOpen = false;
       if (this._els.yamlModal) this._els.yamlModal.classList.remove('visible');
@@ -3291,13 +3580,63 @@ class SpatialLightColorCard extends HTMLElement {
       this._syncOverlayState();
       this.updateLights();
     }
-    // Select all
+    // Select all — only when card is engaged, otherwise leave Ctrl-A to the
+    // rest of the page (text selection, native form behavior, etc.).
     if ((e.ctrlKey || e.metaKey) && e.key === 'a') {
+      if (!cardEngaged) return;
       e.preventDefault();
       this._selectedLights.clear();
       this._config.entities.forEach(ent => this._selectedLights.add(ent));
       this.updateLights();
       if (this._els.colorWheel) this._requestColorWheelDraw();
+    }
+
+    // H18: Enter / Space activate the focused control. Lights toggle (or
+    // select, depending on `switch_single_tap`); presets fire their action;
+    // canvas link/sensor elements run their tap_action.
+    if (e.key === 'Enter' || e.key === ' ' || e.key === 'Spacebar') {
+      const target = path.find(n => n && n.classList && (
+        n.classList.contains('light') ||
+        n.classList.contains('color-preset') ||
+        n.classList.contains('temp-preset') ||
+        n.classList.contains('effect-preset') ||
+        n.classList.contains('canvas-element')
+      ));
+      if (!target) return;
+      e.preventDefault();
+      if (target.classList.contains('light')) {
+        const entity = target.dataset.entity;
+        if (!entity) return;
+        const [domain] = entity.split('.');
+        const toggleOnSingleTap = this._config.switch_single_tap && (domain === 'switch' || domain === 'input_boolean' || domain === 'scene');
+        if (toggleOnSingleTap || e.shiftKey || e.ctrlKey || e.metaKey) {
+          this._toggleEntity(entity);
+        } else {
+          // Toggle selection membership (matches additive Shift-click pattern).
+          if (this._selectedLights.has(entity)) this._selectedLights.delete(entity);
+          else this._selectedLights.add(entity);
+          this.updateLights();
+        }
+      } else if (target.classList.contains('color-preset')) {
+        const rgbAttr = target.dataset.presetRgb;
+        if (rgbAttr) {
+          const rgb = rgbAttr.split(',').map(Number);
+          if (rgb.length === 3 && rgb.every(Number.isFinite)) this._applyColorWheelSelection(rgb);
+        } else if (target.dataset.presetColor) {
+          const rgb = this._hexToRgb(target.dataset.presetColor);
+          if (rgb) this._applyColorWheelSelection(rgb);
+        }
+      } else if (target.classList.contains('temp-preset')) {
+        const k = parseInt(target.dataset.presetKelvin, 10);
+        if (Number.isFinite(k)) this._applyTemperaturePreset(k);
+      } else if (target.classList.contains('effect-preset')) {
+        const effect = target.dataset.presetEffect;
+        if (effect) this._applyEffectPreset(effect);
+      } else if (target.classList.contains('canvas-element')) {
+        const elementId = target.dataset.elementId;
+        const el = (this._config.canvas_elements || []).find(c => c.id === elementId);
+        if (el && el.tap_action) this._handleAction(el.tap_action, el);
+      }
     }
     // Optional: movement with arrows if unlocked
     if ((!this._lockPositions || this._editPositionsMode) && this._selectedLights.size > 0) {
@@ -3333,6 +3672,10 @@ class SpatialLightColorCard extends HTMLElement {
   /** ---------- Pointer (unified mouse/touch/pen) ---------- */
   _onPointerDown(e) {
     if (!this._els.canvas) return;
+    // Only respond to primary mouse button; touch/pen report button=0 as well.
+    // Right-click (2) and middle-click (1) should not start drags or long-press
+    // timers — `_handleCanvasContextMenu` handles right-click separately.
+    if (e.pointerType === 'mouse' && e.button !== 0) return;
     e.target.setPointerCapture?.(e.pointerId);
 
     const targetLight = e.target.closest('.light');
@@ -3562,13 +3905,13 @@ class SpatialLightColorCard extends HTMLElement {
 
         // Handle both light entity dragging and canvas element dragging
         if (this._dragState.isCanvasElement) {
-          const node = this.shadowRoot.querySelector(`.canvas-element[data-element-id="${this._dragState.elementId}"]`);
+          const node = this.shadowRoot.querySelector(`.canvas-element[data-element-id="${CSS.escape(this._dragState.elementId)}"]`);
           if (node) {
             node.style.left = `${xPercent}%`;
             node.style.top = `${yPercent}%`;
           }
         } else {
-          const node = this.shadowRoot.querySelector(`.light[data-entity="${this._dragState.entity}"]`);
+          const node = this.shadowRoot.querySelector(`.light[data-entity="${CSS.escape(this._dragState.entity)}"]`);
           if (node) {
             node.style.left = `${xPercent}%`;
             node.style.top = `${yPercent}%`;
@@ -3600,7 +3943,7 @@ class SpatialLightColorCard extends HTMLElement {
       if (this._dragState.isCanvasElement) {
         // Canvas element drag completion
         const { elementId, moved } = this._dragState;
-        const node = this.shadowRoot.querySelector(`.canvas-element[data-element-id="${elementId}"]`);
+        const node = this.shadowRoot.querySelector(`.canvas-element[data-element-id="${CSS.escape(elementId)}"]`);
         if (node) {
           node.classList.remove('dragging');
           const finalLeft = parseFloat(node.style.left);
@@ -3626,7 +3969,7 @@ class SpatialLightColorCard extends HTMLElement {
       } else {
         // Light entity drag completion
         const { entity, moved } = this._dragState;
-        const node = this.shadowRoot.querySelector(`.light[data-entity="${entity}"]`);
+        const node = this.shadowRoot.querySelector(`.light[data-entity="${CSS.escape(entity)}"]`);
         if (node) {
           node.classList.remove('dragging');
           const finalLeft = parseFloat(node.style.left);
@@ -3780,6 +4123,14 @@ class SpatialLightColorCard extends HTMLElement {
     const entity = targetLight.dataset.entity;
     if (!entity) return;
     e.preventDefault();
+    // Cancel any long-press timer started by the matching pointerdown so the
+    // long-press doesn't double-fire `_openMoreInfo` ~500ms after the contextmenu.
+    if (this._longPressTimer) {
+      clearTimeout(this._longPressTimer);
+      this._longPressTimer = null;
+    }
+    this._longPressTriggered = false;
+    this._pendingTap = null;
     this._openMoreInfo(entity);
     this._lastTap = null;
   }
@@ -3814,6 +4165,19 @@ class SpatialLightColorCard extends HTMLElement {
     }
     this._pendingTap = null;
     this._longPressTriggered = false;
+    // Color-wheel gesture state
+    if (this._colorWheelLongPressTimer) {
+      clearTimeout(this._colorWheelLongPressTimer);
+      this._colorWheelLongPressTimer = null;
+    }
+    this._colorWheelLongPressed = false;
+    this._colorWheelLongPressStart = null;
+    this._colorWheelGesture = null;
+    this._colorWheelActive = false;
+    // H12: commit any pending slider value so end-of-gesture survives DOM rebuild.
+    this._activeSliderGesture = null;
+    if (this._pendingBrightness != null) this._handleBrightnessChange();
+    if (this._pendingTemperature != null) this._handleTemperatureChange();
   }
 
   _selectLightsInBox(left, top, width, height) {
@@ -3859,10 +4223,14 @@ class SpatialLightColorCard extends HTMLElement {
 
     const ctx = canvas.getContext('2d');
     if (!ctx) return null;
-    const imageData = ctx.getImageData(Math.floor(x), Math.floor(y), 1, 1);
+    // Clamp to canvas bounds — Firefox throws IndexSizeError when sx === width.
+    const px = Math.max(0, Math.min(canvas.width - 1, Math.floor(x)));
+    const py = Math.max(0, Math.min(canvas.height - 1, Math.floor(y)));
+    let imageData;
+    try { imageData = ctx.getImageData(px, py, 1, 1); }
+    catch (_) { return null; }
     const [r, g, b, a] = imageData.data;
-    if (a === 0) return null; // click outside painted area (shouldn't happen with full wheel)
-
+    if (a === 0) return null; // click outside painted area
     return [r, g, b];
   }
 
@@ -3884,10 +4252,9 @@ class SpatialLightColorCard extends HTMLElement {
   }
 
   _getLiveColors() {
-    const COLOR_TOLERANCE = 30;
+    const COLOR_TOLERANCE = SpatialLightColorCard.COLOR_TOLERANCE;
     const colors = [];
-    // Color modes that indicate an actual RGB color choice (not temperature)
-    const rgbModes = new Set(['hs', 'rgb', 'xy', 'rgbw', 'rgbww']);
+    const rgbModes = SpatialLightColorCard.RGB_COLOR_MODES;
 
     this._config.entities.forEach(id => {
       const st = this._hass?.states?.[id];
@@ -3915,7 +4282,7 @@ class SpatialLightColorCard extends HTMLElement {
   }
 
   _getLiveTemperatures() {
-    const TEMP_TOLERANCE = 100; // Kelvin
+    const TEMP_TOLERANCE = SpatialLightColorCard.TEMP_TOLERANCE;
     const temps = [];
     this._config.entities.forEach(id => {
       const st = this._hass?.states?.[id];
@@ -3984,7 +4351,7 @@ class SpatialLightColorCard extends HTMLElement {
     if (!entityList) return;
     const entities = typeof entityList === 'string' ? entityList.split(',') : entityList;
     entities.forEach(id => {
-      const el = this.shadowRoot.querySelector(`.light[data-entity="${id}"]`);
+      const el = this.shadowRoot.querySelector(`.light[data-entity="${CSS.escape(id)}"]`);
       if (el) el.classList.add('preset-highlight');
     });
   }
@@ -4089,7 +4456,7 @@ class SpatialLightColorCard extends HTMLElement {
       const rgb = st.attributes.rgb_color;
       if (!referenceRgb) {
         referenceRgb = rgb;
-      } else if (this._rgbDistance(referenceRgb, rgb) >= 30) {
+      } else if (this._rgbDistance(referenceRgb, rgb) >= SpatialLightColorCard.COLOR_TOLERANCE) {
         return null;
       }
     }
@@ -4119,7 +4486,7 @@ class SpatialLightColorCard extends HTMLElement {
       anyTempOn = true;
       if (referenceKelvin === null) {
         referenceKelvin = kelvin;
-      } else if (Math.abs(referenceKelvin - kelvin) >= 100) {
+      } else if (Math.abs(referenceKelvin - kelvin) >= SpatialLightColorCard.TEMP_TOLERANCE) {
         return null;
       }
     }
@@ -4135,9 +4502,10 @@ class SpatialLightColorCard extends HTMLElement {
     const allLiveColors = this._getLiveColors();
 
     // Deduplicate live colors against config presets using RGB distance tolerance
+    const TOL = SpatialLightColorCard.COLOR_TOLERANCE;
     const configRgbs = configPresets.map(c => this._hexToRgb(c)).filter(Boolean);
     const filteredLive = showLive
-      ? allLiveColors.filter(lc => !configRgbs.some(cr => this._rgbDistance(cr, lc.rgb) < 30))
+      ? allLiveColors.filter(lc => !configRgbs.some(cr => this._rgbDistance(cr, lc.rgb) < TOL))
       : [];
 
     if (configPresets.length === 0 && filteredLive.length === 0) return '';
@@ -4150,24 +4518,27 @@ class SpatialLightColorCard extends HTMLElement {
       if (!isValidColor(color)) return;
       const rgb = this._hexToRgb(color);
       const matchingEntities = rgb ? allLiveColors
-        .filter(lc => this._rgbDistance(lc.rgb, rgb) < 30)
+        .filter(lc => this._rgbDistance(lc.rgb, rgb) < TOL)
         .flatMap(lc => lc.entities) : [];
       const entitiesAttr = matchingEntities.length ? ` data-preset-entities="${matchingEntities.join(',')}"` : '';
-      const isActive = activeRgb && rgb && this._rgbDistance(rgb, activeRgb) < 30;
-      html += `<div class="color-preset${isActive ? ' active' : ''}" data-preset-color="${color}"${entitiesAttr} style="--preset-color:${color};" title="${color}"></div>`;
+      const isActive = activeRgb && rgb && this._rgbDistance(rgb, activeRgb) < TOL;
+      html += `<div class="color-preset${isActive ? ' active' : ''}" data-preset-color="${color}"${entitiesAttr} style="--preset-color:${color};" title="${color}" tabindex="0" role="button" aria-label="Set color ${color}${isActive ? ', active' : ''}"></div>`;
     });
     filteredLive.forEach(lc => {
-      const isActive = activeRgb && this._rgbDistance(lc.rgb, activeRgb) < 30;
-      html += `<div class="color-preset${isActive ? ' active' : ''}" data-preset-color="${lc.hex}" data-preset-rgb="${lc.rgb.join(',')}" data-preset-entities="${lc.entities.join(',')}" style="--preset-color:${lc.hex};" title="${lc.hex}"></div>`;
+      const isActive = activeRgb && this._rgbDistance(lc.rgb, activeRgb) < TOL;
+      html += `<div class="color-preset${isActive ? ' active' : ''}" data-preset-color="${lc.hex}" data-preset-rgb="${lc.rgb.join(',')}" data-preset-entities="${lc.entities.join(',')}" style="--preset-color:${lc.hex};" title="${lc.hex}" tabindex="0" role="button" aria-label="Set color ${lc.hex}${isActive ? ', active' : ''}"></div>`;
     });
 
     return html;
   }
 
   _kelvinToRgb(kelvin) {
-    // Attempt Tanner Helland approximation
+    // Tanner Helland approximation — accurate enough for a UI swatch.
     if (!Number.isFinite(kelvin) || kelvin <= 0) return [255, 169, 0]; // fallback warm
-    const temp = kelvin / 100;
+    // Clamp to the formula's domain of validity. Outside this range the
+    // approximation produces NaN (log of negatives) or wildly inaccurate values.
+    const k = Math.max(1000, Math.min(40000, kelvin));
+    const temp = k / 100;
     let r, g, b;
     if (temp <= 66) {
       r = 255;
@@ -4195,8 +4566,8 @@ class SpatialLightColorCard extends HTMLElement {
       const rgb = this._kelvinToRgb(t.kelvin);
       const hex = '#' + rgb.map(v => v.toString(16).padStart(2, '0')).join('');
       const entities = t.entities.join(',');
-      const isActive = activeKelvin !== null && Math.abs(t.kelvin - activeKelvin) < 100;
-      html += `<div class="temp-preset${isActive ? ' active' : ''}" data-preset-kelvin="${t.kelvin}" data-preset-entities="${entities}" style="--preset-color:${hex};" title="${t.kelvin}K"><span class="temp-label">${t.kelvin}K</span></div>`;
+      const isActive = activeKelvin !== null && Math.abs(t.kelvin - activeKelvin) < SpatialLightColorCard.TEMP_TOLERANCE;
+      html += `<div class="temp-preset${isActive ? ' active' : ''}" data-preset-kelvin="${t.kelvin}" data-preset-entities="${entities}" style="--preset-color:${hex};" title="${t.kelvin}K" tabindex="0" role="button" aria-label="Set color temperature ${t.kelvin} Kelvin${isActive ? ', active' : ''}"><span class="temp-label">${t.kelvin}K</span></div>`;
     });
 
     return html;
@@ -4313,7 +4684,7 @@ class SpatialLightColorCard extends HTMLElement {
       }
       const entitiesAttr = entities.length ? ` data-preset-entities="${entities.join(',')}"` : '';
       const escapedEffect = this._escapeHtml(preset.effect);
-      html += `<div class="effect-preset${isActive ? ' active' : ''}" data-preset-effect="${escapedEffect}" data-preset-icon="${this._escapeHtml(preset.icon)}"${entitiesAttr} title="${escapedEffect}"><ha-icon icon="${this._escapeHtml(preset.icon)}"></ha-icon><span class="effect-label">${escapedEffect}</span></div>`;
+      html += `<div class="effect-preset${isActive ? ' active' : ''}" data-preset-effect="${escapedEffect}" data-preset-icon="${this._escapeHtml(preset.icon)}"${entitiesAttr} title="${escapedEffect}" tabindex="0" role="button" aria-label="Effect ${escapedEffect}${isActive ? ', active' : ''}"><ha-icon icon="${this._escapeHtml(preset.icon)}"></ha-icon><span class="effect-label">${escapedEffect}</span></div>`;
     });
 
     return html;
@@ -4363,20 +4734,26 @@ class SpatialLightColorCard extends HTMLElement {
       : (this._config.default_entity ? [this._config.default_entity] : []);
     if (controlled.length === 0 || !rgb) return;
 
-    this._pendingColor = rgb;
-    controlled.forEach(entity_id => {
-      this._hass.callService('light', 'turn_on', {
-        entity_id,
-        rgb_color: this._pendingColor,
-      });
-    });
-    this._pendingColor = null;
+    // Filter to lights that support RGB and are available; batched as a single
+    // service call so platforms (Hue, Z2M, deCONZ) can sync the bulbs together.
+    const targets = this._getServiceTargets(controlled, 'rgb');
+    if (targets.length === 0) return;
+    this._hass.callService('light', 'turn_on', {
+      entity_id: targets,
+      rgb_color: rgb,
+    }).catch(err => console.warn('[spatial-light-card] light.turn_on (rgb) failed:', err));
   }
 
   /** ---------- Large color wheel (long-press) ---------- */
   _openLargeColorWheel() {
     this._largeColorWheelOpen = true;
     this._largeColorWheelOpenedAt = Date.now();
+    // M11: when the overlay is opened by a long-press, the user's finger is
+    // still down. The eventual `pointerup` triggers a `click` on the overlay
+    // backdrop, which would close the freshly-opened wheel. Set a suppress
+    // flag that's cleared on the first pointerup, so the open-gesture's
+    // release doesn't immediately close the overlay.
+    this._largeColorWheelSuppressClick = true;
     const overlay = this._els.colorWheelOverlay;
     if (!overlay) return;
 
@@ -4500,7 +4877,12 @@ class SpatialLightColorCard extends HTMLElement {
 
     const ctx = canvas.getContext('2d');
     if (!ctx) return null;
-    const imageData = ctx.getImageData(Math.floor(x), Math.floor(y), 1, 1);
+    // Clamp to canvas bounds — Firefox throws IndexSizeError when sx === width.
+    const px = Math.max(0, Math.min(canvas.width - 1, Math.floor(x)));
+    const py = Math.max(0, Math.min(canvas.height - 1, Math.floor(y)));
+    let imageData;
+    try { imageData = ctx.getImageData(px, py, 1, 1); }
+    catch (_) { return null; }
     const [r, g, b, a] = imageData.data;
     if (a === 0) return null;
     return [r, g, b];
@@ -4663,10 +5045,15 @@ class SpatialLightColorCard extends HTMLElement {
       if (mag) mag.classList.remove('visible');
     });
 
-    // Close on backdrop click
+    // Close on backdrop click — but ignore the synthetic click that fires when
+    // the user releases the long-press that opened the overlay. The flag is
+    // cleared on the document's first pointerup after open (see
+    // `connectedCallback`), so the *next* deliberate backdrop click closes.
     if (overlay) {
       overlay.addEventListener('click', (e) => {
-        if (e.target === overlay && Date.now() - this._largeColorWheelOpenedAt > 500) this._closeLargeColorWheel();
+        if (e.target !== overlay) return;
+        if (this._largeColorWheelSuppressClick) return;
+        this._closeLargeColorWheel();
       });
     }
 
@@ -4682,9 +5069,11 @@ class SpatialLightColorCard extends HTMLElement {
       : (this._config.default_entity ? [this._config.default_entity] : []);
     if (controlled.length === 0 || !Number.isFinite(kelvin)) return;
 
-    controlled.forEach(entity_id => {
-      this._hass.callService('light', 'turn_on', { entity_id, color_temp_kelvin: kelvin });
-    });
+    const targets = this._getServiceTargets(controlled, 'color_temp');
+    if (targets.length > 0) {
+      this._hass.callService('light', 'turn_on', { entity_id: targets, color_temp_kelvin: kelvin })
+        .catch(err => console.warn('[spatial-light-card] light.turn_on (color_temp) failed:', err));
+    }
 
     // Update slider to reflect the new temp
     if (this._els.temperatureSlider) {
@@ -4715,13 +5104,19 @@ class SpatialLightColorCard extends HTMLElement {
     }
     if (targets.length === 0) return;
 
-    targets.forEach(entity_id => {
+    // Filter to available `light.*` entities that actually expose this effect.
+    // Effects vary per bulb so this can't always be a single batched call;
+    // however, lights that share an effect_list usually accept a batched call.
+    const supported = targets.filter(entity_id => {
+      if (!entity_id.startsWith('light.')) return false;
+      if (!this._isEntityAvailable(entity_id)) return false;
       const st = this._hass?.states?.[entity_id];
-      if (!st) return;
-      const effectList = st.attributes.effect_list;
-      if (!Array.isArray(effectList) || !effectList.includes(effectName)) return;
-      this._hass.callService('light', 'turn_on', { entity_id, effect: effectName });
+      const effectList = st && st.attributes.effect_list;
+      return Array.isArray(effectList) && effectList.includes(effectName);
     });
+    if (supported.length === 0) return;
+    this._hass.callService('light', 'turn_on', { entity_id: supported, effect: effectName })
+      .catch(err => console.warn('[spatial-light-card] light.turn_on (effect) failed:', err));
   }
 
   _handleBrightnessInput(e) {
@@ -4747,10 +5142,11 @@ class SpatialLightColorCard extends HTMLElement {
     if (controlled.length === 0) { this._pendingBrightness = null; return; }
 
     const b = this._pendingBrightness;
-    controlled.forEach(entity_id => {
-      this._hass.callService('light', 'turn_on', { entity_id, brightness: b });
-    });
     this._pendingBrightness = null;
+    const targets = this._getServiceTargets(controlled, 'brightness');
+    if (targets.length === 0) return;
+    this._hass.callService('light', 'turn_on', { entity_id: targets, brightness: b })
+      .catch(err => console.warn('[spatial-light-card] light.turn_on (brightness) failed:', err));
   }
 
   _handleTemperatureInput(e) {
@@ -4775,10 +5171,12 @@ class SpatialLightColorCard extends HTMLElement {
       : (this._config.default_entity ? [this._config.default_entity] : []);
     if (controlled.length === 0) { this._pendingTemperature = null; return; }
 
-    controlled.forEach(entity_id => {
-      this._hass.callService('light', 'turn_on', { entity_id, color_temp_kelvin: this._pendingTemperature });
-    });
+    const k = this._pendingTemperature;
     this._pendingTemperature = null;
+    const targets = this._getServiceTargets(controlled, 'color_temp');
+    if (targets.length === 0) return;
+    this._hass.callService('light', 'turn_on', { entity_id: targets, color_temp_kelvin: k })
+      .catch(err => console.warn('[spatial-light-card] light.turn_on (color_temp) failed:', err));
   }
 
   _requestColorWheelDraw(force = false) {
@@ -5387,6 +5785,29 @@ class SpatialLightColorCard extends HTMLElement {
       light.classList.toggle('off', !isOn && !isScene);
       light.classList.toggle('on', isOn || isScene);
 
+      // H10: keep the unavailable class + badge in sync without a full
+      // re-render. The badge is added/removed lazily — most lights stay
+      // available, so we avoid touching DOM when nothing changes.
+      const isUnavailable = st.state === 'unavailable' || st.state === 'unknown';
+      const wasUnavailable = light.classList.contains('unavailable');
+      if (isUnavailable !== wasUnavailable) {
+        light.classList.toggle('unavailable', isUnavailable);
+        light.setAttribute('aria-disabled', isUnavailable ? 'true' : 'false');
+        const friendly = st.attributes.friendly_name || id;
+        light.setAttribute('aria-label', isUnavailable ? `${friendly} (unavailable)` : friendly);
+        let badge = light.querySelector(':scope > .light-status-badge');
+        if (isUnavailable && !badge) {
+          badge = document.createElement('div');
+          badge.className = 'light-status-badge';
+          badge.setAttribute('aria-hidden', 'true');
+          badge.title = 'Unavailable';
+          badge.textContent = '?';
+          light.appendChild(badge);
+        } else if (!isUnavailable && badge) {
+          badge.remove();
+        }
+      }
+
       // Ensure selected styling matches current selection set
       const selected = this._selectedLights.has(id);
       light.classList.toggle('selected', selected);
@@ -5443,7 +5864,7 @@ class SpatialLightColorCard extends HTMLElement {
         if (this._canvasElementCache.get(el.id) === displayValue) return;
         this._canvasElementCache.set(el.id, displayValue);
 
-        const domEl = this.shadowRoot.querySelector(`.canvas-element[data-element-id="${el.id}"]`);
+        const domEl = this.shadowRoot.querySelector(`.canvas-element[data-element-id="${CSS.escape(el.id)}"]`);
         if (!domEl) return;
         const valueEl = domEl.querySelector('.ce-value');
         if (valueEl) valueEl.textContent = displayValue;
@@ -5455,7 +5876,7 @@ class SpatialLightColorCard extends HTMLElement {
   _updateCanvasElement(elementId) {
     const el = this._config.canvas_elements?.find(e => e.id === elementId);
     if (!el) return;
-    const domEl = this.shadowRoot?.querySelector(`.canvas-element[data-element-id="${elementId}"]`);
+    const domEl = this.shadowRoot?.querySelector(`.canvas-element[data-element-id="${CSS.escape(elementId)}"]`);
     if (!domEl) return;
 
     if (el.type === 'template') {
@@ -5472,6 +5893,15 @@ class SpatialLightColorCard extends HTMLElement {
 
     if (!this._hass?.connection) return;
 
+    // H16: race guard. If `_subscribeTemplates` is invoked again before the
+    // previous run's `await` resolves, the older `unsub` would otherwise be
+    // stored into the new run's map (or the new run's `unsub` would be
+    // overwritten by the old). Each invocation gets a generation token; a
+    // stalled await whose generation doesn't match the current one is
+    // immediately unsubscribed and discarded.
+    this._templatesGeneration = (this._templatesGeneration || 0) + 1;
+    const gen = this._templatesGeneration;
+
     const templateElements = (this._config.canvas_elements || [])
       .filter(el => el.type === 'template' && el.content);
 
@@ -5479,6 +5909,8 @@ class SpatialLightColorCard extends HTMLElement {
       try {
         const unsub = await this._hass.connection.subscribeMessage(
           (msg) => {
+            // Stale callback: subscription belongs to a previous generation.
+            if (gen !== this._templatesGeneration) return;
             this._templateResults.set(el.id, msg.result);
             this._updateCanvasElement(el.id);
           },
@@ -5487,10 +5919,17 @@ class SpatialLightColorCard extends HTMLElement {
             template: el.content,
           }
         );
-        this._templateSubscriptions.set(el.id, unsub);
+        if (gen !== this._templatesGeneration) {
+          // We were superseded while awaiting — drop this subscription on the floor.
+          try { unsub(); } catch (_) { /* ignore */ }
+        } else {
+          this._templateSubscriptions.set(el.id, unsub);
+        }
       } catch (err) {
-        // Template rendering may not be available or template may be invalid
-        this._templateResults.set(el.id, '');
+        if (gen === this._templatesGeneration) {
+          // Template rendering may not be available or template may be invalid
+          this._templateResults.set(el.id, '');
+        }
       }
     }
   }
@@ -5545,7 +5984,7 @@ class SpatialLightColorCard extends HTMLElement {
 
     // Colors
     if (this._config.switch_on_color !== '#ffa500') yamlLines.push(`switch_on_color: "${this._config.switch_on_color}"`);
-    if (this._config.switch_off_color !== '#2a2a2a') yamlLines.push(`switch_off_color: "${this._config.switch_off_color}"`);
+    if (this._config.switch_off_color !== '#3a3a3a') yamlLines.push(`switch_off_color: "${this._config.switch_off_color}"`);
     if (this._config.scene_color !== '#6366f1') yamlLines.push(`scene_color: "${this._config.scene_color}"`);
     if (this._config.binary_sensor_on_color !== '#4caf50') yamlLines.push(`binary_sensor_on_color: "${this._config.binary_sensor_on_color}"`);
     if (this._config.binary_sensor_off_color !== '#2a2a2a') yamlLines.push(`binary_sensor_off_color: "${this._config.binary_sensor_off_color}"`);
@@ -5647,19 +6086,34 @@ class SpatialLightColorCard extends HTMLElement {
     return `${yamlLines.join('\n')}\n`;
   }
 
-  getCardSize() { return 8; }
+  // Approximate card size for Lovelace masonry layout. 50px per row of canvas
+  // height + 1 row for the controls area.
+  getCardSize() {
+    const h = (this._config && this._config.canvas_height) || 450;
+    return Math.max(3, Math.ceil(h / 50) + 1);
+  }
+  // Hint to the modern grid/sections layout: full-width works best because
+  // the card has its own internal layout and controls.
+  getLayoutOptions() {
+    return { grid_columns: 4, grid_rows: 'auto', grid_min_columns: 2 };
+  }
   static getConfigElement() {
     return document.createElement('spatial-light-color-card-editor');
   }
-  static getStubConfig() {
+  static getStubConfig(hass, entities) {
+    const lights = Array.isArray(entities)
+      ? entities.filter(e => typeof e === 'string' && e.startsWith('light.')).slice(0, 3)
+      : [];
     return {
-      entities: [], positions: {}, title: '',
+      entities: lights, positions: {}, title: '',
       canvas_height: 450, grid_size: 25, label_mode: 'smart',
       always_show_controls: false, controls_below: true,
       default_entity: null, show_entity_icons: true, icon_style: 'mdi',
       light_size: 56, icon_only_mode: false, size_overrides: {}, icon_only_overrides: {},
       icon_rotation: 0, icon_rotation_overrides: {}, icon_mirror: 'none', icon_mirror_overrides: {},
-      switch_on_color: '#ffa500', switch_off_color: '#2a2a2a', scene_color: '#6366f1',
+      // Aligned with `setConfig` defaults so removing the field from YAML doesn't
+      // visually change the card's appearance.
+      switch_on_color: '#ffa500', switch_off_color: '#3a3a3a', scene_color: '#6366f1',
       binary_sensor_on_color: '#4caf50', binary_sensor_off_color: '#2a2a2a',
       color_presets: [],
       show_live_colors: false,
@@ -5897,10 +6351,6 @@ class SpatialLightColorCardEditor extends HTMLElement {
         if (ep.filter_selected) clean.filter_selected = ep.filter_selected;
         return clean;
       });
-    }
-    // Clean per_light_effects: omit if empty
-    if (config.per_light_effects && Object.keys(config.per_light_effects).length === 0) {
-      delete config.per_light_effects;
     }
     this.dispatchEvent(new CustomEvent('config-changed', {
       detail: { config },
@@ -6455,9 +6905,9 @@ class SpatialLightColorCardEditor extends HTMLElement {
     const styleOverride = (this._config.style_overrides && this._config.style_overrides[entity]) || '';
 
     return `
-      <div class="entity-item ${isExpanded ? 'expanded' : ''}" data-entity="${entity}" data-index="${index}">
+      <div class="entity-item ${isExpanded ? 'expanded' : ''}" data-entity="${this._esc(entity)}" data-index="${index}">
         <div class="entity-main">
-          <ha-icon icon="${icon}"></ha-icon>
+          <ha-icon icon="${this._esc(icon)}"></ha-icon>
           <div class="entity-info">
             <span class="entity-name" data-entity="${entity}">${this._esc(name)}</span>
             <span class="entity-id">${entity}</span>
@@ -6549,16 +6999,24 @@ class SpatialLightColorCardEditor extends HTMLElement {
       wall.x != null && wall.y != null && wall.width != null && wall.height != null;
     const typeLabel = isBox ? 'Box' : 'Line';
 
+    // Coerce every interpolated value to a finite number (or 0). The raw config
+    // could contain anything — strings, HTML, etc. — and these values are
+    // interpolated into both attribute values and inline text.
+    const num = (v) => {
+      const n = typeof v === 'number' ? v : parseFloat(v);
+      return Number.isFinite(n) ? n : 0;
+    };
+
     let summary, vals;
     if (isArray) {
-      vals = { x1: wall[0], y1: wall[1], x2: wall[2], y2: wall[3] };
-      summary = `(${wall[0]}, ${wall[1]}) → (${wall[2]}, ${wall[3]})`;
+      vals = { x1: num(wall[0]), y1: num(wall[1]), x2: num(wall[2]), y2: num(wall[3]) };
+      summary = `(${vals.x1}, ${vals.y1}) → (${vals.x2}, ${vals.y2})`;
     } else if (isBox) {
-      vals = wall;
-      summary = `x:${wall.x} y:${wall.y} ${wall.width}×${wall.height}`;
+      vals = { x: num(wall.x), y: num(wall.y), width: num(wall.width), height: num(wall.height) };
+      summary = `x:${vals.x} y:${vals.y} ${vals.width}×${vals.height}`;
     } else {
-      vals = wall;
-      summary = `(${wall.x1}, ${wall.y1}) → (${wall.x2}, ${wall.y2})`;
+      vals = { x1: num(wall && wall.x1), y1: num(wall && wall.y1), x2: num(wall && wall.x2), y2: num(wall && wall.y2) };
+      summary = `(${vals.x1}, ${vals.y1}) → (${vals.x2}, ${vals.y2})`;
     }
 
     return `
@@ -6623,9 +7081,9 @@ class SpatialLightColorCardEditor extends HTMLElement {
     };
 
     return `
-      <div class="ce-item ${isExpanded ? 'expanded' : ''}" data-ce-id="${el.id}" data-ce-index="${index}">
+      <div class="ce-item ${isExpanded ? 'expanded' : ''}" data-ce-id="${this._esc(el.id)}" data-ce-index="${index}">
         <div class="ce-main">
-          <ha-icon icon="${icon}"></ha-icon>
+          <ha-icon icon="${this._esc(icon)}"></ha-icon>
           <div class="ce-info">
             <span class="ce-name">${this._esc(name)}</span>
             <span class="ce-type-badge">${el.type}</span>
@@ -8505,13 +8963,29 @@ class SpatialLightColorCardEditor extends HTMLElement {
   }
 }
 
-customElements.define('spatial-light-color-card-editor', SpatialLightColorCardEditor);
-customElements.define('spatial-light-color-card', SpatialLightColorCard);
+// Guard against double-registration if this module is loaded more than once
+// (e.g., manual /local/ resource + HACS, or HMR during development).
+if (!customElements.get('spatial-light-color-card-editor')) {
+  customElements.define('spatial-light-color-card-editor', SpatialLightColorCardEditor);
+}
+if (!customElements.get('spatial-light-color-card')) {
+  customElements.define('spatial-light-color-card', SpatialLightColorCard);
+}
 
 window.customCards = window.customCards || [];
-window.customCards.push({
-  type: 'spatial-light-color-card',
-  name: 'Spatial Light Color Card',
-  description: 'Refined spatial light control with intelligent interactions and polished design',
-  preview: true,
-});
+if (!window.customCards.some(c => c && c.type === 'spatial-light-color-card')) {
+  window.customCards.push({
+    type: 'spatial-light-color-card',
+    name: 'Spatial Light Color Card',
+    description: 'Spatial layout for lights with grouped color, brightness, and temperature controls.',
+    preview: true,
+    documentationURL: 'https://github.com/Mihonarium/hass-spatial-lights-card',
+  });
+}
+
+// Console banner — helps users include version info when reporting issues.
+console.info(
+  '%c spatial-light-color-card %c WIP ',
+  'color: #fff; background: #6366f1; font-weight: 700; border-radius: 3px 0 0 3px; padding: 2px 6px;',
+  'color: #6366f1; background: #1e1b4b; border-radius: 0 3px 3px 0; padding: 2px 6px;'
+);

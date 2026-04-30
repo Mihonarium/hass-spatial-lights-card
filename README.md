@@ -196,7 +196,7 @@ Position history stores up to 50 steps.
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `title` | string | `"Lights"` | Card title. |
+| `title` | string | `""` | Card title. When empty, the header is hidden entirely. |
 | `entities` | list | **required** | Entities (lights, switches, input_booleans, scenes) to display. |
 | `positions` | map | `{}` | Per-entity x/y positions from 0–100 (percentage). |
 | `canvas_height` | number | `450` | Canvas height in pixels. |
@@ -205,16 +205,16 @@ Position history stores up to 50 steps.
 | `label_overrides` | map | `{}` | Map entity_id → custom label. |
 | `color_overrides` | map | `{}` | Map entity_id → color string OR object (`state_on`, `state_off`). |
 | `switch_on_color` | string | `"#ffa500"` | Default color for active switches. |
-| `switch_off_color` | string | `"#2a2a2a"` | Default color for inactive switches. |
+| `switch_off_color` | string | `"#3a3a3a"` | Default color for inactive switches. |
 | `scene_color` | string | `"#6366f1"` | Default color for scenes. |
 | `always_show_controls` | boolean | `false` | Always show color controls even when nothing selected. Use if you prefer persistent sliders that are always there even if nothing is selected and there's no default_entity. |
 | `minimal_ui` | boolean | `false` | Hides light circles; shows only icons. Automatically enables `icon_only_mode`. |
 | `controls_below` | boolean | `true` | Render controls below (`true`) or floating over (`false`). |
 | `default_entity` | string | `null` | Entity to control when nothing is selected. |
 | `switch_single_tap` | boolean | `false` | Toggle switches/scenes with a single tap instead of selecting them. |
-| `show_entity_icons` | boolean | `false` | Show MDI icons inside the light circles. |
+| `show_entity_icons` | boolean | `true` | Show MDI icons inside the light circles. |
 | `icon_style` | string | `"mdi"` | Icon style (`mdi` or `emoji`). |
-| `light_size` | number | `56` | Size of light circles in pixels (24-96). |
+| `light_size` | number | `56` | Size of light circles in pixels. On mobile (≤768 px viewport), the rendered size is capped at 50 px regardless of this value. |
 | `icon_only_mode` | boolean | `false` | Display lights as icons only (no filled circles). |
 | `icon_rotation` | number | `0` | Global icon rotation in degrees (0–360). |
 | `icon_rotation_overrides` | map | `{}` | Per-entity icon rotation overrides (e.g., `light.lamp: 90`). |
@@ -222,7 +222,7 @@ Position history stores up to 50 steps.
 | `icon_mirror_overrides` | map | `{}` | Per-entity icon mirror overrides (e.g., `light.lamp: "horizontal"`). |
 | `size_overrides` | map | `{}` | Per-entity size overrides (e.g., `light.lamp: 40`). |
 | `icon_only_overrides` | map | `{}` | Per-entity icon-only mode overrides (e.g., `light.lamp: true`). |
-| `background_image` | string/map | `null` | URL string or object `{url, size, position, blend_mode}`. |
+| `background_image` | string/map | `null` | URL string or object `{url, size, position, repeat, blend_mode, opacity}`. `opacity` accepts 0–1. `repeat` accepts any CSS `background-repeat` value (e.g. `no-repeat`, `repeat`). |
 | `color_presets` | list | `[]` | Hex color strings to show as quick-select circles (e.g., `["#ff0000", "#00ff00"]`). |
 | `show_live_colors` | boolean | `false` | Show the current colors of your lights as additional preset circles. |
 | `effect_presets` | list | `[]` | Named effect presets with icons and optional light restrictions (see [Effect Presets](#-effect-presets)). |
@@ -232,6 +232,7 @@ Position history stores up to 50 steps.
 | `binary_sensor_off_color` | string | `"#2a2a2a"` | Default color for binary sensors in the `off` state. |
 | `temperature_min` | number | `null` | Override minimum Kelvin for temperature slider. |
 | `temperature_max` | number | `null` | Override maximum Kelvin for temperature slider. |
+| `temperature_range` | list/map | `null` | Alternate spelling for the two above. Accepts either `[min, max]` (e.g. `[2200, 6500]`) or `{min: 2200, max: 6500}`. If both forms are provided, the explicit `temperature_min`/`temperature_max` win. |
 | `glow` | map | `{}` | Glow effect configuration (see [Glow Effects](#-glow-effects) section). |
 | `glow_overrides` | map | `{}` | Per-entity glow overrides (e.g., `light.lamp: {direction: 180}`). |
 | `glow_walls` | list | `[]` | Line segments or boxes that block glow expansion (see [Glow Walls](#glow-walls)). |

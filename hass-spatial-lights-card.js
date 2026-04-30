@@ -3627,8 +3627,14 @@ class SpatialLightColorCard extends HTMLElement {
         const toggleOnSingleTap = this._config.switch_single_tap && (domain === 'switch' || domain === 'input_boolean' || domain === 'scene');
         if (isSpace || toggleOnSingleTap) {
           // Space → toggle the entity on/off. Also covers `switch_single_tap`
-          // for Enter, where Enter is supposed to mirror tap.
-          this._toggleEntity(entity);
+          // for Enter, where Enter is supposed to mirror tap. If the focused
+          // light is part of a selection, toggle every selected light at once
+          // so the keyboard matches the rest of the card's bulk-action
+          // semantics. Otherwise, just toggle the focused entity.
+          const targets = (this._selectedLights.size > 0 && this._selectedLights.has(entity))
+            ? [...this._selectedLights]
+            : [entity];
+          targets.forEach(id => this._toggleEntity(id));
         } else if (this._isSelectableEntity(entity)) {
           // Enter → toggle this entity's membership in the selection.
           const newSelection = new Set(this._selectedLights);

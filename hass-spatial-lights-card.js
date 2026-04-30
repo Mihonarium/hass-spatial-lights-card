@@ -3601,11 +3601,13 @@ class SpatialLightColorCard extends HTMLElement {
       if (this._els.colorWheel) this._requestColorWheelDraw();
     }
 
-    // H18: Enter selects the focused light (matching click semantics — modifier
-    // keys add to selection, plain Enter replaces); Space toggles the entity
-    // on/off (matching the "press the button" convention). For non-light
-    // targets (presets, canvas elements) the distinction doesn't apply, so
-    // both keys activate.
+    // H18: Enter selects the focused light (toggles its membership in the
+    // selection — pressing Enter on a sequence of lights builds up a
+    // multi-selection, since keyboard navigation is inherently sequential and
+    // there's no equivalent of holding Shift while clicking each item).
+    // Space toggles the entity on/off ("press the button" convention). For
+    // non-light targets (presets, canvas elements) the distinction doesn't
+    // apply, so both keys activate.
     const isEnter = e.key === 'Enter';
     const isSpace = e.key === ' ' || e.key === 'Spacebar';
     if (isEnter || isSpace) {
@@ -3624,21 +3626,14 @@ class SpatialLightColorCard extends HTMLElement {
         const [domain] = entity.split('.');
         const toggleOnSingleTap = this._config.switch_single_tap && (domain === 'switch' || domain === 'input_boolean' || domain === 'scene');
         if (isSpace || toggleOnSingleTap) {
-          // Space → toggle the entity on/off. Also matches the
-          // `switch_single_tap` behavior where Enter is supposed to mirror tap.
+          // Space → toggle the entity on/off. Also covers `switch_single_tap`
+          // for Enter, where Enter is supposed to mirror tap.
           this._toggleEntity(entity);
         } else if (this._isSelectableEntity(entity)) {
-          // Enter → replace selection with this entity (or toggle membership
-          // when a modifier is held, matching Shift/Ctrl-click).
-          const additive = e.shiftKey || e.ctrlKey || e.metaKey;
+          // Enter → toggle this entity's membership in the selection.
           const newSelection = new Set(this._selectedLights);
-          if (additive) {
-            if (newSelection.has(entity)) newSelection.delete(entity);
-            else newSelection.add(entity);
-          } else {
-            newSelection.clear();
-            newSelection.add(entity);
-          }
+          if (newSelection.has(entity)) newSelection.delete(entity);
+          else newSelection.add(entity);
           this._commitSelection(newSelection);
         }
       } else if (target.classList.contains('color-preset')) {

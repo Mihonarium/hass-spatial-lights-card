@@ -3612,10 +3612,14 @@ class SpatialLightColorCard extends HTMLElement {
       if (this._els.colorWheel) this._requestColorWheelDraw();
     }
 
-    // H18: Enter / Space activate the focused control. Lights toggle (or
-    // select, depending on `switch_single_tap`); presets fire their action;
-    // canvas link/sensor elements run their tap_action.
-    if (e.key === 'Enter' || e.key === ' ' || e.key === 'Spacebar') {
+    // H18: Enter selects the focused light (matching click semantics — modifier
+    // keys add to selection, plain Enter replaces); Space toggles the entity
+    // on/off (matching the "press the button" convention). For non-light
+    // targets (presets, canvas elements) the distinction doesn't apply, so
+    // both keys activate.
+    const isEnter = e.key === 'Enter';
+    const isSpace = e.key === ' ' || e.key === 'Spacebar';
+    if (isEnter || isSpace) {
       const target = path.find(n => n && n.classList && (
         n.classList.contains('light') ||
         n.classList.contains('color-preset') ||
@@ -3630,13 +3634,23 @@ class SpatialLightColorCard extends HTMLElement {
         if (!entity) return;
         const [domain] = entity.split('.');
         const toggleOnSingleTap = this._config.switch_single_tap && (domain === 'switch' || domain === 'input_boolean' || domain === 'scene');
-        if (toggleOnSingleTap || e.shiftKey || e.ctrlKey || e.metaKey) {
+        if (isSpace || toggleOnSingleTap) {
+          // Space → toggle the entity on/off. Also matches the
+          // `switch_single_tap` behavior where Enter is supposed to mirror tap.
           this._toggleEntity(entity);
-        } else {
-          // Toggle selection membership (matches additive Shift-click pattern).
-          if (this._selectedLights.has(entity)) this._selectedLights.delete(entity);
-          else this._selectedLights.add(entity);
-          this.updateLights();
+        } else if (this._isSelectableEntity(entity)) {
+          // Enter → replace selection with this entity (or toggle membership
+          // when a modifier is held, matching Shift/Ctrl-click).
+          const additive = e.shiftKey || e.ctrlKey || e.metaKey;
+          const newSelection = new Set(this._selectedLights);
+          if (additive) {
+            if (newSelection.has(entity)) newSelection.delete(entity);
+            else newSelection.add(entity);
+          } else {
+            newSelection.clear();
+            newSelection.add(entity);
+          }
+          this._commitSelection(newSelection);
         }
       } else if (target.classList.contains('color-preset')) {
         const rgbAttr = target.dataset.presetRgb;

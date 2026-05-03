@@ -5985,8 +5985,16 @@ class SpatialLightColorCard extends HTMLElement {
           // Two-layer box-shadow: a denser inner core + a wider soft
           // outer halo for a richer glow than a single shadow gives.
           // Box-shadow paints without a filter region, so neither layer
-          // creates a clipping rectangle on iOS.
-          haloEl.style.boxShadow = `0 0 10px 3px ${color}, 0 0 28px 6px ${color}`;
+          // creates a clipping rectangle on iOS. Scale with the light's
+          // configured size so larger lights get a proportionally
+          // larger glow.
+          const lightSize = this._config.size_overrides[id] || this._config.light_size;
+          const scale = lightSize / 56;
+          const ib = Math.round(10 * scale);
+          const is = Math.round(3 * scale);
+          const ob = Math.round(28 * scale);
+          const os = Math.round(6 * scale);
+          haloEl.style.boxShadow = `0 0 ${ib}px ${is}px ${color}, 0 0 ${ob}px ${os}px ${color}`;
           haloEl.style.opacity = '1';
         } else {
           haloEl.style.removeProperty('box-shadow');

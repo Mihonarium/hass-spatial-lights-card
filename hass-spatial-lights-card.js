@@ -2150,7 +2150,11 @@ class SpatialLightColorCard extends HTMLElement {
         height: var(--light-size);
         transform: translate(-50%, -50%);
         border-radius: 50%;
-        background-color: var(--light-color, transparent);
+        /* background-color and filter are set inline by updateLights so
+           the values land as literal strings (no var()) and the blur
+           radius can be sub-pixel jittered between updates to force
+           iOS to re-rasterize rather than reuse a cached layer. */
+        background-color: transparent;
         filter: blur(8px);
         opacity: 0;
         pointer-events: none;
@@ -2207,6 +2211,14 @@ class SpatialLightColorCard extends HTMLElement {
          Placed after .selected and .preset-highlight so hover z-index wins on same specificity. */
       .light:hover { z-index: 7; }
 
+      /* Repaint tick: classList mutation that updateLights toggles on
+         each color change. iOS uses classList changes (combined with a
+         computed-style change) as a strong layer-invalidation signal,
+         which inline-style and CSS-variable updates alone don't trigger.
+         Adding a no-op translateZ alternates the transform's computed
+         value without affecting position. Placed before .dragging so
+         the drag scale wins when both classes apply. */
+      .light._repaint-tick { transform: translate(-50%,-50%) translateZ(0); }
       .light.dragging { cursor: grabbing; z-index: 8; transform: translate(-50%,-50%) scale(1.04); }
 
       /* H18: visible focus rings. The card disables outlines elsewhere; these
@@ -5968,15 +5980,32 @@ class SpatialLightColorCard extends HTMLElement {
         }
       }
 
-      // Mobile workaround: iOS / Chrome cache the rasterized output of
-      // `box-shadow: ... var(--light-color) ...` and don't reliably
-      // invalidate when the variable changes. Baking the full shadow
-      // string into a dedicated custom property gives mobile a stronger
-      // invalidation signal than letting var() resolve inside the
-      // shadow. (The colored halo is now on `.light-halo` rather than
-      // inside the icon's drop-shadow filter, which iOS clipped to the
-      // icon's bounding rectangle.)
+      // Mobile cache invalidation. iOS keeps rasterized output of
+      // filter and box-shadow on a cached compositor layer that
+      // doesn't invalidate reliably on inline-style or CSS-variable
+      // changes — only classList mutations on .light flush it (which
+      // is why the user's manual select/deselect workaround works).
+      // Three signals combined: (1) bake values into inline strings
+      // with no var(), (2) sub-pixel jitter the halo's blur radius so
+      // each update produces a distinct filter signature, (3) toggle
+      // a sentinel class on .light whose computed-style change forces
+      // the layer rebuild.
       const isLit = (isOn || isScene) && color !== 'transparent';
+      const repaintTick = (parseInt(light.dataset.repaintTick || '0') + 1) % 2;
+      light.dataset.repaintTick = String(repaintTick);
+      light.classList.toggle('_repaint-tick', repaintTick === 0);
+
+      const haloEl = light.querySelector('.light-halo');
+      if (haloEl) {
+        if (isLit) {
+          haloEl.style.backgroundColor = color;
+          haloEl.style.filter = repaintTick === 0 ? 'blur(8px)' : 'blur(8.001px)';
+        } else {
+          haloEl.style.removeProperty('background-color');
+          haloEl.style.removeProperty('filter');
+        }
+      }
+
       if ((isIconOnly || isMinimalUI) && isLit) {
         light.style.setProperty('--light-shadow-baked', `0 0 8px ${color}`);
         light.style.setProperty('--light-border-baked', color);
@@ -5984,10 +6013,6 @@ class SpatialLightColorCard extends HTMLElement {
         light.style.removeProperty('--light-shadow-baked');
         light.style.removeProperty('--light-border-baked');
       }
-      // Clear any stale inline filter from earlier versions of this fix
-      // that wrote `filter` directly onto the icon — the halo handles
-      // the colored glow now and the icon should fall back to its CSS
-      // (dark drop-shadow only).
       const iconEl = light.querySelector('.light-icon-mdi');
       if (iconEl && iconEl.style.filter) iconEl.style.removeProperty('filter');
 

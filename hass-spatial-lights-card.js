@@ -2014,7 +2014,7 @@ class SpatialLightColorCard extends HTMLElement {
         position: absolute; width: var(--light-size); height: var(--light-size); border-radius: var(--radius-full);
         transform: translate(-50%,-50%); cursor: ${(this._lockPositions && !this._editPositionsMode) ? 'pointer' : 'grab'};
         display:flex; align-items:center; justify-content:center; flex-direction:column;
-        will-change: transform, left, top, background; z-index: 1;
+        will-change: transform, left, top, filter, box-shadow; z-index: 1;
         transition: opacity 200ms ease, filter 200ms ease;
       }
       /* H22: dropped box-shadow and border-color from the transition.

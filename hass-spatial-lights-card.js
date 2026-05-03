@@ -2014,7 +2014,7 @@ class SpatialLightColorCard extends HTMLElement {
         position: absolute; width: var(--light-size); height: var(--light-size); border-radius: var(--radius-full);
         transform: translate(-50%,-50%); cursor: ${(this._lockPositions && !this._editPositionsMode) ? 'pointer' : 'grab'};
         display:flex; align-items:center; justify-content:center; flex-direction:column;
-        will-change: transform, left, top, filter, box-shadow; z-index: 1;
+        z-index: 1;
         transition: opacity 200ms ease, filter 200ms ease;
       }
       /* H22: dropped box-shadow and border-color from the transition.
@@ -2143,26 +2143,25 @@ class SpatialLightColorCard extends HTMLElement {
          the halo has its own bounds so it can extend past the icon
          rectangle without clipping. */
       .light-halo {
+        /* A 2px invisible point whose box-shadow renders the soft
+           colored glow. Using box-shadow instead of filter:blur means
+           there's no filter region — the shadow paints as part of the
+           canvas's normal rendering and isn't clipped to a rectangular
+           layer bounding box. The .light element no longer has
+           will-change either, so neither parent nor halo is promoted
+           to a permanent compositor layer. box-shadow is set inline by
+           updateLights with the color baked in literally. */
         position: absolute;
         left: 50%;
         top: 50%;
-        width: var(--light-size);
-        height: var(--light-size);
+        width: 2px;
+        height: 2px;
         transform: translate(-50%, -50%);
         border-radius: 50%;
-        /* background-color and filter are set inline by updateLights so
-           the values land as literal strings (no var()) and the blur
-           radius can be sub-pixel jittered between updates to force
-           iOS to re-rasterize rather than reuse a cached layer. */
-        background-color: transparent;
-        filter: blur(8px);
+        background: transparent;
         opacity: 0;
         pointer-events: none;
         z-index: -1;
-      }
-      .light.icon-only.on .light-halo,
-      .light.minimal-ui.on .light-halo {
-        opacity: 0.7;
       }
       .canvas.has-selection .light:not(.selected) .light-halo {
         opacity: 0.25 !important;
@@ -2211,14 +2210,6 @@ class SpatialLightColorCard extends HTMLElement {
          Placed after .selected and .preset-highlight so hover z-index wins on same specificity. */
       .light:hover { z-index: 7; }
 
-      /* Repaint tick: classList mutation that updateLights toggles on
-         each color change. iOS uses classList changes (combined with a
-         computed-style change) as a strong layer-invalidation signal,
-         which inline-style and CSS-variable updates alone don't trigger.
-         Adding a no-op translateZ alternates the transform's computed
-         value without affecting position. Placed before .dragging so
-         the drag scale wins when both classes apply. */
-      .light._repaint-tick { transform: translate(-50%,-50%) translateZ(0); }
       .light.dragging { cursor: grabbing; z-index: 8; transform: translate(-50%,-50%) scale(1.04); }
 
       /* H18: visible focus rings. The card disables outlines elsewhere; these
@@ -5980,29 +5971,22 @@ class SpatialLightColorCard extends HTMLElement {
         }
       }
 
-      // Mobile cache invalidation. iOS keeps rasterized output of
-      // filter and box-shadow on a cached compositor layer that
-      // doesn't invalidate reliably on inline-style or CSS-variable
-      // changes — only classList mutations on .light flush it (which
-      // is why the user's manual select/deselect workaround works).
-      // Three signals combined: (1) bake values into inline strings
-      // with no var(), (2) sub-pixel jitter the halo's blur radius so
-      // each update produces a distinct filter signature, (3) toggle
-      // a sentinel class on .light whose computed-style change forces
-      // the layer rebuild.
+      // Set the halo's box-shadow inline with a literal color value.
+      // Box-shadow renders without a filter region (unlike filter:blur),
+      // so it isn't clipped to a rectangular compositor-layer bounding
+      // box on iOS. Combined with removing will-change from .light
+      // (which was forcing a permanent layer with rectangular bounds
+      // around each light), the colored glow now paints naturally and
+      // updates without the stale-cache rectangles.
       const isLit = (isOn || isScene) && color !== 'transparent';
-      const repaintTick = (parseInt(light.dataset.repaintTick || '0') + 1) % 2;
-      light.dataset.repaintTick = String(repaintTick);
-      light.classList.toggle('_repaint-tick', repaintTick === 0);
-
       const haloEl = light.querySelector('.light-halo');
       if (haloEl) {
         if (isLit) {
-          haloEl.style.backgroundColor = color;
-          haloEl.style.filter = repaintTick === 0 ? 'blur(8px)' : 'blur(8.001px)';
+          haloEl.style.boxShadow = `0 0 16px 4px ${color}`;
+          haloEl.style.opacity = '1';
         } else {
-          haloEl.style.removeProperty('background-color');
-          haloEl.style.removeProperty('filter');
+          haloEl.style.removeProperty('box-shadow');
+          haloEl.style.removeProperty('opacity');
         }
       }
 

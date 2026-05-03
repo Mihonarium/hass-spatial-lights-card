@@ -5982,7 +5982,11 @@ class SpatialLightColorCard extends HTMLElement {
       const haloEl = light.querySelector('.light-halo');
       if (haloEl) {
         if (isLit) {
-          haloEl.style.boxShadow = `0 0 16px 4px ${color}`;
+          // Two-layer box-shadow: a denser inner core + a wider soft
+          // outer halo for a richer glow than a single shadow gives.
+          // Box-shadow paints without a filter region, so neither layer
+          // creates a clipping rectangle on iOS.
+          haloEl.style.boxShadow = `0 0 14px 4px ${color}, 0 0 44px 10px ${color}`;
           haloEl.style.opacity = '1';
         } else {
           haloEl.style.removeProperty('box-shadow');

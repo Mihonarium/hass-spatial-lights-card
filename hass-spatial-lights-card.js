@@ -5986,7 +5986,7 @@ class SpatialLightColorCard extends HTMLElement {
           // outer halo for a richer glow than a single shadow gives.
           // Box-shadow paints without a filter region, so neither layer
           // creates a clipping rectangle on iOS.
-          haloEl.style.boxShadow = `0 0 14px 4px ${color}, 0 0 44px 10px ${color}`;
+          haloEl.style.boxShadow = `0 0 10px 3px ${color}, 0 0 28px 6px ${color}`;
           haloEl.style.opacity = '1';
         } else {
           haloEl.style.removeProperty('box-shadow');

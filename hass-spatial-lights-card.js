@@ -2091,7 +2091,11 @@ class SpatialLightColorCard extends HTMLElement {
         filter: drop-shadow(0 1px 4px rgba(0,0,0,0.9)) drop-shadow(0 0 2px rgba(0,0,0,0.5));
       }
       .light.minimal-ui.on .light-icon-mdi {
-        filter: drop-shadow(0 0 6px var(--light-color, #ffa500)) drop-shadow(0 1px 3px rgba(0,0,0,0.8));
+        /* Colored glow comes from .light-halo, not the drop-shadow filter.
+           iOS clipped the var-resolved drop-shadow to the icon's bounding
+           rectangle and cached it, leaving a visible rectangle of stale
+           color around the icon after color changes. */
+        filter: drop-shadow(0 1px 3px rgba(0,0,0,0.8));
       }
       .light.minimal-ui.off .light-icon-mdi {
         color: rgba(255,255,255,0.55);
@@ -2129,6 +2133,35 @@ class SpatialLightColorCard extends HTMLElement {
          so only add extra dimming on the glow itself for stronger visual separation. */
       .canvas.has-selection .light:not(.selected) .light-glow {
         opacity: 0.3 !important;
+      }
+
+      /* Colored halo for icon-only / minimal-ui modes. Replaces the
+         icon's colored drop-shadow filter (which mobile clips to the
+         icon bounding rectangle and caches aggressively). A sibling
+         div with background-color plus a static blur filter keeps the
+         CSS variable in a property mobile invalidates reliably, and
+         the halo has its own bounds so it can extend past the icon
+         rectangle without clipping. */
+      .light-halo {
+        position: absolute;
+        left: 50%;
+        top: 50%;
+        width: var(--light-size);
+        height: var(--light-size);
+        transform: translate(-50%, -50%);
+        border-radius: 50%;
+        background-color: var(--light-color, transparent);
+        filter: blur(8px);
+        opacity: 0;
+        pointer-events: none;
+        z-index: -1;
+      }
+      .light.icon-only.on .light-halo,
+      .light.minimal-ui.on .light-halo {
+        opacity: 0.7;
+      }
+      .canvas.has-selection .light:not(.selected) .light-halo {
+        opacity: 0.25 !important;
       }
 
       .light-icon-emoji { font-size: calc(32px * var(--icon-scale, 1)); line-height: 1; filter: drop-shadow(0 1px 2px rgba(0,0,0,0.6)); transform: var(--icon-transform, none); }
@@ -2830,6 +2863,17 @@ class SpatialLightColorCard extends HTMLElement {
         ? '<div class="light-glow"></div>'
         : '';
 
+      // Halo element for icon-only / minimal-ui modes. Carries the colored
+      // glow via `background-color` + `filter: blur` instead of routing
+      // through `filter: drop-shadow(... var(--light-color) ...)` on the
+      // icon, which iOS clips to the icon's bounding rectangle and caches
+      // aggressively (the user-visible "rectangles restricting the
+      // shadows"). A sibling div has its own bounds and uses `var()` only
+      // in `background-color`, where mobile invalidates reliably.
+      const haloHtml = (isIconOnly || isMinimalUI)
+        ? '<div class="light-halo" aria-hidden="true"></div>'
+        : '';
+
       // Apply per-entity style overrides
       const styleOverride = this._config.style_overrides[entity_id];
       if (styleOverride) {
@@ -2851,6 +2895,7 @@ class SpatialLightColorCard extends HTMLElement {
              aria-label="${this._escapeHtml(ariaLabel)}"
              aria-pressed="${isSelected}"
              aria-disabled="${isUnavailable ? 'true' : 'false'}">
+          ${haloHtml}
           ${glowHtml}
           ${iconData ? this._renderIcon(iconData) : ''}
           <div class="light-label">${this._escapeHtml(label)}</div>
@@ -5923,24 +5968,15 @@ class SpatialLightColorCard extends HTMLElement {
         }
       }
 
-      // Mobile workaround: iOS Safari / Chrome cache the rasterized output
-      // of `filter` and `box-shadow` that use `var(--light-color)` and
-      // don't reliably invalidate when the variable changes — the halo
-      // persists with the old color, and during invalidation the
-      // unfiltered bounding box briefly flashes as a rectangle. Baking
-      // the color into literal values forces a fresh recompute that
-      // mobile handles cleanly.
-      const iconEl = light.querySelector('.light-icon-mdi');
+      // Mobile workaround: iOS / Chrome cache the rasterized output of
+      // `box-shadow: ... var(--light-color) ...` and don't reliably
+      // invalidate when the variable changes. Baking the full shadow
+      // string into a dedicated custom property gives mobile a stronger
+      // invalidation signal than letting var() resolve inside the
+      // shadow. (The colored halo is now on `.light-halo` rather than
+      // inside the icon's drop-shadow filter, which iOS clipped to the
+      // icon's bounding rectangle.)
       const isLit = (isOn || isScene) && color !== 'transparent';
-      if (isMinimalUI && iconEl) {
-        if (isLit) {
-          iconEl.style.filter = `drop-shadow(0 0 6px ${color}) drop-shadow(0 1px 3px rgba(0,0,0,0.8))`;
-        } else {
-          iconEl.style.removeProperty('filter');
-        }
-      } else if (iconEl) {
-        iconEl.style.removeProperty('filter');
-      }
       if ((isIconOnly || isMinimalUI) && isLit) {
         light.style.setProperty('--light-shadow-baked', `0 0 8px ${color}`);
         light.style.setProperty('--light-border-baked', color);
@@ -5948,6 +5984,12 @@ class SpatialLightColorCard extends HTMLElement {
         light.style.removeProperty('--light-shadow-baked');
         light.style.removeProperty('--light-border-baked');
       }
+      // Clear any stale inline filter from earlier versions of this fix
+      // that wrote `filter` directly onto the icon — the halo handles
+      // the colored glow now and the icon should fall back to its CSS
+      // (dark drop-shadow only).
+      const iconEl = light.querySelector('.light-icon-mdi');
+      if (iconEl && iconEl.style.filter) iconEl.style.removeProperty('filter');
 
       light.classList.toggle('off', !isOn && !isScene);
       light.classList.toggle('on', isOn || isScene);

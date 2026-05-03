@@ -2017,7 +2017,13 @@ class SpatialLightColorCard extends HTMLElement {
         will-change: transform, left, top, background; z-index: 1;
         transition: opacity 200ms ease, filter 200ms ease;
       }
-      .light::before { content:''; position:absolute; inset:0; border-radius:inherit; background:inherit; box-shadow: var(--shadow-sm); transition: box-shadow 200ms ease, border-color 200ms ease, border-width 200ms ease, background-color 200ms ease, inset 200ms ease; }
+      /* H22: dropped box-shadow and border-color from the transition.
+         Mobile caches box-shadow color transitions that resolve through
+         var(--light-color) and does not refresh the rendered shadow when
+         the variable changes mid-transition, leaving the old color stuck
+         outside the light. Color changes are instant now; background-color
+         still fades for the body color in standard mode. */
+      .light::before { content:''; position:absolute; inset:0; border-radius:inherit; background:inherit; box-shadow: var(--shadow-sm); transition: border-width 200ms ease, background-color 200ms ease, inset 200ms ease; }
       .light.on::after {
         content:''; position:absolute; inset:-6px; border-radius:inherit; background:inherit; filter: blur(10px);
         opacity: 0.22; z-index: -1;
@@ -2034,11 +2040,11 @@ class SpatialLightColorCard extends HTMLElement {
       .light.icon-only::before {
         background: transparent;
         box-shadow: none;
-        border: 2px solid var(--light-color, rgba(255,255,255,0.3));
+        border: 2px solid var(--light-border-baked, var(--light-color, rgba(255,255,255,0.3)));
       }
       .light.icon-only.on::before {
-        border-color: var(--light-color, #ffa500);
-        box-shadow: 0 0 8px var(--light-color, #ffa500);
+        border-color: var(--light-border-baked, var(--light-color, #ffa500));
+        box-shadow: var(--light-shadow-baked, 0 0 8px var(--light-color, #ffa500));
       }
       .light.icon-only.off::before {
         border-color: rgba(255,255,255,0.25);
@@ -2065,7 +2071,7 @@ class SpatialLightColorCard extends HTMLElement {
       .light.icon-only.selected.on::before {
         border-color: var(--accent-primary);
         background: rgba(99,102,241,0.08);
-        box-shadow: 0 0 0 1px rgba(99,102,241,0.3), 0 0 12px rgba(99,102,241,0.55), 0 0 8px var(--light-color, #ffa500);
+        box-shadow: 0 0 0 1px rgba(99,102,241,0.3), 0 0 12px rgba(99,102,241,0.55), var(--light-shadow-baked, 0 0 8px var(--light-color, #ffa500));
       }
 
       /* Minimal UI mode - hides circles completely, shows only icons */
@@ -2102,7 +2108,7 @@ class SpatialLightColorCard extends HTMLElement {
       .light.minimal-ui.selected.on::before {
         border-color: var(--accent-primary);
         background: rgba(99,102,241,0.08);
-        box-shadow: 0 0 10px rgba(99,102,241,0.45), 0 0 8px var(--light-color, #ffa500);
+        box-shadow: 0 0 10px rgba(99,102,241,0.45), var(--light-shadow-baked, 0 0 8px var(--light-color, #ffa500));
       }
 
       /* Glow element — works in all display modes (cone, round, oval, beam, spotlight, bar) */
@@ -5897,9 +5903,10 @@ class SpatialLightColorCard extends HTMLElement {
       const isIconOnly = this._config.icon_only_overrides[id] !== undefined
         ? this._config.icon_only_overrides[id]
         : this._config.icon_only_mode;
+      const isMinimalUI = !!this._config.minimal_ui;
 
-      if (isIconOnly) {
-        // For icon-only mode, use CSS variable for color
+      if (isIconOnly || isMinimalUI) {
+        // For icon-only or minimal-ui mode, use CSS variable for color
         light.style.background = 'transparent';
         if (color !== 'transparent') {
           light.style.setProperty('--light-color', color);
@@ -5914,6 +5921,32 @@ class SpatialLightColorCard extends HTMLElement {
         } else {
           light.style.background = ''; // Fallback to CSS
         }
+      }
+
+      // Mobile workaround: iOS Safari / Chrome cache the rasterized output
+      // of `filter` and `box-shadow` that use `var(--light-color)` and
+      // don't reliably invalidate when the variable changes — the halo
+      // persists with the old color, and during invalidation the
+      // unfiltered bounding box briefly flashes as a rectangle. Baking
+      // the color into literal values forces a fresh recompute that
+      // mobile handles cleanly.
+      const iconEl = light.querySelector('.light-icon-mdi');
+      const isLit = (isOn || isScene) && color !== 'transparent';
+      if (isMinimalUI && iconEl) {
+        if (isLit) {
+          iconEl.style.filter = `drop-shadow(0 0 6px ${color}) drop-shadow(0 1px 3px rgba(0,0,0,0.8))`;
+        } else {
+          iconEl.style.removeProperty('filter');
+        }
+      } else if (iconEl) {
+        iconEl.style.removeProperty('filter');
+      }
+      if ((isIconOnly || isMinimalUI) && isLit) {
+        light.style.setProperty('--light-shadow-baked', `0 0 8px ${color}`);
+        light.style.setProperty('--light-border-baked', color);
+      } else {
+        light.style.removeProperty('--light-shadow-baked');
+        light.style.removeProperty('--light-border-baked');
       }
 
       light.classList.toggle('off', !isOn && !isScene);

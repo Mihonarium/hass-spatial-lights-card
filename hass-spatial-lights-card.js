@@ -5990,10 +5990,10 @@ class SpatialLightColorCard extends HTMLElement {
           // larger glow.
           const lightSize = this._config.size_overrides[id] || this._config.light_size;
           const scale = lightSize / 56;
-          const ib = Math.round(10 * scale);
-          const is = Math.round(3 * scale);
-          const ob = Math.round(28 * scale);
-          const os = Math.round(6 * scale);
+          const ib = Math.round(12 * scale);
+          const is = Math.round(4 * scale);
+          const ob = Math.round(36 * scale);
+          const os = Math.round(8 * scale);
           haloEl.style.boxShadow = `0 0 ${ib}px ${is}px ${color}, 0 0 ${ob}px ${os}px ${color}`;
           haloEl.style.opacity = '1';
         } else {

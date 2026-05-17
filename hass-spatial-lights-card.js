@@ -2014,10 +2014,16 @@ class SpatialLightColorCard extends HTMLElement {
         position: absolute; width: var(--light-size); height: var(--light-size); border-radius: var(--radius-full);
         transform: translate(-50%,-50%); cursor: ${(this._lockPositions && !this._editPositionsMode) ? 'pointer' : 'grab'};
         display:flex; align-items:center; justify-content:center; flex-direction:column;
-        will-change: transform, left, top, background; z-index: 1;
+        z-index: 1;
         transition: opacity 200ms ease, filter 200ms ease;
       }
-      .light::before { content:''; position:absolute; inset:0; border-radius:inherit; background:inherit; box-shadow: var(--shadow-sm); transition: box-shadow 200ms ease, border-color 200ms ease, border-width 200ms ease, background-color 200ms ease, inset 200ms ease; }
+      /* H22: dropped box-shadow and border-color from the transition.
+         Mobile caches box-shadow color transitions that resolve through
+         var(--light-color) and does not refresh the rendered shadow when
+         the variable changes mid-transition, leaving the old color stuck
+         outside the light. Color changes are instant now; background-color
+         still fades for the body color in standard mode. */
+      .light::before { content:''; position:absolute; inset:0; border-radius:inherit; background:inherit; box-shadow: var(--shadow-sm); transition: border-width 200ms ease, background-color 200ms ease, inset 200ms ease; }
       .light.on::after {
         content:''; position:absolute; inset:-6px; border-radius:inherit; background:inherit; filter: blur(10px);
         opacity: 0.22; z-index: -1;
@@ -2034,11 +2040,11 @@ class SpatialLightColorCard extends HTMLElement {
       .light.icon-only::before {
         background: transparent;
         box-shadow: none;
-        border: 2px solid var(--light-color, rgba(255,255,255,0.3));
+        border: 2px solid var(--light-border-baked, var(--light-color, rgba(255,255,255,0.3)));
       }
       .light.icon-only.on::before {
-        border-color: var(--light-color, #ffa500);
-        box-shadow: 0 0 8px var(--light-color, #ffa500);
+        border-color: var(--light-border-baked, var(--light-color, #ffa500));
+        box-shadow: var(--light-shadow-baked, 0 0 8px var(--light-color, #ffa500));
       }
       .light.icon-only.off::before {
         border-color: rgba(255,255,255,0.25);
@@ -2065,7 +2071,7 @@ class SpatialLightColorCard extends HTMLElement {
       .light.icon-only.selected.on::before {
         border-color: var(--accent-primary);
         background: rgba(99,102,241,0.08);
-        box-shadow: 0 0 0 1px rgba(99,102,241,0.3), 0 0 12px rgba(99,102,241,0.55), 0 0 8px var(--light-color, #ffa500);
+        box-shadow: 0 0 0 1px rgba(99,102,241,0.3), 0 0 12px rgba(99,102,241,0.55), var(--light-shadow-baked, 0 0 8px var(--light-color, #ffa500));
       }
 
       /* Minimal UI mode - hides circles completely, shows only icons */
@@ -2085,7 +2091,11 @@ class SpatialLightColorCard extends HTMLElement {
         filter: drop-shadow(0 1px 4px rgba(0,0,0,0.9)) drop-shadow(0 0 2px rgba(0,0,0,0.5));
       }
       .light.minimal-ui.on .light-icon-mdi {
-        filter: drop-shadow(0 0 6px var(--light-color, #ffa500)) drop-shadow(0 1px 3px rgba(0,0,0,0.8));
+        /* Colored glow comes from .light-halo, not the drop-shadow filter.
+           iOS clipped the var-resolved drop-shadow to the icon's bounding
+           rectangle and cached it, leaving a visible rectangle of stale
+           color around the icon after color changes. */
+        filter: drop-shadow(0 1px 3px rgba(0,0,0,0.8));
       }
       .light.minimal-ui.off .light-icon-mdi {
         color: rgba(255,255,255,0.55);
@@ -2102,7 +2112,7 @@ class SpatialLightColorCard extends HTMLElement {
       .light.minimal-ui.selected.on::before {
         border-color: var(--accent-primary);
         background: rgba(99,102,241,0.08);
-        box-shadow: 0 0 10px rgba(99,102,241,0.45), 0 0 8px var(--light-color, #ffa500);
+        box-shadow: 0 0 10px rgba(99,102,241,0.45), var(--light-shadow-baked, 0 0 8px var(--light-color, #ffa500));
       }
 
       /* Glow element — works in all display modes (cone, round, oval, beam, spotlight, bar) */
@@ -2123,6 +2133,38 @@ class SpatialLightColorCard extends HTMLElement {
          so only add extra dimming on the glow itself for stronger visual separation. */
       .canvas.has-selection .light:not(.selected) .light-glow {
         opacity: 0.3 !important;
+      }
+
+      /* Colored halo for icon-only / minimal-ui modes. Replaces the
+         icon's colored drop-shadow filter (which mobile clips to the
+         icon bounding rectangle and caches aggressively). A sibling
+         div with background-color plus a static blur filter keeps the
+         CSS variable in a property mobile invalidates reliably, and
+         the halo has its own bounds so it can extend past the icon
+         rectangle without clipping. */
+      .light-halo {
+        /* A 2px invisible point whose box-shadow renders the soft
+           colored glow. Using box-shadow instead of filter:blur means
+           there's no filter region — the shadow paints as part of the
+           canvas's normal rendering and isn't clipped to a rectangular
+           layer bounding box. The .light element no longer has
+           will-change either, so neither parent nor halo is promoted
+           to a permanent compositor layer. box-shadow is set inline by
+           updateLights with the color baked in literally. */
+        position: absolute;
+        left: 50%;
+        top: 50%;
+        width: 2px;
+        height: 2px;
+        transform: translate(-50%, -50%);
+        border-radius: 50%;
+        background: transparent;
+        opacity: 0;
+        pointer-events: none;
+        z-index: -1;
+      }
+      .canvas.has-selection .light:not(.selected) .light-halo {
+        opacity: 0.25 !important;
       }
 
       .light-icon-emoji { font-size: calc(32px * var(--icon-scale, 1)); line-height: 1; filter: drop-shadow(0 1px 2px rgba(0,0,0,0.6)); transform: var(--icon-transform, none); }
@@ -2824,6 +2866,17 @@ class SpatialLightColorCard extends HTMLElement {
         ? '<div class="light-glow"></div>'
         : '';
 
+      // Halo element for icon-only / minimal-ui modes. Carries the colored
+      // glow via `background-color` + `filter: blur` instead of routing
+      // through `filter: drop-shadow(... var(--light-color) ...)` on the
+      // icon, which iOS clips to the icon's bounding rectangle and caches
+      // aggressively (the user-visible "rectangles restricting the
+      // shadows"). A sibling div has its own bounds and uses `var()` only
+      // in `background-color`, where mobile invalidates reliably.
+      const haloHtml = (isIconOnly || isMinimalUI)
+        ? '<div class="light-halo" aria-hidden="true"></div>'
+        : '';
+
       // Apply per-entity style overrides
       const styleOverride = this._config.style_overrides[entity_id];
       if (styleOverride) {
@@ -2845,6 +2898,7 @@ class SpatialLightColorCard extends HTMLElement {
              aria-label="${this._escapeHtml(ariaLabel)}"
              aria-pressed="${isSelected}"
              aria-disabled="${isUnavailable ? 'true' : 'false'}">
+          ${haloHtml}
           ${glowHtml}
           ${iconData ? this._renderIcon(iconData) : ''}
           <div class="light-label">${this._escapeHtml(label)}</div>
@@ -5897,9 +5951,10 @@ class SpatialLightColorCard extends HTMLElement {
       const isIconOnly = this._config.icon_only_overrides[id] !== undefined
         ? this._config.icon_only_overrides[id]
         : this._config.icon_only_mode;
+      const isMinimalUI = !!this._config.minimal_ui;
 
-      if (isIconOnly) {
-        // For icon-only mode, use CSS variable for color
+      if (isIconOnly || isMinimalUI) {
+        // For icon-only or minimal-ui mode, use CSS variable for color
         light.style.background = 'transparent';
         if (color !== 'transparent') {
           light.style.setProperty('--light-color', color);
@@ -5915,6 +5970,47 @@ class SpatialLightColorCard extends HTMLElement {
           light.style.background = ''; // Fallback to CSS
         }
       }
+
+      // Set the halo's box-shadow inline with a literal color value.
+      // Box-shadow renders without a filter region (unlike filter:blur),
+      // so it isn't clipped to a rectangular compositor-layer bounding
+      // box on iOS. Combined with removing will-change from .light
+      // (which was forcing a permanent layer with rectangular bounds
+      // around each light), the colored glow now paints naturally and
+      // updates without the stale-cache rectangles.
+      const isLit = (isOn || isScene) && color !== 'transparent';
+      const haloEl = light.querySelector('.light-halo');
+      if (haloEl) {
+        if (isLit) {
+          // Two-layer box-shadow: a denser inner core + a wider soft
+          // outer halo for a richer glow than a single shadow gives.
+          // Box-shadow paints without a filter region, so neither layer
+          // creates a clipping rectangle on iOS. Scale with the light's
+          // configured size so larger lights get a proportionally
+          // larger glow.
+          const lightSize = this._config.size_overrides[id] || this._config.light_size;
+          const scale = lightSize / 56;
+          const ib = Math.round(12 * scale);
+          const is = Math.round(4 * scale);
+          const ob = Math.round(36 * scale);
+          const os = Math.round(8 * scale);
+          haloEl.style.boxShadow = `0 0 ${ib}px ${is}px ${color}, 0 0 ${ob}px ${os}px ${color}`;
+          haloEl.style.opacity = '1';
+        } else {
+          haloEl.style.removeProperty('box-shadow');
+          haloEl.style.removeProperty('opacity');
+        }
+      }
+
+      if ((isIconOnly || isMinimalUI) && isLit) {
+        light.style.setProperty('--light-shadow-baked', `0 0 8px ${color}`);
+        light.style.setProperty('--light-border-baked', color);
+      } else {
+        light.style.removeProperty('--light-shadow-baked');
+        light.style.removeProperty('--light-border-baked');
+      }
+      const iconEl = light.querySelector('.light-icon-mdi');
+      if (iconEl && iconEl.style.filter) iconEl.style.removeProperty('filter');
 
       light.classList.toggle('off', !isOn && !isScene);
       light.classList.toggle('on', isOn || isScene);

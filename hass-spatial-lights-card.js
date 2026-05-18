@@ -115,6 +115,19 @@ class SpatialLightColorCard extends HTMLElement {
     this._elementLongPressTriggered = false;
     this._elementTapTimeout = null;
     this._lastElementTap = null;                // { elementId, time }
+
+    /**
+     * Zigbee2MQTT group detection. Z2M auto-exposes its groups as `light.*`
+     * MQTT entities whose entity-registry `capabilities.group_entities` lists
+     * the member entity IDs. Addressing the group entity triggers a single
+     * Zigbee groupcast — all bulbs respond simultaneously, which a flat
+     * `entity_id: [array]` cannot achieve no matter how it's batched.
+     */
+    this._zigbeeGroups = null;            // Map<sortedMemberKey, groupEntityId>
+    this._zigbeeGroupsLoading = false;
+    this._zigbeeGroupsLoaded = false;
+    this._zigbeeGroupsUnsub = null;       // entity_registry_updated unsubscribe
+    this._zigbeeGroupsRefreshTimer = null;
   }
 
   /** Home Assistant integration */
@@ -1004,7 +1017,11 @@ class SpatialLightColorCard extends HTMLElement {
   set hass(hass) {
     const prev = this._hass;
     this._hass = hass;
-    if (!prev) { this._renderAll(); return; }
+    if (!prev) {
+      this._renderAll();
+      this._initZigbeeGroupTracking();
+      return;
+    }
     // H3: HA fires `set hass` whenever ANY entity in the system changes. Skip
     // the full updateLights pipeline if no entity this card cares about
     // actually changed state. State objects are immutable per HA conventions
@@ -1450,7 +1467,22 @@ class SpatialLightColorCard extends HTMLElement {
     }
     for (const key of Object.keys(byDomain)) {
       const [d, svc] = key.split('.');
-      this._hass.callService(d, svc, { entity_id: byDomain[key] })
+      let entityId = byDomain[key];
+      // For the light domain, cover as much of the set as possible with Z2M
+      // group entities (each emits a single Zigbee groupcast) and send the
+      // leftovers as one batched call.
+      if (d === 'light') {
+        const plan = this._planGroupedDispatch(entityId, null);
+        for (const groupId of plan.groups) {
+          this._hass.callService(d, svc, { entity_id: groupId })
+            .catch(err => console.warn(`[spatial-light-card] ${d}.${svc} (group) failed:`, err));
+        }
+        if (plan.groups.length > 0) {
+          entityId = plan.uncovered.filter(id => id.startsWith('light.'));
+          if (entityId.length === 0) continue;
+        }
+      }
+      this._hass.callService(d, svc, { entity_id: entityId })
         .catch(err => console.warn(`[spatial-light-card] ${d}.${svc} bulk failed:`, err));
     }
   }
@@ -1754,6 +1786,223 @@ class SpatialLightColorCard extends HTMLElement {
       if (capability === 'brightness') return !(modes.length === 1 && modes[0] === 'onoff');
       return true;
     });
+  }
+
+  _planGroupedDispatch(controlled, capability, effectName) {
+    const inputList = Array.isArray(controlled) ? controlled : [];
+    const empty = { groups: [], uncovered: [...inputList] };
+    if (!this._zigbeeGroups || this._zigbeeGroups.size === 0) return empty;
+    if (inputList.length < 2) return empty;
+
+    const lightSet = new Set();
+    for (const id of inputList) if (id.startsWith('light.')) lightSet.add(id);
+    if (lightSet.size < 2) return empty;
+
+    // Eligible groups: members entirely within selection, group entity
+    // available, and group entity supports the requested capability.
+    const candidates = [];
+    for (const [groupId, members] of this._zigbeeGroups) {
+      if (!(members instanceof Set) || members.size < 2) continue;
+      let allIn = true;
+      for (const m of members) { if (!lightSet.has(m)) { allIn = false; break; } }
+      if (!allIn) continue;
+      if (!this._isEntityAvailable(groupId)) continue;
+      if (!this._groupSupportsCapability(groupId, capability, effectName)) continue;
+      candidates.push({ groupId, members });
+    }
+    if (candidates.length === 0) return empty;
+
+    // Choose a covering subset that minimizes
+    //   cost = (# picked groups) + (# selected lights not covered),
+    // i.e. the total number of Zigbee transmissions the platform will emit
+    // (each groupcast is 1, each leftover unicast is 1). Set cover is
+    // NP-hard in general, but with K candidates we only enumerate 2^K
+    // subsets and home setups put K in the single digits. Bitmasks over
+    // the selection make per-subset evaluation O(K). Above the cap we
+    // fall back to greedy (H_d-approximation, suboptimal worst case but
+    // robust for our cost function).
+    const EXACT_CAP = 20;
+    const pickedCands = candidates.length <= EXACT_CAP
+      ? this._optimalCover(candidates, lightSet)
+      : this._greedyCover(candidates, lightSet);
+    if (pickedCands.length === 0) return empty;
+
+    const coveredLights = new Set();
+    for (const cand of pickedCands) for (const m of cand.members) coveredLights.add(m);
+
+    // Uncovered: non-light entities pass through; lights pass through only
+    // if not covered by a picked group.
+    const uncovered = [];
+    for (const id of inputList) {
+      if (id.startsWith('light.') && coveredLights.has(id)) continue;
+      uncovered.push(id);
+    }
+    return { groups: pickedCands.map(c => c.groupId), uncovered };
+  }
+
+  // Optimal cover by exhaustive subset enumeration. Each subset's coverage
+  // is the bitwise OR of its candidates' member-index masks; the cost is
+  // popcount(picked) + (|universe| - popcount(coverage)). For up to 30
+  // selected lights the mask fits in a 32-bit Number; beyond that we use
+  // BigInt so very large selections still work.
+  _optimalCover(candidates, lightSet) {
+    const K = candidates.length;
+    if (K === 0) return [];
+    const universe = [...lightSet];
+    const N = universe.length;
+    const idxOf = new Map(universe.map((id, i) => [id, i]));
+    const useBig = N > 30;
+
+    const masks = new Array(K);
+    if (useBig) {
+      for (let i = 0; i < K; i++) {
+        let m = 0n;
+        for (const id of candidates[i].members) {
+          const idx = idxOf.get(id);
+          if (idx !== undefined) m |= 1n << BigInt(idx);
+        }
+        masks[i] = m;
+      }
+    } else {
+      for (let i = 0; i < K; i++) {
+        let m = 0;
+        for (const id of candidates[i].members) {
+          const idx = idxOf.get(id);
+          if (idx !== undefined) m |= 1 << idx;
+        }
+        masks[i] = m;
+      }
+    }
+
+    const totalSubsets = 1 << K;
+    let bestCost = N;          // empty subset: 0 groups, all uncovered
+    let bestMask = 0;
+    if (useBig) {
+      for (let s = 1; s < totalSubsets; s++) {
+        let cov = 0n;
+        let cnt = 0;
+        for (let i = 0; i < K; i++) {
+          if (s & (1 << i)) { cov |= masks[i]; cnt++; }
+        }
+        let covered = 0;
+        let x = cov;
+        while (x > 0n) { if (x & 1n) covered++; x >>= 1n; }
+        const cost = cnt + N - covered;
+        if (cost < bestCost) { bestCost = cost; bestMask = s; }
+      }
+    } else {
+      for (let s = 1; s < totalSubsets; s++) {
+        let cov = 0;
+        let cnt = 0;
+        for (let i = 0; i < K; i++) {
+          if (s & (1 << i)) { cov |= masks[i]; cnt++; }
+        }
+        // 32-bit Hamming weight (SWAR)
+        let v = cov;
+        v = v - ((v >>> 1) & 0x55555555);
+        v = (v & 0x33333333) + ((v >>> 2) & 0x33333333);
+        const covered = (((v + (v >>> 4)) & 0x0f0f0f0f) * 0x01010101) >>> 24;
+        const cost = cnt + N - covered;
+        if (cost < bestCost) { bestCost = cost; bestMask = s; }
+      }
+    }
+
+    const picked = [];
+    for (let i = 0; i < K; i++) if (bestMask & (1 << i)) picked.push(candidates[i]);
+    return picked;
+  }
+
+  _greedyCover(candidates, lightSet) {
+    const remaining = new Set(lightSet);
+    const remainingCandidates = new Set(candidates);
+    const picked = [];
+    while (remainingCandidates.size > 0) {
+      let best = null;
+      let bestCount = 0;
+      for (const cand of remainingCandidates) {
+        let count = 0;
+        for (const m of cand.members) if (remaining.has(m)) count++;
+        if (count > bestCount) { best = cand; bestCount = count; }
+      }
+      if (!best || bestCount < 2) break;
+      picked.push(best);
+      for (const m of best.members) remaining.delete(m);
+      remainingCandidates.delete(best);
+    }
+    return picked;
+  }
+
+  _groupSupportsCapability(groupId, capability, effectName) {
+    if (!capability) return true;
+    const attrs = this._hass?.states?.[groupId]?.attributes || {};
+    const modes = attrs.supported_color_modes;
+    if (capability === 'rgb') {
+      if (!Array.isArray(modes) || modes.length === 0) return true;
+      return modes.some(m => SpatialLightColorCard.RGB_COLOR_MODES.has(m));
+    }
+    if (capability === 'color_temp') {
+      if (!Array.isArray(modes) || modes.length === 0) return true;
+      return modes.includes('color_temp');
+    }
+    if (capability === 'effect') {
+      const list = attrs.effect_list;
+      return Array.isArray(list) && list.includes(effectName);
+    }
+    return true;
+  }
+
+  async _initZigbeeGroupTracking() {
+    if (this._zigbeeGroupsLoaded || this._zigbeeGroupsLoading) return;
+    this._loadZigbeeGroups();
+    if (this._zigbeeGroupsUnsub || !this._hass?.connection) return;
+    try {
+      this._zigbeeGroupsUnsub = await this._hass.connection.subscribeEvents(
+        () => {
+          if (this._zigbeeGroupsRefreshTimer) clearTimeout(this._zigbeeGroupsRefreshTimer);
+          this._zigbeeGroupsRefreshTimer = setTimeout(() => {
+            this._zigbeeGroupsLoaded = false;
+            this._loadZigbeeGroups();
+          }, 1000);
+        },
+        'entity_registry_updated'
+      );
+    } catch (_) { /* subscription not available — non-fatal */ }
+  }
+
+  async _loadZigbeeGroups() {
+    if (!this._hass || this._zigbeeGroupsLoading) return;
+    this._zigbeeGroupsLoading = true;
+    try {
+      const ents = this._hass.entities || {};
+      const states = this._hass.states || {};
+      // Candidates: mqtt-platform light.* entities. `hass.entities` ships with
+      // the display registry which exposes `platform`; this filters out non-
+      // Z2M lights (Hue, ZHA, etc.) before the heavier per-entity fetch.
+      const candidates = Object.keys(states).filter(id => {
+        if (!id.startsWith('light.')) return false;
+        const reg = ents[id];
+        return reg && reg.platform === 'mqtt';
+      });
+
+      const groups = new Map();
+      await Promise.all(candidates.map(async (id) => {
+        try {
+          const entry = await this._hass.callWS({
+            type: 'config/entity_registry/get',
+            entity_id: id,
+          });
+          const members = entry?.capabilities?.group_entities;
+          if (Array.isArray(members) && members.length >= 2) {
+            groups.set(id, new Set(members));
+          }
+        } catch (_) { /* ignore per-entity failures */ }
+      }));
+
+      this._zigbeeGroups = groups;
+      this._zigbeeGroupsLoaded = true;
+    } finally {
+      this._zigbeeGroupsLoading = false;
+    }
   }
 
   _getControlContext() {
@@ -3416,6 +3665,15 @@ class SpatialLightColorCard extends HTMLElement {
       clearTimeout(this._elementTapTimeout);
       this._elementTapTimeout = null;
     }
+
+    if (this._zigbeeGroupsUnsub) {
+      try { this._zigbeeGroupsUnsub(); } catch (_) { /* ignore */ }
+      this._zigbeeGroupsUnsub = null;
+    }
+    if (this._zigbeeGroupsRefreshTimer) {
+      clearTimeout(this._zigbeeGroupsRefreshTimer);
+      this._zigbeeGroupsRefreshTimer = null;
+    }
   }
 
   _attachEventListeners() {
@@ -4892,14 +5150,19 @@ class SpatialLightColorCard extends HTMLElement {
       : (this._config.default_entity ? [this._config.default_entity] : []);
     if (controlled.length === 0 || !rgb) return;
 
-    // Filter to lights that support RGB and are available; batched as a single
-    // service call so platforms (Hue, Z2M, deCONZ) can sync the bulbs together.
-    const targets = this._getServiceTargets(controlled, 'rgb');
+    // Cover as many selected lights as possible with Z2M group entities so
+    // each group becomes a single Zigbee groupcast; leftover bulbs go out as
+    // a per-entity batched call.
+    const plan = this._planGroupedDispatch(controlled, 'rgb');
+    for (const groupId of plan.groups) {
+      this._hass.callService('light', 'turn_on', { entity_id: groupId, rgb_color: rgb })
+        .catch(err => console.warn('[spatial-light-card] light.turn_on (rgb, group) failed:', err));
+    }
+    if (plan.uncovered.length === 0) return;
+    const targets = this._getServiceTargets(plan.uncovered, 'rgb');
     if (targets.length === 0) return;
-    this._hass.callService('light', 'turn_on', {
-      entity_id: targets,
-      rgb_color: rgb,
-    }).catch(err => console.warn('[spatial-light-card] light.turn_on (rgb) failed:', err));
+    this._hass.callService('light', 'turn_on', { entity_id: targets, rgb_color: rgb })
+      .catch(err => console.warn('[spatial-light-card] light.turn_on (rgb) failed:', err));
   }
 
   /** ---------- Large color wheel (long-press) ---------- */
@@ -5238,10 +5501,17 @@ class SpatialLightColorCard extends HTMLElement {
       : (this._config.default_entity ? [this._config.default_entity] : []);
     if (controlled.length === 0 || !Number.isFinite(kelvin)) return;
 
-    const targets = this._getServiceTargets(controlled, 'color_temp');
-    if (targets.length > 0) {
-      this._hass.callService('light', 'turn_on', { entity_id: targets, color_temp_kelvin: kelvin })
-        .catch(err => console.warn('[spatial-light-card] light.turn_on (color_temp) failed:', err));
+    const plan = this._planGroupedDispatch(controlled, 'color_temp');
+    for (const groupId of plan.groups) {
+      this._hass.callService('light', 'turn_on', { entity_id: groupId, color_temp_kelvin: kelvin })
+        .catch(err => console.warn('[spatial-light-card] light.turn_on (color_temp, group) failed:', err));
+    }
+    if (plan.uncovered.length > 0) {
+      const targets = this._getServiceTargets(plan.uncovered, 'color_temp');
+      if (targets.length > 0) {
+        this._hass.callService('light', 'turn_on', { entity_id: targets, color_temp_kelvin: kelvin })
+          .catch(err => console.warn('[spatial-light-card] light.turn_on (color_temp) failed:', err));
+      }
     }
 
     // Update slider to reflect the new temp
@@ -5284,8 +5554,18 @@ class SpatialLightColorCard extends HTMLElement {
       return Array.isArray(effectList) && effectList.includes(effectName);
     });
     if (supported.length === 0) return;
-    this._hass.callService('light', 'turn_on', { entity_id: supported, effect: effectName })
-      .catch(err => console.warn('[spatial-light-card] light.turn_on (effect) failed:', err));
+    // Try to cover the supporting subset with Z2M groups; remaining bulbs
+    // go via the batched effect call.
+    const plan = this._planGroupedDispatch(supported, 'effect', effectName);
+    for (const groupId of plan.groups) {
+      this._hass.callService('light', 'turn_on', { entity_id: groupId, effect: effectName })
+        .catch(err => console.warn('[spatial-light-card] light.turn_on (effect, group) failed:', err));
+    }
+    const leftover = plan.uncovered.filter(id => supported.includes(id));
+    if (leftover.length > 0) {
+      this._hass.callService('light', 'turn_on', { entity_id: leftover, effect: effectName })
+        .catch(err => console.warn('[spatial-light-card] light.turn_on (effect) failed:', err));
+    }
   }
 
   _handleBrightnessInput(e) {
@@ -5312,7 +5592,13 @@ class SpatialLightColorCard extends HTMLElement {
 
     const b = this._pendingBrightness;
     this._pendingBrightness = null;
-    const targets = this._getServiceTargets(controlled, 'brightness');
+    const plan = this._planGroupedDispatch(controlled, 'brightness');
+    for (const groupId of plan.groups) {
+      this._hass.callService('light', 'turn_on', { entity_id: groupId, brightness: b })
+        .catch(err => console.warn('[spatial-light-card] light.turn_on (brightness, group) failed:', err));
+    }
+    if (plan.uncovered.length === 0) return;
+    const targets = this._getServiceTargets(plan.uncovered, 'brightness');
     if (targets.length === 0) return;
     this._hass.callService('light', 'turn_on', { entity_id: targets, brightness: b })
       .catch(err => console.warn('[spatial-light-card] light.turn_on (brightness) failed:', err));
@@ -5342,7 +5628,13 @@ class SpatialLightColorCard extends HTMLElement {
 
     const k = this._pendingTemperature;
     this._pendingTemperature = null;
-    const targets = this._getServiceTargets(controlled, 'color_temp');
+    const plan = this._planGroupedDispatch(controlled, 'color_temp');
+    for (const groupId of plan.groups) {
+      this._hass.callService('light', 'turn_on', { entity_id: groupId, color_temp_kelvin: k })
+        .catch(err => console.warn('[spatial-light-card] light.turn_on (color_temp, group) failed:', err));
+    }
+    if (plan.uncovered.length === 0) return;
+    const targets = this._getServiceTargets(plan.uncovered, 'color_temp');
     if (targets.length === 0) return;
     this._hass.callService('light', 'turn_on', { entity_id: targets, color_temp_kelvin: k })
       .catch(err => console.warn('[spatial-light-card] light.turn_on (color_temp) failed:', err));

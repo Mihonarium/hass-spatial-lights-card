@@ -1812,12 +1812,110 @@ class SpatialLightColorCard extends HTMLElement {
     }
     if (candidates.length === 0) return empty;
 
-    // Greedy set cover: pick the group with the largest unmatched coverage;
-    // require >=2 new lights per pick since a 1-bulb groupcast saves no
-    // Zigbee airtime vs a unicast in the batched fallback.
-    const remaining = new Set(lightSet);
+    // Choose a covering subset that minimizes
+    //   cost = (# picked groups) + (# selected lights not covered),
+    // i.e. the total number of Zigbee transmissions the platform will emit
+    // (each groupcast is 1, each leftover unicast is 1). Set cover is
+    // NP-hard in general, but with K candidates we only enumerate 2^K
+    // subsets and home setups put K in the single digits. Bitmasks over
+    // the selection make per-subset evaluation O(K). Above the cap we
+    // fall back to greedy (H_d-approximation, suboptimal worst case but
+    // robust for our cost function).
+    const EXACT_CAP = 20;
+    const pickedCands = candidates.length <= EXACT_CAP
+      ? this._optimalCover(candidates, lightSet)
+      : this._greedyCover(candidates, lightSet);
+    if (pickedCands.length === 0) return empty;
+
+    const coveredLights = new Set();
+    for (const cand of pickedCands) for (const m of cand.members) coveredLights.add(m);
+
+    // Uncovered: non-light entities pass through; lights pass through only
+    // if not covered by a picked group.
+    const uncovered = [];
+    for (const id of inputList) {
+      if (id.startsWith('light.') && coveredLights.has(id)) continue;
+      uncovered.push(id);
+    }
+    return { groups: pickedCands.map(c => c.groupId), uncovered };
+  }
+
+  // Optimal cover by exhaustive subset enumeration. Each subset's coverage
+  // is the bitwise OR of its candidates' member-index masks; the cost is
+  // popcount(picked) + (|universe| - popcount(coverage)). For up to 30
+  // selected lights the mask fits in a 32-bit Number; beyond that we use
+  // BigInt so very large selections still work.
+  _optimalCover(candidates, lightSet) {
+    const K = candidates.length;
+    if (K === 0) return [];
+    const universe = [...lightSet];
+    const N = universe.length;
+    const idxOf = new Map(universe.map((id, i) => [id, i]));
+    const useBig = N > 30;
+
+    const masks = new Array(K);
+    if (useBig) {
+      for (let i = 0; i < K; i++) {
+        let m = 0n;
+        for (const id of candidates[i].members) {
+          const idx = idxOf.get(id);
+          if (idx !== undefined) m |= 1n << BigInt(idx);
+        }
+        masks[i] = m;
+      }
+    } else {
+      for (let i = 0; i < K; i++) {
+        let m = 0;
+        for (const id of candidates[i].members) {
+          const idx = idxOf.get(id);
+          if (idx !== undefined) m |= 1 << idx;
+        }
+        masks[i] = m;
+      }
+    }
+
+    const totalSubsets = 1 << K;
+    let bestCost = N;          // empty subset: 0 groups, all uncovered
+    let bestMask = 0;
+    if (useBig) {
+      for (let s = 1; s < totalSubsets; s++) {
+        let cov = 0n;
+        let cnt = 0;
+        for (let i = 0; i < K; i++) {
+          if (s & (1 << i)) { cov |= masks[i]; cnt++; }
+        }
+        let covered = 0;
+        let x = cov;
+        while (x > 0n) { if (x & 1n) covered++; x >>= 1n; }
+        const cost = cnt + N - covered;
+        if (cost < bestCost) { bestCost = cost; bestMask = s; }
+      }
+    } else {
+      for (let s = 1; s < totalSubsets; s++) {
+        let cov = 0;
+        let cnt = 0;
+        for (let i = 0; i < K; i++) {
+          if (s & (1 << i)) { cov |= masks[i]; cnt++; }
+        }
+        // 32-bit Hamming weight (SWAR)
+        let v = cov;
+        v = v - ((v >>> 1) & 0x55555555);
+        v = (v & 0x33333333) + ((v >>> 2) & 0x33333333);
+        const covered = (((v + (v >>> 4)) & 0x0f0f0f0f) * 0x01010101) >>> 24;
+        const cost = cnt + N - covered;
+        if (cost < bestCost) { bestCost = cost; bestMask = s; }
+      }
+    }
+
     const picked = [];
+    for (let i = 0; i < K; i++) if (bestMask & (1 << i)) picked.push(candidates[i]);
+    return picked;
+  }
+
+  _greedyCover(candidates, lightSet) {
+    const remaining = new Set(lightSet);
     const remainingCandidates = new Set(candidates);
+    const picked = [];
     while (remainingCandidates.size > 0) {
       let best = null;
       let bestCount = 0;
@@ -1827,20 +1925,11 @@ class SpatialLightColorCard extends HTMLElement {
         if (count > bestCount) { best = cand; bestCount = count; }
       }
       if (!best || bestCount < 2) break;
-      picked.push(best.groupId);
+      picked.push(best);
       for (const m of best.members) remaining.delete(m);
       remainingCandidates.delete(best);
     }
-    if (picked.length === 0) return empty;
-
-    // Uncovered: non-light entities pass through; lights pass through only
-    // if not covered by a picked group.
-    const uncovered = [];
-    for (const id of inputList) {
-      if (id.startsWith('light.') && !remaining.has(id)) continue;
-      uncovered.push(id);
-    }
-    return { groups: picked, uncovered };
+    return picked;
   }
 
   _groupSupportsCapability(groupId, capability, effectName) {

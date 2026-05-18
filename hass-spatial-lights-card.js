@@ -115,6 +115,19 @@ class SpatialLightColorCard extends HTMLElement {
     this._elementLongPressTriggered = false;
     this._elementTapTimeout = null;
     this._lastElementTap = null;                // { elementId, time }
+
+    /**
+     * Zigbee2MQTT group detection. Z2M auto-exposes its groups as `light.*`
+     * MQTT entities whose entity-registry `capabilities.group_entities` lists
+     * the member entity IDs. Addressing the group entity triggers a single
+     * Zigbee groupcast — all bulbs respond simultaneously, which a flat
+     * `entity_id: [array]` cannot achieve no matter how it's batched.
+     */
+    this._zigbeeGroups = null;            // Map<sortedMemberKey, groupEntityId>
+    this._zigbeeGroupsLoading = false;
+    this._zigbeeGroupsLoaded = false;
+    this._zigbeeGroupsUnsub = null;       // entity_registry_updated unsubscribe
+    this._zigbeeGroupsRefreshTimer = null;
   }
 
   /** Home Assistant integration */
@@ -1004,7 +1017,11 @@ class SpatialLightColorCard extends HTMLElement {
   set hass(hass) {
     const prev = this._hass;
     this._hass = hass;
-    if (!prev) { this._renderAll(); return; }
+    if (!prev) {
+      this._renderAll();
+      this._initZigbeeGroupTracking();
+      return;
+    }
     // H3: HA fires `set hass` whenever ANY entity in the system changes. Skip
     // the full updateLights pipeline if no entity this card cares about
     // actually changed state. State objects are immutable per HA conventions
@@ -1450,7 +1467,14 @@ class SpatialLightColorCard extends HTMLElement {
     }
     for (const key of Object.keys(byDomain)) {
       const [d, svc] = key.split('.');
-      this._hass.callService(d, svc, { entity_id: byDomain[key] })
+      let entityId = byDomain[key];
+      // If the light subset of this call exactly matches a Z2M group, address
+      // the group entity instead — it produces a single Zigbee groupcast.
+      if (d === 'light') {
+        const groupId = this._maybeCollapseToGroup(entityId, null);
+        if (groupId) entityId = groupId;
+      }
+      this._hass.callService(d, svc, { entity_id: entityId })
         .catch(err => console.warn(`[spatial-light-card] ${d}.${svc} bulk failed:`, err));
     }
   }
@@ -1754,6 +1778,102 @@ class SpatialLightColorCard extends HTMLElement {
       if (capability === 'brightness') return !(modes.length === 1 && modes[0] === 'onoff');
       return true;
     });
+  }
+
+  /**
+   * If the user's selection exactly matches the member set of a Z2M group
+   * entity, return that group entity ID — addressing it produces a single
+   * Zigbee groupcast (all bulbs flip on the same radio frame) instead of N
+   * sequential unicasts. Otherwise return null and the caller falls back to
+   * the existing batched call.
+   *
+   * `controlled` is the pre-filter selection (everything the user picked);
+   * we match against the light.* subset so a mixed selection (lights + a
+   * switch, say) can still trigger the collapse for the lights portion.
+   *
+   * `capability` is 'rgb' | 'color_temp' | 'brightness' | 'effect' | null.
+   * If set, we additionally require the group entity itself to advertise
+   * support for that capability.
+   */
+  _maybeCollapseToGroup(controlled, capability, effectName) {
+    if (!this._zigbeeGroups || this._zigbeeGroups.size === 0) return null;
+    if (!Array.isArray(controlled) || controlled.length < 2) return null;
+    const lights = controlled.filter(id => id.startsWith('light.'));
+    if (lights.length < 2) return null;
+    const key = [...new Set(lights)].sort().join(' ');
+    const groupId = this._zigbeeGroups.get(key);
+    if (!groupId) return null;
+    if (!this._isEntityAvailable(groupId)) return null;
+    if (capability) {
+      const attrs = this._hass?.states?.[groupId]?.attributes || {};
+      const modes = attrs.supported_color_modes;
+      if (capability === 'rgb' && Array.isArray(modes) && modes.length > 0
+          && !modes.some(m => SpatialLightColorCard.RGB_COLOR_MODES.has(m))) return null;
+      if (capability === 'color_temp' && Array.isArray(modes) && modes.length > 0
+          && !modes.includes('color_temp')) return null;
+      if (capability === 'effect') {
+        const list = attrs.effect_list;
+        if (!Array.isArray(list) || !list.includes(effectName)) return null;
+      }
+    }
+    return groupId;
+  }
+
+  async _initZigbeeGroupTracking() {
+    if (this._zigbeeGroupsLoaded || this._zigbeeGroupsLoading) return;
+    this._loadZigbeeGroups();
+    if (this._zigbeeGroupsUnsub || !this._hass?.connection) return;
+    try {
+      this._zigbeeGroupsUnsub = await this._hass.connection.subscribeEvents(
+        () => {
+          if (this._zigbeeGroupsRefreshTimer) clearTimeout(this._zigbeeGroupsRefreshTimer);
+          this._zigbeeGroupsRefreshTimer = setTimeout(() => {
+            this._zigbeeGroupsLoaded = false;
+            this._loadZigbeeGroups();
+          }, 1000);
+        },
+        'entity_registry_updated'
+      );
+    } catch (_) { /* subscription not available — non-fatal */ }
+  }
+
+  async _loadZigbeeGroups() {
+    if (!this._hass || this._zigbeeGroupsLoading) return;
+    this._zigbeeGroupsLoading = true;
+    try {
+      const ents = this._hass.entities || {};
+      const states = this._hass.states || {};
+      // Candidates: mqtt-platform light.* entities. `hass.entities` ships with
+      // the display registry which exposes `platform`; this filters out non-
+      // Z2M lights (Hue, ZHA, etc.) before the heavier per-entity fetch.
+      const candidates = Object.keys(states).filter(id => {
+        if (!id.startsWith('light.')) return false;
+        const reg = ents[id];
+        return reg && reg.platform === 'mqtt';
+      });
+
+      const groups = new Map();
+      await Promise.all(candidates.map(async (id) => {
+        try {
+          const entry = await this._hass.callWS({
+            type: 'config/entity_registry/get',
+            entity_id: id,
+          });
+          const members = entry?.capabilities?.group_entities;
+          if (Array.isArray(members) && members.length >= 2) {
+            const key = [...new Set(members)].sort().join(' ');
+            // If two groups happen to share the exact same member set, keep the
+            // first — deterministic and rare.
+            if (!groups.has(key)) groups.set(key, id);
+          }
+        } catch (_) { /* ignore per-entity failures */ }
+      }));
+
+      this._zigbeeGroups = groups;
+      this._zigbeeGroupsLoaded = true;
+    } finally {
+      this._zigbeeGroupsLoading = false;
+    }
   }
 
   _getControlContext() {
@@ -3416,6 +3536,15 @@ class SpatialLightColorCard extends HTMLElement {
       clearTimeout(this._elementTapTimeout);
       this._elementTapTimeout = null;
     }
+
+    if (this._zigbeeGroupsUnsub) {
+      try { this._zigbeeGroupsUnsub(); } catch (_) { /* ignore */ }
+      this._zigbeeGroupsUnsub = null;
+    }
+    if (this._zigbeeGroupsRefreshTimer) {
+      clearTimeout(this._zigbeeGroupsRefreshTimer);
+      this._zigbeeGroupsRefreshTimer = null;
+    }
   }
 
   _attachEventListeners() {
@@ -4892,8 +5021,15 @@ class SpatialLightColorCard extends HTMLElement {
       : (this._config.default_entity ? [this._config.default_entity] : []);
     if (controlled.length === 0 || !rgb) return;
 
-    // Filter to lights that support RGB and are available; batched as a single
-    // service call so platforms (Hue, Z2M, deCONZ) can sync the bulbs together.
+    // If the selection matches a Z2M group exactly, address the group entity
+    // (single MQTT publish → Zigbee groupcast → all bulbs respond on the same
+    // radio frame). Otherwise fall back to a batched multi-entity call.
+    const groupId = this._maybeCollapseToGroup(controlled, 'rgb');
+    if (groupId) {
+      this._hass.callService('light', 'turn_on', { entity_id: groupId, rgb_color: rgb })
+        .catch(err => console.warn('[spatial-light-card] light.turn_on (rgb, group) failed:', err));
+      return;
+    }
     const targets = this._getServiceTargets(controlled, 'rgb');
     if (targets.length === 0) return;
     this._hass.callService('light', 'turn_on', {
@@ -5238,10 +5374,16 @@ class SpatialLightColorCard extends HTMLElement {
       : (this._config.default_entity ? [this._config.default_entity] : []);
     if (controlled.length === 0 || !Number.isFinite(kelvin)) return;
 
-    const targets = this._getServiceTargets(controlled, 'color_temp');
-    if (targets.length > 0) {
-      this._hass.callService('light', 'turn_on', { entity_id: targets, color_temp_kelvin: kelvin })
-        .catch(err => console.warn('[spatial-light-card] light.turn_on (color_temp) failed:', err));
+    const groupId = this._maybeCollapseToGroup(controlled, 'color_temp');
+    if (groupId) {
+      this._hass.callService('light', 'turn_on', { entity_id: groupId, color_temp_kelvin: kelvin })
+        .catch(err => console.warn('[spatial-light-card] light.turn_on (color_temp, group) failed:', err));
+    } else {
+      const targets = this._getServiceTargets(controlled, 'color_temp');
+      if (targets.length > 0) {
+        this._hass.callService('light', 'turn_on', { entity_id: targets, color_temp_kelvin: kelvin })
+          .catch(err => console.warn('[spatial-light-card] light.turn_on (color_temp) failed:', err));
+      }
     }
 
     // Update slider to reflect the new temp
@@ -5284,7 +5426,9 @@ class SpatialLightColorCard extends HTMLElement {
       return Array.isArray(effectList) && effectList.includes(effectName);
     });
     if (supported.length === 0) return;
-    this._hass.callService('light', 'turn_on', { entity_id: supported, effect: effectName })
+    const groupId = this._maybeCollapseToGroup(targets, 'effect', effectName);
+    const entityId = groupId || supported;
+    this._hass.callService('light', 'turn_on', { entity_id: entityId, effect: effectName })
       .catch(err => console.warn('[spatial-light-card] light.turn_on (effect) failed:', err));
   }
 
@@ -5312,6 +5456,12 @@ class SpatialLightColorCard extends HTMLElement {
 
     const b = this._pendingBrightness;
     this._pendingBrightness = null;
+    const groupId = this._maybeCollapseToGroup(controlled, 'brightness');
+    if (groupId) {
+      this._hass.callService('light', 'turn_on', { entity_id: groupId, brightness: b })
+        .catch(err => console.warn('[spatial-light-card] light.turn_on (brightness, group) failed:', err));
+      return;
+    }
     const targets = this._getServiceTargets(controlled, 'brightness');
     if (targets.length === 0) return;
     this._hass.callService('light', 'turn_on', { entity_id: targets, brightness: b })
@@ -5342,6 +5492,12 @@ class SpatialLightColorCard extends HTMLElement {
 
     const k = this._pendingTemperature;
     this._pendingTemperature = null;
+    const groupId = this._maybeCollapseToGroup(controlled, 'color_temp');
+    if (groupId) {
+      this._hass.callService('light', 'turn_on', { entity_id: groupId, color_temp_kelvin: k })
+        .catch(err => console.warn('[spatial-light-card] light.turn_on (color_temp, group) failed:', err));
+      return;
+    }
     const targets = this._getServiceTargets(controlled, 'color_temp');
     if (targets.length === 0) return;
     this._hass.callService('light', 'turn_on', { entity_id: targets, color_temp_kelvin: k })

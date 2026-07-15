@@ -7032,6 +7032,16 @@ class SpatialLightColorCard extends HTMLElement {
     yamlLines.push(`controls_below: ${!!this._config.controls_below}`);
     yamlLines.push(`show_entity_icons: ${!!this._config.show_entity_icons}`);
     yamlLines.push(`switch_single_tap: ${!!this._config.switch_single_tap}`);
+    if (this._config.canvas_touch_scroll === false) yamlLines.push('canvas_touch_scroll: false');
+    if (this._config.theme_mode && this._config.theme_mode !== 'auto') {
+      yamlLines.push(`theme_mode: ${this._config.theme_mode}`);
+    }
+    if (this._config.theme && Object.keys(this._config.theme).length > 0) {
+      yamlLines.push('theme:');
+      for (const [k, v] of Object.entries(this._config.theme)) {
+        yamlLines.push(typeof v === 'string' ? `  ${k}: "${v}"` : `  ${k}: ${v}`);
+      }
+    }
     yamlLines.push(`icon_style: ${this._config.icon_style}`);
     if (this._config.default_entity) yamlLines.push(`default_entity: ${this._config.default_entity}`);
     if (Number.isFinite(this._config.temperature_min)) yamlLines.push(`temperature_min: ${this._config.temperature_min}`);
@@ -8565,6 +8575,128 @@ class SpatialLightColorCardEditor extends HTMLElement {
           </div>
         </div>
 
+        <!-- Appearance Section -->
+        <div class="section${(config.theme_mode && config.theme_mode !== 'auto') || (config.theme && Object.keys(config.theme).length) ? '' : ' collapsed'}" id="section-appearance">
+          <div class="section-header" data-section="appearance">
+            <h3>Appearance</h3>
+            <span class="chevron">&#9660;</span>
+          </div>
+          <div class="section-body">
+            <div class="input-row">
+              <label for="cfgThemeMode">Theme</label>
+              <select id="cfgThemeMode">
+                <option value="auto">Auto (follow dashboard theme)</option>
+                <option value="dark">Dark (original look)</option>
+                <option value="light">Light</option>
+              </select>
+              <div class="sublabel">Auto picks up your Home Assistant theme's colors, card background, and corner radius — including translucent "glass" themes.</div>
+            </div>
+            <div class="option-row">
+              <div><div class="label">Frosted Glass Panels</div><div class="sublabel">Translucent, blurred control panels and header</div></div>
+              <ha-switch id="cfgThemeGlass"></ha-switch>
+            </div>
+            <div class="two-col">
+              <div class="input-row">
+                <label for="cfgThemeGlassBlur">Glass Blur (px)</label>
+                <input type="number" id="cfgThemeGlassBlur" min="0" max="60" step="1" placeholder="16">
+              </div>
+              <div class="input-row">
+                <label for="cfgThemeRadius">Corner Radius (px)</label>
+                <input type="number" id="cfgThemeRadius" min="0" max="48" step="1" placeholder="Theme default">
+              </div>
+            </div>
+            <div class="input-row">
+              <label>Accent Color</label>
+              <div class="color-input-row">
+                <input type="color" id="cfgThemeAccentPicker" value="${this._esc((config.theme && config.theme.accent_color) || '#6366f1')}">
+                <input type="text" id="cfgThemeAccent" placeholder="Theme default">
+              </div>
+              <div class="sublabel">Selection rings, focus outlines, and slider fill</div>
+            </div>
+            <div class="two-col">
+              <div class="input-row">
+                <label>Card Background</label>
+                <div class="color-input-row">
+                  <input type="color" id="cfgThemeCardBgPicker" value="#0a0a0a">
+                  <input type="text" id="cfgThemeCardBg" placeholder="Theme default">
+                </div>
+              </div>
+              <div class="input-row">
+                <label>Canvas Background</label>
+                <div class="color-input-row">
+                  <input type="color" id="cfgThemeCanvasBgPicker" value="#0a0a0a">
+                  <input type="text" id="cfgThemeCanvasBg" placeholder="Theme default">
+                </div>
+              </div>
+            </div>
+            <div class="two-col">
+              <div class="input-row">
+                <label>Controls Background</label>
+                <div class="color-input-row">
+                  <input type="color" id="cfgThemeControlsBgPicker" value="#141414">
+                  <input type="text" id="cfgThemeControlsBg" placeholder="Theme default">
+                </div>
+              </div>
+              <div class="input-row">
+                <label>Slider Track</label>
+                <div class="color-input-row">
+                  <input type="color" id="cfgThemeSliderTrackPicker" value="#1a1a1a">
+                  <input type="text" id="cfgThemeSliderTrack" placeholder="Theme default">
+                </div>
+              </div>
+            </div>
+            <div class="two-col">
+              <div class="input-row">
+                <label>Text Color</label>
+                <div class="color-input-row">
+                  <input type="color" id="cfgThemeTextPicker" value="#ffffff">
+                  <input type="text" id="cfgThemeText" placeholder="Theme default">
+                </div>
+              </div>
+              <div class="input-row">
+                <label>Secondary Text</label>
+                <div class="color-input-row">
+                  <input type="color" id="cfgThemeText2Picker" value="#b3b3b3">
+                  <input type="text" id="cfgThemeText2" placeholder="Theme default">
+                </div>
+              </div>
+            </div>
+            <div class="two-col">
+              <div class="input-row">
+                <label>Border Color</label>
+                <div class="color-input-row">
+                  <input type="color" id="cfgThemeBorderPicker" value="#2a2a2a">
+                  <input type="text" id="cfgThemeBorder" placeholder="Theme default">
+                </div>
+              </div>
+              <div class="input-row">
+                <label>Grid Dots</label>
+                <div class="color-input-row">
+                  <input type="color" id="cfgThemeGridPicker" value="#2a2a2a">
+                  <input type="text" id="cfgThemeGrid" placeholder="Theme default">
+                </div>
+              </div>
+            </div>
+            <div class="two-col">
+              <div class="input-row">
+                <label>Label Background</label>
+                <div class="color-input-row">
+                  <input type="color" id="cfgThemeLabelBgPicker" value="#1f1f1f">
+                  <input type="text" id="cfgThemeLabelBg" placeholder="Theme default">
+                </div>
+              </div>
+              <div class="input-row">
+                <label>Label Text</label>
+                <div class="color-input-row">
+                  <input type="color" id="cfgThemeLabelTextPicker" value="#ffffff">
+                  <input type="text" id="cfgThemeLabelText" placeholder="Theme default">
+                </div>
+              </div>
+            </div>
+            <div class="sublabel">All colors accept any CSS color (hex, rgb(), rgba(), color names). Leave a field empty to use the theme's value.</div>
+          </div>
+        </div>
+
         <!-- Colors Section -->
         <div class="section collapsed" id="section-colors">
           <div class="section-header" data-section="colors">
@@ -8930,6 +9062,29 @@ class SpatialLightColorCardEditor extends HTMLElement {
     setVal('cfgAspectRatio', c.aspect_ratio || '');
     setVal('cfgGridSize', c.grid_size || 25);
     setVal('cfgLabelMode', c.label_mode === 'friendly_name' ? 'full' : (c.label_mode || 'smart'));
+
+    // Appearance (theme)
+    const th = c.theme || {};
+    setVal('cfgThemeMode', c.theme_mode || 'auto');
+    setVal('cfgThemeGlassBlur', th.glass_blur != null ? th.glass_blur : '');
+    setVal('cfgThemeRadius', th.border_radius != null ? parseFloat(th.border_radius) : '');
+    const themePairs = {
+      cfgThemeAccent: th.accent_color,
+      cfgThemeCardBg: th.card_background,
+      cfgThemeCanvasBg: th.canvas_background,
+      cfgThemeControlsBg: th.controls_background,
+      cfgThemeSliderTrack: th.slider_track,
+      cfgThemeText: th.text_color,
+      cfgThemeText2: th.secondary_text_color,
+      cfgThemeBorder: th.border_color,
+      cfgThemeGrid: th.grid_color,
+      cfgThemeLabelBg: th.label_background,
+      cfgThemeLabelText: th.label_text,
+    };
+    for (const [id, val] of Object.entries(themePairs)) {
+      setVal(id, val || '');
+      if (val && /^#[0-9a-fA-F]{6}$/.test(val)) setVal(`${id}Picker`, val);
+    }
     setVal('cfgLightSize', c.light_size || 56);
 
     const lsv = root.getElementById('cfgLightSizeValue');
@@ -9038,6 +9193,7 @@ class SpatialLightColorCardEditor extends HTMLElement {
       cfgControlsBelow: c.controls_below !== false,
       cfgSwitchTap: c.switch_single_tap || false,
       cfgCanvasTouchScroll: c.canvas_touch_scroll !== false,
+      cfgThemeGlass: !!(c.theme && c.theme.glass),
       cfgGlowEnabled: !!(g.enabled),
       cfgGlowScaleBrightness: g.scale_with_brightness !== false,
     };
@@ -9385,6 +9541,39 @@ class SpatialLightColorCardEditor extends HTMLElement {
     this._bindSwitch('cfgControlsBelow', 'controls_below');
     this._bindSwitch('cfgSwitchTap', 'switch_single_tap');
     this._bindSwitch('cfgCanvasTouchScroll', 'canvas_touch_scroll');
+
+    // --- Appearance (theme) ---
+    const themeModeEl = root.getElementById('cfgThemeMode');
+    if (themeModeEl) {
+      themeModeEl.addEventListener('change', () => {
+        if (themeModeEl.value === 'auto') delete this._config.theme_mode;
+        else this._config.theme_mode = themeModeEl.value;
+        this._fireConfigChanged();
+      });
+    }
+    const themeGlassEl = root.getElementById('cfgThemeGlass');
+    if (themeGlassEl) {
+      themeGlassEl.addEventListener('change', () => this._setThemeKey('glass', themeGlassEl.checked));
+    }
+    this._bindNumberInput('cfgThemeGlassBlur', (val) => {
+      if (val == null) this._setThemeKey('glass_blur', null);
+      else if (val >= 0 && val <= 60) this._setThemeKey('glass_blur', val);
+    });
+    this._bindNumberInput('cfgThemeRadius', (val) => {
+      if (val == null) this._setThemeKey('border_radius', null);
+      else if (val >= 0 && val <= 48) this._setThemeKey('border_radius', val);
+    });
+    this._bindThemeColor('cfgThemeAccent', 'cfgThemeAccentPicker', 'accent_color');
+    this._bindThemeColor('cfgThemeCardBg', 'cfgThemeCardBgPicker', 'card_background');
+    this._bindThemeColor('cfgThemeCanvasBg', 'cfgThemeCanvasBgPicker', 'canvas_background');
+    this._bindThemeColor('cfgThemeControlsBg', 'cfgThemeControlsBgPicker', 'controls_background');
+    this._bindThemeColor('cfgThemeSliderTrack', 'cfgThemeSliderTrackPicker', 'slider_track');
+    this._bindThemeColor('cfgThemeText', 'cfgThemeTextPicker', 'text_color');
+    this._bindThemeColor('cfgThemeText2', 'cfgThemeText2Picker', 'secondary_text_color');
+    this._bindThemeColor('cfgThemeBorder', 'cfgThemeBorderPicker', 'border_color');
+    this._bindThemeColor('cfgThemeGrid', 'cfgThemeGridPicker', 'grid_color');
+    this._bindThemeColor('cfgThemeLabelBg', 'cfgThemeLabelBgPicker', 'label_background');
+    this._bindThemeColor('cfgThemeLabelText', 'cfgThemeLabelTextPicker', 'label_text');
 
     // Light size slider
     const lsSlider = root.getElementById('cfgLightSize');
@@ -10023,6 +10212,47 @@ class SpatialLightColorCardEditor extends HTMLElement {
         if (val) { this._config.style_overrides[entity] = val; }
         else { delete this._config.style_overrides[entity]; }
       });
+    });
+  }
+
+  /** Set/delete a key under config.theme, pruning the object when empty. */
+  _setThemeKey(key, val) {
+    if (!this._config.theme || typeof this._config.theme !== 'object') this._config.theme = {};
+    if (val === '' || val == null || val === false) {
+      delete this._config.theme[key];
+    } else {
+      this._config.theme[key] = val;
+    }
+    if (Object.keys(this._config.theme).length === 0) delete this._config.theme;
+    this._fireConfigChanged();
+  }
+
+  /**
+   * Like _bindColorPair, but nested under config.theme and with "empty means
+   * inherit from the theme" semantics instead of a hardcoded fallback.
+   */
+  _bindThemeColor(textId, pickerId, key) {
+    const root = this.shadowRoot;
+    const textEl = root.getElementById(textId);
+    const pickerEl = root.getElementById(pickerId);
+    if (!textEl || !pickerEl) return;
+
+    let timer = null;
+    const commit = (val) => {
+      this._setThemeKey(key, val.trim());
+      if (/^#[0-9a-fA-F]{6}$/.test(val.trim())) pickerEl.value = val.trim();
+    };
+    textEl.addEventListener('input', () => {
+      clearTimeout(timer);
+      timer = setTimeout(() => commit(textEl.value), 400);
+    });
+    textEl.addEventListener('change', () => {
+      clearTimeout(timer);
+      commit(textEl.value);
+    });
+    pickerEl.addEventListener('input', () => {
+      textEl.value = pickerEl.value;
+      this._setThemeKey(key, pickerEl.value);
     });
   }
 

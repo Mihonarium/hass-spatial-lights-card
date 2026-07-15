@@ -93,12 +93,14 @@ resources:
 |--------|---------|--------|
 | Select a single light | Click | Tap |
 | Add/remove from selection | Shift+Click, Ctrl+Click, or Cmd+Click | — |
-| Select area (marquee) | Click and drag on empty canvas | Tap and drag on empty canvas |
+| Select area (marquee) | Click and drag on empty canvas | Touch and drag **sideways** on empty canvas |
 | Add area to selection | Shift/Ctrl/Cmd + drag on empty canvas | — |
 | Select all lights | Ctrl+A / Cmd+A | — |
 | Deselect all | Click/tap empty canvas, or press Escape | Tap empty canvas |
 
 When lights are selected, the color wheel, brightness slider, and temperature slider control all selected lights as a group. If you have a **default entity** configured, the controls affect that entity when nothing is selected.
+
+> **Note:** On touch devices, mostly-vertical swipes over the canvas scroll the dashboard (and pinch zooms) instead of starting a selection, so the card doesn't trap the page. Start the drag sideways to draw a marquee. Set `canvas_touch_scroll: false` to reserve every canvas touch for selection instead.
 
 ### Toggling Lights On/Off
 
@@ -147,8 +149,8 @@ The more-info panel is the standard Home Assistant entity dialog where you can s
 Lights are **locked** by default. To reposition them:
 
 1. Open the card editor (pencil icon on the dashboard).
-2. Toggle **Unlock Positions** in the card settings (or use the lock/unlock button if available).
-3. Drag lights to their new positions.
+2. Toggle **Edit Positions** in the card settings.
+3. Drag lights to their new positions on the preview — changes flow into the editor automatically; press **Save** to persist them.
 
 | Action | Desktop | Mobile |
 |--------|---------|--------|
@@ -199,9 +201,13 @@ Position history stores up to 50 steps.
 | `title` | string | `""` | Card title. When empty, the header is hidden entirely. |
 | `entities` | list | **required** | Entities (lights, switches, input_booleans, scenes) to display. |
 | `positions` | map | `{}` | Per-entity x/y positions from 0–100 (percentage). |
-| `canvas_height` | number | `450` | Canvas height in pixels. |
+| `canvas_height` | number | `450` | Canvas height in pixels. Ignored when `aspect_ratio` is set. |
+| `aspect_ratio` | string | `null` | Optional `"W:H"` (e.g. `"16:9"`, `"1200x800"`). The canvas derives its height from its width so positions stay glued to a floor-plan background at any card width. |
 | `grid_size` | number | `25` | Grid spacing in pixels when snapping. |
-| `label_mode` | string | `"smart"` | Label generation mode (`smart`, `friendly_name`, `entity_id`). |
+| `label_mode` | string | `"smart"` | Light label style: `smart` (compact abbreviation), `full` (alias `friendly_name`), `initials`, `entity_id`, `none`. |
+| `canvas_touch_scroll` | boolean | `true` | Vertical touch swipes on the canvas scroll the page (marquee needs a sideways drag). Set `false` to reserve all canvas touches for selection. |
+| `theme_mode` | string | `"auto"` | `auto` follows your HA theme (including glass themes), `dark` keeps the card's original dark palette, `light` is a fixed light palette. |
+| `theme` | map | `{}` | Fine-grained appearance overrides — see [Theming](#-theming). |
 | `label_overrides` | map | `{}` | Map entity_id → custom label. |
 | `color_overrides` | map | `{}` | Map entity_id → color string OR object (`state_on`, `state_off`). |
 | `switch_on_color` | string | `"#ffa500"` | Default color for active switches. |
@@ -308,6 +314,8 @@ background_image:
   position: "center"
   blend_mode: "overlay" # Optional CSS blend mode
 ```
+
+> **Tip:** for floor plans, also set `aspect_ratio` to your image's ratio (e.g. `aspect_ratio: "4:3"`) and `size: "100% 100%"`. Without it, `cover` crops the image differently at each card width, so a light positioned over the sofa on desktop can drift over a wall on the phone.
 
 ### Light Size
 Customize the size of light circles globally or per-entity.
@@ -680,20 +688,49 @@ Both can be configured in the visual editor — global CSS in the **Custom CSS**
 
 ## 🎨 Visual Options
 
-### Floating Controls (Default)
-<!--```yaml
-controls_below: false
-```-->
-- Controls appear over the canvas when lights are selected.
-- Minimal overlay that hides automatically when nothing is selected.
-
-### Controls Below the Canvas
+### Controls Below the Canvas (Default)
 <!--```yaml
 controls_below: true
 always_show_controls: true
 ```-->
 - Controls remain visible below the layout for quick access.
 - Ideal when you never want controls to cover the floor plan.
+
+### Floating Controls
+<!--```yaml
+controls_below: false
+```-->
+- Controls appear over the canvas when lights are selected.
+- Minimal overlay that hides automatically when nothing is selected.
+
+---
+
+## 🎭 Theming
+
+By default (`theme_mode: auto`) the card follows your dashboard's Home Assistant theme: card background, text and accent colors, dividers, and corner radius all come from the theme — including translucent "glass" themes, where the canvas stays transparent so the blurred card background shows through. Use `theme_mode: dark` to keep the card's original fixed dark look regardless of theme, or `theme_mode: light` for a fixed light palette.
+
+Everything can be fine-tuned under `theme:` (also available in the visual editor's **Appearance** section):
+
+```yaml
+theme_mode: auto
+theme:
+  accent_color: "#22c1a3"        # selection rings, focus outlines, slider fill
+  card_background: "#101418"     # ha-card + default canvas background
+  canvas_background: "transparent"
+  controls_background: "rgba(30,34,40,0.8)"
+  slider_track: "#2a2e34"
+  text_color: "#f5f7fa"
+  secondary_text_color: "rgba(245,247,250,0.7)"
+  border_color: "rgba(255,255,255,0.14)"
+  grid_color: "rgba(255,255,255,0.05)"
+  label_background: "rgba(20,22,26,0.75)"
+  label_text: "#ffffff"
+  border_radius: 20              # px
+  glass: true                    # frosted, blurred control panels + header
+  glass_blur: 18                 # px, default 16
+```
+
+All color values accept any CSS color. Every key is optional — leave one out to inherit it from the active theme. For a "Liquid Glass" look on a glass-themed dashboard, `theme_mode: auto` plus `theme: { glass: true }` is usually all you need.
 
 ---
 

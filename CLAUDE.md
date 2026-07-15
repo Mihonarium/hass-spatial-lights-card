@@ -23,7 +23,11 @@
 - Mobile (`@media (max-width: 768px)`): flex-wrap row. Wheel order 1, presets order 2 with `max-width: calc(100% - 140px)`, sliders order 3 at full width.
 - Floating vs below: `controls_below: true` (default) renders the controls block after the canvas; otherwise they're absolutely positioned over the canvas with mobile-aware insets.
 
-**Slider gesture (`_bindSliderGesture`):** Pointer-down captures and immediately calls `_applyPointerValue(el, clientX)`. Pointermove follows the finger, with a 6 px / `dy > dx` heuristic that releases capture and reverts the value when the user is actually trying to scroll the page. Pointerup commits via `_handleBrightnessChange()` or `_handleTemperatureChange()`. The active gesture is recorded in `this._activeSliderGesture` so `_updateControlValues` skips clobbering the value while the user's finger is down.
+**Slider gesture (`_bindSliderGesture`):** Pointer-down captures and immediately calls `_applyPointerValue(el, clientX)`. Pointermove follows the finger, with a 6 px / `dy > dx` heuristic that releases capture and reverts the value when the user is actually trying to scroll the page. Pointerup commits via `_handleBrightnessChange()` or `_handleTemperatureChange()`. The active gesture is recorded in `this._activeSliderGesture` so `_updateControlValues` skips clobbering the value while the user's finger is down. Keyboard-driven `change` events commit through `_scheduleSliderCommit` (150 ms trailing debounce).
+
+**Service-call throttling:** Live mouse drags on the mini wheel go through `_applyColorWheelSelectionLive` (leading+trailing throttle, ~7 calls/sec); the pointerup commit calls `_applyColorWheelSelection` directly after `_cancelLiveWheelThrottle()` so a stale trailing color never lands after the final one.
+
+**Theming:** `_themeTokens()` emits the `:host` CSS custom properties per `theme_mode` (`auto` maps HA theme variables with the original dark palette as fallbacks and derives elevation surfaces via `color-mix`; `dark`/`light` are fixed palettes), then appends user `theme.*` overrides. In auto mode without a `card_background` override, the `ha-card` background is NOT overridden so native theme styling (incl. glass backdrop-filter) applies. All components consume tokens only — never hardcoded colors.
 
 **Visual updates:**
 - `_updateSliderVisual(el)` — sets `--slider-percent` / `--slider-ratio` from `value`/`min`/`max`.
@@ -77,9 +81,10 @@
 **Pointer events (`_attachEventListeners`):** All canvas pointer events flow into `_onPointerDown` / `_onPointerMove` / `_onPointerUp` / `_onPointerCancel`. `_handleCanvasContextMenu` opens more-info on right-click and clears any pending long-press.
 
 **Modes:**
-- Locked (default `_lockPositions = true`): tap → select / toggle (per `switch_single_tap`); 500 ms long-press → more-info.
-- Unlocked (`_editPositionsMode = true`): tap → select; drag → reposition. Arrow keys nudge selected lights when unlocked.
-- Rubber-band: a pointerdown on empty canvas grows a `.selection-box` and updates `_selectedLights` via `_selectLightsInBox`.
+- Locked (default `_lockPositions = true`): tap → select / toggle (per `switch_single_tap`); 500 ms long-press → more-info. The canvas gets `touch-action: pan-y pinch-zoom` (class `touch-scroll`, gated by `canvas_touch_scroll`) so vertical swipes scroll the page.
+- Edit positions (`_editPositionsMode`): tap → select; drag → reposition; arrow keys nudge. This is **editor-session state, never config**: the editor broadcasts `spatial-card-edit-mode` window events (and answers `spatial-card-preview-hello` from recreated preview cards); only a card inside `hui-card-preview` (`_isInsideEditorPreview`) honors them. Legacy `_edit_positions`/`_editor_id` keys in saved configs are ignored by the card and stripped by the editor.
+- Rubber-band: a pointerdown on empty canvas arms `_selectionStart`/`_selectionPointerId`; the `.selection-box` materializes only after 5 px of movement (so browser scroll takeovers keep the selection), hit-testing is rAF-coalesced and diffed, and a completed tap (not pointerdown) is what deselects.
+- Preset hold-to-preview sets `_suppressPresetClick` so the synthesized click on release never applies the preset.
 
 **Cancellation:** `_cancelActiveInteractions()` is the single sink for "abort everything." It releases capture, clears `_dragState`, all timers, magnifier state, color-wheel gesture, and commits any pending slider value. It's called from `_onPointerCancel`, `disconnectedCallback`-equivalent (via `_cancelActiveInteractions`), `visibilitychange` (when `document.hidden`), `window.blur`, and at the top of `_renderAll`.
 

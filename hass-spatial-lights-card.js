@@ -3794,7 +3794,7 @@ class SpatialLightColorCard extends HTMLElement {
     el.addEventListener('pointerdown', (e) => {
       // Prevent default browser dragging to ensure we handle the gesture
       e.preventDefault();
-      el.setPointerCapture(e.pointerId);
+      try { el.setPointerCapture(e.pointerId); } catch (_) { /* pointer may already be gone */ }
 
       state.pointerId = e.pointerId;
       state.startX = e.clientX;
@@ -4119,7 +4119,7 @@ class SpatialLightColorCard extends HTMLElement {
           longPressActive: true,  // defer all color application while long-press might fire
         };
         e.preventDefault();
-        e.target.setPointerCapture?.(e.pointerId);
+        try { e.target.setPointerCapture?.(e.pointerId); } catch (_) { /* pointer may already be gone */ }
 
         // Long-press detection for large color wheel
         if (this._colorWheelLongPressTimer) clearTimeout(this._colorWheelLongPressTimer);
@@ -4513,7 +4513,7 @@ class SpatialLightColorCard extends HTMLElement {
     // Right-click (2) and middle-click (1) should not start drags or long-press
     // timers — `_handleCanvasContextMenu` handles right-click separately.
     if (e.pointerType === 'mouse' && e.button !== 0) return;
-    e.target.setPointerCapture?.(e.pointerId);
+    try { e.target.setPointerCapture?.(e.pointerId); } catch (_) { /* pointer may already be gone */ }
 
     const targetLight = e.target.closest('.light');
     if (targetLight) {
@@ -5943,7 +5943,7 @@ class SpatialLightColorCard extends HTMLElement {
 
     canvas.addEventListener('pointerdown', (e) => {
       e.preventDefault();
-      e.target.setPointerCapture?.(e.pointerId);
+      try { e.target.setPointerCapture?.(e.pointerId); } catch (_) { /* pointer may already be gone */ }
 
       const color = this._getLargeWheelColorAtEvent(e);
       this._largeWheelGesture = { pointerId: e.pointerId, pendingColor: color };

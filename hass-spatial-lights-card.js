@@ -30,6 +30,16 @@ class SpatialLightColorCard extends HTMLElement {
     this._selectionBase = null;
     this._selectionRaf = null;          // coalesces rubber-band hit-testing to one run/frame
     this._pendingSelectionRect = null;
+    /**
+     * Touch hold-to-select: with canvas_touch_scroll, the browser owns
+     * vertical pans, so a diagonal box-select would be reclaimed as a
+     * scroll mid-drag. Holding still briefly on empty canvas arms the
+     * marquee instead; from that point touchmove is preventDefault-ed so
+     * the browser can no longer take the gesture, and the box can be
+     * dragged in any direction.
+     */
+    this._selectionHoldTimer = null;
+    this._selectionTouchArmed = false;
 
     /** UI state */
     this._yamlModalOpen = false;
@@ -3971,6 +3981,11 @@ class SpatialLightColorCard extends HTMLElement {
       cancelAnimationFrame(this._selectionRaf);
       this._selectionRaf = null;
     }
+    if (this._selectionHoldTimer) {
+      clearTimeout(this._selectionHoldTimer);
+      this._selectionHoldTimer = null;
+    }
+    this._selectionTouchArmed = false;
     if (this._boundIconsetAdded && typeof window !== 'undefined') {
       window.removeEventListener('iron-iconset-added', this._boundIconsetAdded);
       this._boundIconsetAdded = null;
@@ -4073,6 +4088,12 @@ class SpatialLightColorCard extends HTMLElement {
       this._els.canvas.addEventListener('pointermove', (e) => this._onPointerMove(e));
       this._els.canvas.addEventListener('pointerup', (e) => this._onPointerUp(e));
       this._els.canvas.addEventListener('pointercancel', (e) => this._onPointerCancel(e));
+      // Non-passive on purpose: once a hold has armed the marquee, the
+      // browser must be kept from reclaiming the gesture as a scroll —
+      // touch-action alone can't express "pan-y until further notice".
+      this._els.canvas.addEventListener('touchmove', (e) => {
+        if (this._selectionTouchArmed) e.preventDefault();
+      }, { passive: false });
       this._els.canvas.addEventListener('dblclick', (e) => this._handleCanvasDoubleClick(e));
       this._els.canvas.addEventListener('contextmenu', (e) => this._handleCanvasContextMenu(e));
       // Reposition labels when hovering over lights (delegated, deferred to next frame
@@ -4695,6 +4716,33 @@ class SpatialLightColorCard extends HTMLElement {
       this._selectionPointerId = e.pointerId;
       this._selectionModeAdditive = e.shiftKey || e.ctrlKey || e.metaKey;
       this._selectionBase = this._selectionModeAdditive ? new Set(this._selectedLights) : null;
+
+      // Touch: holding still briefly arms an any-direction marquee. Without
+      // this, only sideways drags survive — the browser reclaims anything
+      // vertical-ish for scrolling (touch-action: pan-y) and cancels the box.
+      if (e.pointerType === 'touch' || e.pointerType === 'pen') {
+        if (this._selectionHoldTimer) clearTimeout(this._selectionHoldTimer);
+        this._selectionHoldTimer = setTimeout(() => {
+          this._selectionHoldTimer = null;
+          if (!this._selectionStart || this._selectionPointerId == null) return;
+          this._selectionTouchArmed = true;
+          if (typeof navigator !== 'undefined' && navigator.vibrate) navigator.vibrate(15);
+          // Materialize the box right away as the "selection mode" cue.
+          if (!this._selectionBox) {
+            this._selectionBox = document.createElement('div');
+            this._selectionBox.className = 'selection-box';
+            Object.assign(this._selectionBox.style, {
+              left: `${this._selectionStart.x}px`, top: `${this._selectionStart.y}px`,
+              width: '0px', height: '0px',
+            });
+            this._els.canvas.appendChild(this._selectionBox);
+            if (!this._selectionModeAdditive && this._selectedLights.size > 0) {
+              this._selectedLights.clear();
+              this.updateLights();
+            }
+          }
+        }, 300);
+      }
     }
   }
 
@@ -4759,6 +4807,18 @@ class SpatialLightColorCard extends HTMLElement {
         }
       });
       return;
+    }
+
+    // A drag that starts moving before the hold completes is either a page
+    // scroll (browser will cancel us) or an immediate sideways marquee —
+    // either way it's no longer a hold, so disarm the hold timer.
+    if (this._selectionHoldTimer && this._selectionStart && e.pointerId === this._selectionPointerId) {
+      const dxh = e.clientX - this._selectionStart.clientX;
+      const dyh = e.clientY - this._selectionStart.clientY;
+      if (Math.hypot(dxh, dyh) > 10) {
+        clearTimeout(this._selectionHoldTimer);
+        this._selectionHoldTimer = null;
+      }
     }
 
     // Lazily materialize the rubber-band once the armed pointer commits to a
@@ -4861,6 +4921,11 @@ class SpatialLightColorCard extends HTMLElement {
     }
 
     if (this._selectionStart && e.pointerId === this._selectionPointerId) {
+      if (this._selectionHoldTimer) {
+        clearTimeout(this._selectionHoldTimer);
+        this._selectionHoldTimer = null;
+      }
+      this._selectionTouchArmed = false;
       if (this._selectionBox) {
         // Rubber-band completed. Flush any hit-test still waiting on its
         // frame so the final selection matches the box the user released.
@@ -4999,6 +5064,12 @@ class SpatialLightColorCard extends HTMLElement {
   }
 
   _handleCanvasContextMenu(e) {
+    // An armed hold-to-select marquee owns the gesture: Android fires
+    // contextmenu from the same long-press (~500ms) that armed us at 300ms.
+    if (this._selectionTouchArmed) {
+      e.preventDefault();
+      return;
+    }
     // Canvas elements: prevent default context menu
     const targetElement = e.target.closest('.canvas-element');
     if (targetElement) {
@@ -5053,6 +5124,11 @@ class SpatialLightColorCard extends HTMLElement {
       this._selectionRaf = null;
     }
     this._pendingSelectionRect = null;
+    if (this._selectionHoldTimer) {
+      clearTimeout(this._selectionHoldTimer);
+      this._selectionHoldTimer = null;
+    }
+    this._selectionTouchArmed = false;
     if (this._longPressTimer) {
       clearTimeout(this._longPressTimer);
       this._longPressTimer = null;

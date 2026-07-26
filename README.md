@@ -93,14 +93,14 @@ resources:
 |--------|---------|--------|
 | Select a single light | Click | Tap |
 | Add/remove from selection | Shift+Click, Ctrl+Click, or Cmd+Click | — |
-| Select area (marquee) | Click and drag on empty canvas | Touch and drag **sideways** on empty canvas |
+| Select area (marquee) | Click and drag on empty canvas | **Hold empty canvas briefly (~0.3 s), then drag** — or drag sideways right away |
 | Add area to selection | Shift/Ctrl/Cmd + drag on empty canvas | — |
 | Select all lights | Ctrl+A / Cmd+A | — |
 | Deselect all | Click/tap empty canvas, or press Escape | Tap empty canvas |
 
 When lights are selected, the color wheel, brightness slider, and temperature slider control all selected lights as a group. If you have a **default entity** configured, the controls affect that entity when nothing is selected.
 
-> **Note:** On touch devices, mostly-vertical swipes over the canvas scroll the dashboard (and pinch zooms) instead of starting a selection, so the card doesn't trap the page. Start the drag sideways to draw a marquee. Set `canvas_touch_scroll: false` to reserve every canvas touch for selection instead.
+> **Note:** On touch devices, swipes over the canvas scroll the dashboard (and pinch zooms) instead of starting a selection, so the card doesn't trap the page. To draw a marquee, **hold your finger still on empty canvas for a moment** — a short vibration and the selection box appearing confirm it — then drag in any direction. (A drag that starts sideways immediately also works.) Set `canvas_touch_scroll: false` to reserve every canvas touch for selection instead.
 
 ### Toggling Lights On/Off
 

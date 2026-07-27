@@ -31,15 +31,17 @@ class SpatialLightColorCard extends HTMLElement {
     this._selectionRaf = null;          // coalesces rubber-band hit-testing to one run/frame
     this._pendingSelectionRect = null;
     /**
-     * Touch hold-to-select: with canvas_touch_scroll, the browser owns
-     * vertical pans, so a diagonal box-select would be reclaimed as a
-     * scroll mid-drag. Holding still briefly on empty canvas arms the
-     * marquee instead; from that point touchmove is preventDefault-ed so
-     * the browser can no longer take the gesture, and the box can be
-     * dragged in any direction.
+     * Touch gesture arbitration for empty-canvas drags. With
+     * canvas_touch_scroll the canvas is touch-action:auto and WE decide who
+     * owns the gesture on the first cancelable touchmove (_handleCanvasTouchMove):
+     * clearly-vertical movement is declined to the browser (native scroll,
+     * we get pointercancel), anything else is claimed with preventDefault
+     * and stays a marquee for the whole drag. 'select' | 'scroll' | null.
+     * A ~300ms still hold (_selectionHoldTimer) claims 'select' outright,
+     * for deliberately vertical box drags.
      */
     this._selectionHoldTimer = null;
-    this._selectionTouchArmed = false;
+    this._selectionTouchClaim = null;
 
     /** UI state */
     this._yamlModalOpen = false;
@@ -2580,10 +2582,12 @@ class SpatialLightColorCard extends HTMLElement {
           : `height: ${this._config.canvas_height}px;`}
         overflow: hidden; user-select: none; touch-action: none;
       }
-      /* Locked mode with canvas_touch_scroll: let the browser own vertical
-         pans and pinch zoom; horizontal-ish drags still reach the rubber-band.
+      /* Locked mode with canvas_touch_scroll: touch-action auto, with gesture
+         ownership decided in JS (_handleCanvasTouchMove) on the first
+         cancelable touchmove — pan-y's own heuristic reclaimed any drag with
+         early vertical movement, i.e. most attempts to draw a selection box.
          Edit mode keeps touch-action:none so drags aren't stolen by scroll. */
-      .canvas.touch-scroll { touch-action: pan-y pinch-zoom; }
+      .canvas.touch-scroll { touch-action: auto; }
       .canvas::before {
         content: ''; position: absolute; inset: 0;
         background-image: var(--canvas-background-image, none);
@@ -3985,7 +3989,7 @@ class SpatialLightColorCard extends HTMLElement {
       clearTimeout(this._selectionHoldTimer);
       this._selectionHoldTimer = null;
     }
-    this._selectionTouchArmed = false;
+    this._selectionTouchClaim = null;
     if (this._boundIconsetAdded && typeof window !== 'undefined') {
       window.removeEventListener('iron-iconset-added', this._boundIconsetAdded);
       this._boundIconsetAdded = null;
@@ -4088,12 +4092,9 @@ class SpatialLightColorCard extends HTMLElement {
       this._els.canvas.addEventListener('pointermove', (e) => this._onPointerMove(e));
       this._els.canvas.addEventListener('pointerup', (e) => this._onPointerUp(e));
       this._els.canvas.addEventListener('pointercancel', (e) => this._onPointerCancel(e));
-      // Non-passive on purpose: once a hold has armed the marquee, the
-      // browser must be kept from reclaiming the gesture as a scroll —
-      // touch-action alone can't express "pan-y until further notice".
-      this._els.canvas.addEventListener('touchmove', (e) => {
-        if (this._selectionTouchArmed) e.preventDefault();
-      }, { passive: false });
+      // Non-passive on purpose: the first cancelable touchmove is the one
+      // chance to claim the gesture before the browser starts scrolling.
+      this._els.canvas.addEventListener('touchmove', (e) => this._handleCanvasTouchMove(e), { passive: false });
       this._els.canvas.addEventListener('dblclick', (e) => this._handleCanvasDoubleClick(e));
       this._els.canvas.addEventListener('contextmenu', (e) => this._handleCanvasContextMenu(e));
       // Reposition labels when hovering over lights (delegated, deferred to next frame
@@ -4717,15 +4718,17 @@ class SpatialLightColorCard extends HTMLElement {
       this._selectionModeAdditive = e.shiftKey || e.ctrlKey || e.metaKey;
       this._selectionBase = this._selectionModeAdditive ? new Set(this._selectedLights) : null;
 
-      // Touch: holding still briefly arms an any-direction marquee. Without
-      // this, only sideways drags survive — the browser reclaims anything
-      // vertical-ish for scrolling (touch-action: pan-y) and cancels the box.
+      // Touch: fresh gesture, no ownership decision yet.
+      this._selectionTouchClaim = null;
+      // Holding still briefly claims the marquee outright — the escape hatch
+      // for box drags that START straight down (which the move-direction
+      // arbitration would otherwise hand to the scroller).
       if (e.pointerType === 'touch' || e.pointerType === 'pen') {
         if (this._selectionHoldTimer) clearTimeout(this._selectionHoldTimer);
         this._selectionHoldTimer = setTimeout(() => {
           this._selectionHoldTimer = null;
           if (!this._selectionStart || this._selectionPointerId == null) return;
-          this._selectionTouchArmed = true;
+          this._selectionTouchClaim = 'select';
           if (typeof navigator !== 'undefined' && navigator.vibrate) navigator.vibrate(15);
           // Materialize the box right away as the "selection mode" cue.
           if (!this._selectionBox) {
@@ -4822,9 +4825,12 @@ class SpatialLightColorCard extends HTMLElement {
     }
 
     // Lazily materialize the rubber-band once the armed pointer commits to a
-    // drag. Before this threshold a vertical touch swipe can still be
-    // reclaimed by the browser for scrolling (canvas_touch_scroll).
-    if (!this._selectionBox && this._selectionStart && e.pointerId === this._selectionPointerId) {
+    // drag. Touch waits for the arbitration verdict (_handleCanvasTouchMove
+    // / hold timer) — pointermoves flow for a beat before a declined gesture
+    // is reclaimed by the scroller, and creating the box (which clears the
+    // selection) during that window would wreck a plain scroll.
+    if (!this._selectionBox && this._selectionStart && e.pointerId === this._selectionPointerId
+        && (e.pointerType !== 'touch' || this._selectionTouchClaim === 'select')) {
       const dx = e.clientX - this._selectionStart.clientX;
       const dy = e.clientY - this._selectionStart.clientY;
       if (Math.hypot(dx, dy) > 5) {
@@ -4925,7 +4931,7 @@ class SpatialLightColorCard extends HTMLElement {
         clearTimeout(this._selectionHoldTimer);
         this._selectionHoldTimer = null;
       }
-      this._selectionTouchArmed = false;
+      this._selectionTouchClaim = null;
       if (this._selectionBox) {
         // Rubber-band completed. Flush any hit-test still waiting on its
         // frame so the final selection matches the box the user released.
@@ -5063,10 +5069,67 @@ class SpatialLightColorCard extends HTMLElement {
     this._lastTap = null;
   }
 
+  /**
+   * Decides who owns a touch drag that started on empty canvas. The canvas
+   * is touch-action:auto in locked mode, so the browser must wait for this
+   * non-passive listener's verdict on the first touchmove before it may
+   * scroll — which makes the direction call OURS instead of the browser's
+   * coarse pan-y heuristic (which reclaimed any drag with early vertical
+   * movement, i.e. most box-selects). Rules:
+   * - already claimed: keep preventDefault-ing ('select') or stay out of
+   *   the way ('scroll');
+   * - second finger before a claim: it's a pinch, decline;
+   * - movement steeper than ~55° from horizontal: decline — the browser
+   *   scrolls natively and fires pointercancel (selection untouched);
+   * - anything else — the way humans actually draw selection boxes — is
+   *   claimed, and the box can then travel in any direction, including
+   *   straight down, without being reclaimed.
+   * With canvas_touch_scroll off (or edit mode) the canvas is
+   * touch-action:none; claim 'select' unconditionally so the marquee works
+   * exactly as it did before this arbitration existed.
+   */
+  _handleCanvasTouchMove(e) {
+    if (!this._selectionStart) return;
+    if (this._selectionTouchClaim === 'scroll') return;
+    if (this._selectionTouchClaim === 'select') {
+      e.preventDefault();
+      return;
+    }
+    const touchScrollActive = this._config.canvas_touch_scroll && this._lockPositions && !this._editPositionsMode;
+    if (!touchScrollActive) {
+      this._selectionTouchClaim = 'select';
+      e.preventDefault();
+      return;
+    }
+    if (e.touches.length > 1) {
+      this._selectionTouchClaim = 'scroll';
+      return;
+    }
+    const t = e.touches[0];
+    const dx = Math.abs(t.clientX - this._selectionStart.clientX);
+    const dy = Math.abs(t.clientY - this._selectionStart.clientY);
+    if (Math.hypot(dx, dy) < 4) return; // too early to judge the direction
+    if (dy > dx * 1.4) {
+      this._selectionTouchClaim = 'scroll';
+      if (this._selectionHoldTimer) {
+        clearTimeout(this._selectionHoldTimer);
+        this._selectionHoldTimer = null;
+      }
+      return;
+    }
+    this._selectionTouchClaim = 'select';
+    if (this._selectionHoldTimer) {
+      clearTimeout(this._selectionHoldTimer);
+      this._selectionHoldTimer = null;
+    }
+    if (typeof navigator !== 'undefined' && navigator.vibrate) navigator.vibrate(10);
+    e.preventDefault();
+  }
+
   _handleCanvasContextMenu(e) {
     // An armed hold-to-select marquee owns the gesture: Android fires
     // contextmenu from the same long-press (~500ms) that armed us at 300ms.
-    if (this._selectionTouchArmed) {
+    if (this._selectionTouchClaim === 'select') {
       e.preventDefault();
       return;
     }
@@ -5128,7 +5191,7 @@ class SpatialLightColorCard extends HTMLElement {
       clearTimeout(this._selectionHoldTimer);
       this._selectionHoldTimer = null;
     }
-    this._selectionTouchArmed = false;
+    this._selectionTouchClaim = null;
     if (this._longPressTimer) {
       clearTimeout(this._longPressTimer);
       this._longPressTimer = null;

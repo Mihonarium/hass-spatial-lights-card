@@ -5079,8 +5079,8 @@ class SpatialLightColorCard extends HTMLElement {
    * - already claimed: keep preventDefault-ing ('select') or stay out of
    *   the way ('scroll');
    * - second finger before a claim: it's a pinch, decline;
-   * - movement steeper than ~55° from horizontal: decline — the browser
-   *   scrolls natively and fires pointercancel (selection untouched);
+   * - movement within ~22° of vertical: decline — the browser scrolls
+   *   natively and fires pointercancel (selection untouched);
    * - anything else — the way humans actually draw selection boxes — is
    *   claimed, and the box can then travel in any direction, including
    *   straight down, without being reclaimed.
@@ -5109,7 +5109,10 @@ class SpatialLightColorCard extends HTMLElement {
     const dx = Math.abs(t.clientX - this._selectionStart.clientX);
     const dy = Math.abs(t.clientY - this._selectionStart.clientY);
     if (Math.hypot(dx, dy) < 4) return; // too early to judge the direction
-    if (dy > dx * 1.4) {
+    // Scroll only wins for near-vertical strokes (within ~22° of vertical);
+    // anything shallower is a box-select. Scroll flicks are naturally close
+    // to vertical, box drags rarely are.
+    if (dy > dx * 2.5) {
       this._selectionTouchClaim = 'scroll';
       if (this._selectionHoldTimer) {
         clearTimeout(this._selectionHoldTimer);

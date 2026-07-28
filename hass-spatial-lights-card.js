@@ -23,10 +23,25 @@ class SpatialLightColorCard extends HTMLElement {
     /** Selection & interactions */
     this._selectedLights = new Set();
     this._dragState = null;             // { entity, startX, startY, initialLeft, initialTop, rect, moved }
-    this._selectionBox = null;          // HTMLElement for rubberband selection
-    this._selectionStart = null;        // { x, y } in canvas coords
+    this._selectionBox = null;          // HTMLElement for rubberband selection (created lazily on drag)
+    this._selectionStart = null;        // { x, y, clientX, clientY } — armed on empty-canvas pointerdown
+    this._selectionPointerId = null;    // pointer that armed the rubber-band
     this._selectionModeAdditive = false;
     this._selectionBase = null;
+    this._selectionRaf = null;          // coalesces rubber-band hit-testing to one run/frame
+    this._pendingSelectionRect = null;
+    /**
+     * Touch gesture arbitration for empty-canvas drags. With
+     * canvas_touch_scroll the canvas is touch-action:auto and WE decide who
+     * owns the gesture on the first cancelable touchmove (_handleCanvasTouchMove):
+     * clearly-vertical movement is declined to the browser (native scroll,
+     * we get pointercancel), anything else is claimed with preventDefault
+     * and stays a marquee for the whole drag. 'select' | 'scroll' | null.
+     * A ~300ms still hold (_selectionHoldTimer) claims 'select' outright,
+     * for deliberately vertical box drags.
+     */
+    this._selectionHoldTimer = null;
+    this._selectionTouchClaim = null;
 
     /** UI state */
     this._yamlModalOpen = false;
@@ -51,6 +66,16 @@ class SpatialLightColorCard extends HTMLElement {
     this._gridSize = 25;
     this._snapOnModifier = true;  // if true, requires Alt key to snap
     this._lockPositions = true;
+    /**
+     * Position-editing mode. Editor-session state, NOT config: it arrives
+     * via the 'spatial-card-edit-mode' window event (plus a hello handshake
+     * on connect) and must never persist into the saved dashboard config —
+     * a card that saved `_edit_positions: true` used to stay in reposition
+     * mode forever on the live dashboard.
+     */
+    this._editPositionsMode = false;
+    this._editorId = null;
+    this._boundEditModeChange = null;
     this._iconRefreshHandle = null;
     this._iconRehydrateHandle = null;
 
@@ -59,10 +84,23 @@ class SpatialLightColorCard extends HTMLElement {
     this._colorWheelActive = false;
     this._colorWheelObserver = null;
     this._canvasObserver = null;
+    this._glowResizeTimer = null;   // trailing debounce for resize-driven glow updates
+    this._glowResizeLast = 0;
     this._colorWheelFrame = null;
     this._colorWheelLastSize = null;
     this._colorWheelCancel = null;
     this._colorWheelGesture = null;    // { pointerId, isTouch, startScroll: {x,y}, scrolled, pendingColor }
+
+    /**
+     * Live color application throttle. Mouse drags on the mini wheel used to
+     * fire a service call per pointermove (60-144/sec) — far past what Hue or
+     * Zigbee can absorb. Live applies now go through a leading+trailing
+     * throttle; the release commit stays immediate and unthrottled.
+     */
+    this._liveWheelTimer = null;
+    this._liveWheelPendingRgb = null;
+    /** Trailing debounce for keyboard-driven slider change commits */
+    this._sliderCommitTimers = { brightness: null, temperature: null };
 
     /** Large color wheel (long-press) */
     this._largeColorWheelOpen = false;
@@ -89,7 +127,9 @@ class SpatialLightColorCard extends HTMLElement {
       colorWheelMagnifier: null,
       colorWheelMagnifierCanvas: null,
       colorWheelPreviewSwatch: null,
+      announcer: null,
     };
+    this._announceTimer = null;
 
     /** Global bindings */
     this._boundKeyDown = null;
@@ -103,6 +143,13 @@ class SpatialLightColorCard extends HTMLElement {
     this._longPressTriggered = false;
     this._pendingTap = null;
     this._lastTap = null;
+    /**
+     * True once a preset hold-to-preview fires; the click that the browser
+     * synthesizes when the finger lifts must be swallowed, otherwise merely
+     * inspecting a preset applies it (iOS fires click after stationary holds
+     * of any duration). Cleared by the swallowed click or the next pointerdown.
+     */
+    this._suppressPresetClick = false;
 
     /** Overlay coordination */
     this._moreInfoOpen = false;
@@ -196,6 +243,11 @@ class SpatialLightColorCard extends HTMLElement {
       positions: normalizedPositions,
       title: config.title || '',
       canvas_height: config.canvas_height ?? 450,
+      // Optional "W:H" (or "W/H", "1200x800", number). When set, the canvas
+      // derives its height from its rendered width so percentage positions
+      // keep pointing at the same spot of a floor plan at every card width.
+      // Unset (default) keeps the fixed pixel canvas_height.
+      aspect_ratio: this._normalizeAspectRatio(config.aspect_ratio),
       grid_size: config.grid_size ?? 25,
       label_mode: config.label_mode || 'smart',
       label_overrides: config.label_overrides || {},
@@ -204,6 +256,16 @@ class SpatialLightColorCard extends HTMLElement {
       controls_below: config.controls_below !== false,
       show_entity_icons: config.show_entity_icons !== false,
       switch_single_tap: config.switch_single_tap || false,
+      // When true (default), vertical touch swipes on the canvas scroll the
+      // page and pinch zooms; rubber-band selection needs a deliberate
+      // horizontal-ish drag. Set false to restore gesture-exclusive canvas.
+      canvas_touch_scroll: config.canvas_touch_scroll !== false,
+      // 'auto' (default): follow the dashboard's Home Assistant theme —
+      // including light themes and translucent/glass card backgrounds.
+      // 'dark': the card's original fixed dark palette. 'light': a fixed
+      // light palette. Fine-grained overrides live under `theme:`.
+      theme_mode: ['auto', 'dark', 'light'].includes(config.theme_mode) ? config.theme_mode : 'auto',
+      theme: this._normalizeThemeConfig(config.theme),
       icon_style: config.icon_style || 'mdi', // 'mdi' or 'emoji' (emoji kept as fallback only)
       temperature_min: Number.isFinite(tempMin) ? tempMin : null,
       temperature_max: Number.isFinite(tempMax) ? tempMax : null,
@@ -281,9 +343,10 @@ class SpatialLightColorCard extends HTMLElement {
 
     this._gridSize = this._config.grid_size;
 
-    // Editor-driven position editing mode
-    this._editPositionsMode = !!config._edit_positions;
-    this._editorId = config._editor_id || null;
+    // Position-editing mode is deliberately NOT read from config. Configs
+    // saved by older versions may still carry `_edit_positions`/`_editor_id`
+    // — those are ignored here (the editor strips them on its next save),
+    // so polluted dashboards heal back to normal tap behavior.
 
     this._initializePositions();
 
@@ -972,6 +1035,180 @@ class SpatialLightColorCard extends HTMLElement {
     }).filter(Boolean);
   }
 
+  /**
+   * Accepts "16:9", "16/9", "1200x800", or a plain positive number
+   * (width÷height). Returns { w, h } or null when unset/invalid.
+   */
+  _normalizeAspectRatio(value) {
+    if (value == null || value === '') return null;
+    if (typeof value === 'number') {
+      return Number.isFinite(value) && value > 0 ? { w: value, h: 1 } : null;
+    }
+    const str = String(value).trim();
+    if (/^\d+(\.\d+)?$/.test(str)) {
+      const n = parseFloat(str);
+      return n > 0 ? { w: n, h: 1 } : null;
+    }
+    const m = str.match(/^(\d+(?:\.\d+)?)\s*[:/xX×]\s*(\d+(?:\.\d+)?)$/);
+    if (!m) return null;
+    const w = parseFloat(m[1]);
+    const h = parseFloat(m[2]);
+    return w > 0 && h > 0 ? { w, h } : null;
+  }
+
+  /**
+   * Appearance overrides (all optional). Color values are passed through as
+   * CSS — invalid values are simply ignored by the browser.
+   */
+  _normalizeThemeConfig(obj) {
+    const t = {};
+    if (!obj || typeof obj !== 'object') return t;
+    const colorKeys = [
+      'card_background', 'canvas_background', 'controls_background',
+      'text_color', 'secondary_text_color', 'accent_color', 'border_color',
+      'grid_color', 'slider_track', 'label_background', 'label_text',
+    ];
+    for (const k of colorKeys) {
+      if (typeof obj[k] === 'string' && obj[k].trim()) t[k] = obj[k].trim();
+    }
+    if (obj.border_radius != null && obj.border_radius !== '') {
+      const n = parseFloat(obj.border_radius);
+      t.border_radius = Number.isFinite(n) && String(n) === String(obj.border_radius).trim()
+        ? `${n}px`
+        : String(obj.border_radius).trim();
+    }
+    if (obj.glass != null) t.glass = !!obj.glass;
+    if (obj.glass_blur != null) {
+      const n = parseFloat(obj.glass_blur);
+      if (Number.isFinite(n) && n >= 0) t.glass_blur = n;
+    }
+    return t;
+  }
+
+  /**
+   * Theme token payload for :host. Every component in _styles() consumes
+   * these tokens, so switching them re-skins the whole card:
+   * - dark: the original fixed dark palette (bit-identical to the old look);
+   * - auto: Home Assistant theme variables with the dark values as
+   *   fallbacks — elevation surfaces are derived from the card background
+   *   with color-mix so any theme (including translucent "glass" card
+   *   backgrounds) produces coherent panels;
+   * - light: a fixed light palette for a light card on any dashboard.
+   * User `theme:` overrides are emitted last so they win within the rule.
+   */
+  _themeTokens() {
+    const mode = this._config.theme_mode || 'auto';
+    const t = this._config.theme || {};
+
+    const palettes = {
+      dark: `
+        --surface-primary: #0a0a0a;
+        --surface-secondary: #141414;
+        --surface-tertiary: #1a1a1a;
+        --surface-elevated: #1f1f1f;
+        --text-primary: #ffffff;
+        --text-secondary: rgba(255,255,255,0.7);
+        --text-tertiary: rgba(255,255,255,0.45);
+        --border-subtle: rgba(255,255,255,0.06);
+        --border-medium: rgba(255,255,255,0.12);
+        --accent-primary: #6366f1;
+        --grid-dots: rgba(255,255,255,0.035);
+        --shadow-sm: 0 1px 2px rgba(0,0,0,0.35);
+        --shadow-md: 0 4px 8px rgba(0,0,0,0.45);
+        --canvas-bg: var(--surface-primary);
+        --controls-bg: rgba(20,20,20,0.95);
+        --controls-below-bg: var(--surface-secondary);
+        --header-bg: var(--surface-secondary);
+        --label-bg: var(--surface-elevated);
+        --label-text: var(--text-primary);
+        --slider-track: var(--surface-tertiary);
+        --light-off-bg: linear-gradient(135deg, #3a3a3a 0%, #2a2a2a 100%);
+      `,
+      light: `
+        --surface-primary: #ffffff;
+        --surface-secondary: #f4f4f5;
+        --surface-tertiary: #ebebee;
+        --surface-elevated: #e4e4e8;
+        --text-primary: #1b1b1f;
+        --text-secondary: rgba(0,0,0,0.65);
+        --text-tertiary: rgba(0,0,0,0.42);
+        --border-subtle: rgba(0,0,0,0.07);
+        --border-medium: rgba(0,0,0,0.14);
+        --accent-primary: #6366f1;
+        --grid-dots: rgba(0,0,0,0.06);
+        --shadow-sm: 0 1px 2px rgba(0,0,0,0.1);
+        --shadow-md: 0 4px 10px rgba(0,0,0,0.14);
+        --canvas-bg: var(--surface-primary);
+        --controls-bg: rgba(250,250,250,0.95);
+        --controls-below-bg: var(--surface-secondary);
+        --header-bg: var(--surface-secondary);
+        --label-bg: #ffffff;
+        --label-text: var(--text-primary);
+        --slider-track: #dcdce1;
+        --light-off-bg: linear-gradient(135deg, #d7d7dc 0%, #c6c6cc 100%);
+      `,
+      auto: `
+        --surface-primary: var(--ha-card-background, var(--card-background-color, #0a0a0a));
+        --text-primary: var(--primary-text-color, #ffffff);
+        --text-secondary: var(--secondary-text-color, rgba(255,255,255,0.7));
+        --text-tertiary: color-mix(in srgb, var(--secondary-text-color, rgba(255,255,255,0.7)) 65%, transparent);
+        --surface-secondary: color-mix(in srgb, var(--surface-primary) 95%, var(--text-primary));
+        --surface-tertiary: color-mix(in srgb, var(--surface-primary) 90%, var(--text-primary));
+        --surface-elevated: color-mix(in srgb, var(--surface-primary) 87%, var(--text-primary));
+        --border-subtle: color-mix(in srgb, var(--divider-color, rgba(127,127,127,0.4)) 50%, transparent);
+        --border-medium: var(--divider-color, rgba(127,127,127,0.4));
+        --accent-primary: var(--primary-color, #6366f1);
+        --grid-dots: color-mix(in srgb, var(--text-primary) 5%, transparent);
+        --shadow-sm: 0 1px 2px rgba(0,0,0,0.25);
+        --shadow-md: 0 4px 8px rgba(0,0,0,0.3);
+        --radius-lg: var(--ha-card-border-radius, 12px);
+        --canvas-bg: transparent;
+        --controls-bg: color-mix(in srgb, var(--surface-elevated) 94%, transparent);
+        --controls-below-bg: var(--surface-secondary);
+        --header-bg: var(--surface-secondary);
+        --label-bg: var(--surface-elevated);
+        --label-text: var(--text-primary);
+        --slider-track: var(--surface-tertiary);
+        --light-off-bg: linear-gradient(135deg,
+          color-mix(in srgb, var(--text-primary) 24%, var(--surface-primary)) 0%,
+          color-mix(in srgb, var(--text-primary) 16%, var(--surface-primary)) 100%);
+      `,
+    };
+
+    const overrides = [];
+    if (t.card_background) overrides.push(`--surface-primary: ${t.card_background};`);
+    if (t.canvas_background) overrides.push(`--canvas-bg: ${t.canvas_background};`);
+    if (t.controls_background) {
+      overrides.push(`--controls-bg: ${t.controls_background};`);
+      overrides.push(`--controls-below-bg: ${t.controls_background};`);
+    }
+    if (t.text_color) overrides.push(`--text-primary: ${t.text_color};`);
+    if (t.secondary_text_color) overrides.push(`--text-secondary: ${t.secondary_text_color};`);
+    if (t.accent_color) overrides.push(`--accent-primary: ${t.accent_color};`);
+    if (t.border_color) {
+      overrides.push(`--border-medium: ${t.border_color};`);
+      overrides.push(`--border-subtle: color-mix(in srgb, ${t.border_color} 55%, transparent);`);
+    }
+    if (t.grid_color) overrides.push(`--grid-dots: ${t.grid_color};`);
+    if (t.border_radius) overrides.push(`--radius-lg: ${t.border_radius};`);
+    if (t.slider_track) overrides.push(`--slider-track: ${t.slider_track};`);
+    if (t.glass) {
+      const blur = t.glass_blur != null ? t.glass_blur : 16;
+      const base = t.controls_background || 'var(--surface-elevated)';
+      overrides.push(`--controls-bg: color-mix(in srgb, ${base} 60%, transparent);`);
+      overrides.push(`--controls-below-bg: color-mix(in srgb, ${base} 50%, transparent);`);
+      overrides.push(`--header-bg: color-mix(in srgb, var(--surface-secondary) 55%, transparent);`);
+      overrides.push(`--label-bg: color-mix(in srgb, var(--surface-elevated) 70%, transparent);`);
+      overrides.push(`--controls-backdrop: blur(${blur}px) saturate(150%);`);
+      overrides.push(`--controls-below-backdrop: blur(${blur}px) saturate(150%);`);
+      overrides.push(`--header-backdrop: blur(${blur}px) saturate(150%);`);
+    }
+    if (t.label_background) overrides.push(`--label-bg: ${t.label_background};`);
+    if (t.label_text) overrides.push(`--label-text: ${t.label_text};`);
+
+    return (palettes[mode] || palettes.auto) + overrides.join('\n        ');
+  }
+
   _normalizeBackgroundImage(value) {
     if (!value) return null;
     if (typeof value === 'string') {
@@ -1056,6 +1293,57 @@ class SpatialLightColorCard extends HTMLElement {
     return false;
   }
 
+  /** ---------- Non-visual state (screen readers) ---------- */
+
+  /**
+   * Accessible name for a light: friendly name plus power state (and
+   * brightness when reported), so the card's most important fact — is this
+   * light on? — exists non-visually. Scenes have no meaningful on/off state.
+   */
+  _buildLightAriaLabel(entity_id, st) {
+    const friendly = st?.attributes?.friendly_name || entity_id;
+    const state = st?.state;
+    if (!state || state === 'unavailable' || state === 'unknown') {
+      return `${friendly} (unavailable)`;
+    }
+    const [domain] = entity_id.split('.');
+    if (domain === 'scene') return friendly;
+    if (state === 'on') {
+      const brightness = st.attributes?.brightness;
+      if (Number.isFinite(brightness)) {
+        return `${friendly}, on, ${Math.round((brightness / 255) * 100)}%`;
+      }
+      return `${friendly}, on`;
+    }
+    if (state === 'off') return `${friendly}, off`;
+    return `${friendly}, ${state}`;
+  }
+
+  /**
+   * Post a message to the visually-hidden polite live region. The clear +
+   * delayed set lets consecutive identical messages re-announce.
+   */
+  _announce(message) {
+    const el = this._els.announcer;
+    if (!el) return;
+    el.textContent = '';
+    if (this._announceTimer) clearTimeout(this._announceTimer);
+    this._announceTimer = setTimeout(() => {
+      this._announceTimer = null;
+      el.textContent = message;
+    }, 30);
+  }
+
+  /** "X applied to Living Room Lamp" / "X applied to 3 lights" */
+  _announceApplied(what, controlled) {
+    if (controlled.length === 1) {
+      const st = this._hass?.states?.[controlled[0]];
+      this._announce(`${what} applied to ${st?.attributes?.friendly_name || controlled[0]}`);
+    } else {
+      this._announce(`${what} applied to ${controlled.length} lights`);
+    }
+  }
+
   /** ---------- Label system ---------- */
   _generateLabel(entity_id) {
     if (this._config.label_overrides[entity_id]) {
@@ -1065,6 +1353,15 @@ class SpatialLightColorCard extends HTMLElement {
     if (!st) return '?';
 
     const name = st.attributes.friendly_name || entity_id;
+
+    // label_mode: 'smart' (compact abbreviation, default), 'full' /
+    // 'friendly_name' (whole name), 'initials', 'entity_id', 'none'.
+    const mode = this._config.label_mode || 'smart';
+    if (mode === 'none') return '';
+    if (mode === 'full' || mode === 'friendly_name') return name;
+    if (mode === 'entity_id') return entity_id;
+    if (mode === 'initials') return this._getInitials(name);
+
     const allNames = this._config.entities.map(e => this._hass?.states[e]?.attributes.friendly_name || e);
 
     // 1) trailing numbers
@@ -1416,9 +1713,11 @@ class SpatialLightColorCard extends HTMLElement {
     // nothing changes anyway.
     if (!this._isEntityAvailable(entity)) return;
 
+    const friendly = stateObj.attributes?.friendly_name || entity;
     if (domain === 'scene') {
       this._hass.callService('scene', 'turn_on', { entity_id: entity })
         .catch(err => console.warn(`[spatial-light-card] scene.turn_on ${entity} failed:`, err));
+      this._announce(`Activating ${friendly}`);
       return;
     }
 
@@ -1426,6 +1725,7 @@ class SpatialLightColorCard extends HTMLElement {
     const service = stateObj.state === 'on' ? 'turn_off' : 'turn_on';
     this._hass.callService(domain, service, { entity_id: entity })
       .catch(err => console.warn(`[spatial-light-card] ${domain}.${service} ${entity} failed:`, err));
+    this._announce(`Turning ${service === 'turn_on' ? 'on' : 'off'} ${friendly}`);
   }
 
   _isSelectableEntity(entity) {
@@ -1485,6 +1785,31 @@ class SpatialLightColorCard extends HTMLElement {
       this._hass.callService(d, svc, { entity_id: entityId })
         .catch(err => console.warn(`[spatial-light-card] ${d}.${svc} bulk failed:`, err));
     }
+    if (candidates.length === 1) {
+      const st = this._hass.states?.[candidates[0]];
+      const friendly = st?.attributes?.friendly_name || candidates[0];
+      this._announce(`Turning ${targetOn ? 'on' : 'off'} ${friendly}`);
+    } else {
+      this._announce(`Turning ${targetOn ? 'on' : 'off'} ${candidates.length} lights`);
+    }
+  }
+
+  /**
+   * True when this card instance is the editor's live preview (rendered
+   * inside HA's edit-card dialog). Walks the ancestor chain across shadow
+   * boundaries; on the live dashboard this returns false, which is what
+   * keeps edit-mode broadcasts from ever affecting real cards.
+   */
+  _isInsideEditorPreview() {
+    let node = this;
+    let hops = 0;
+    while (node && hops < 50) {
+      const name = node.nodeName;
+      if (name === 'HUI-CARD-PREVIEW' || name === 'HUI-DIALOG-EDIT-CARD') return true;
+      node = node.parentNode || (node.getRootNode ? node.getRootNode().host : null) || null;
+      hops += 1;
+    }
+    return false;
   }
 
   _openMoreInfo(entity) {
@@ -2082,7 +2407,7 @@ class SpatialLightColorCard extends HTMLElement {
       <ha-card>
         ${showHeader ? this._renderHeader() : ''}
         <div class="canvas-wrapper">
-          <div class="canvas" id="canvas" role="application" aria-label="Spatial light control area" style="${this._canvasBackgroundStyle()}">
+          <div class="canvas${(this._config.canvas_touch_scroll && this._lockPositions && !this._editPositionsMode) ? ' touch-scroll' : ''}" id="canvas" role="application" aria-label="Spatial light control area" style="${this._canvasBackgroundStyle()}">
             <div class="grid"></div>
             ${this._config.entities.length === 0 ? this._renderEmptyState() : this._renderLightsHTML()}
             ${this._renderCanvasElementsHTML()}
@@ -2091,6 +2416,7 @@ class SpatialLightColorCard extends HTMLElement {
           ${controlsPosition === 'below' ? this._renderControlsBelow(controlContext) : ''}
         </div>
         ${this._renderYamlModal()}
+        <div class="sr-announcer" aria-live="polite"></div>
       </ha-card>
       ${this._renderLargeColorWheel()}
     `;
@@ -2117,6 +2443,7 @@ class SpatialLightColorCard extends HTMLElement {
     this._els.colorWheelMagnifier = this.shadowRoot.getElementById('colorWheelMagnifier');
     this._els.colorWheelMagnifierCanvas = this.shadowRoot.getElementById('colorWheelMagnifierCanvas');
     this._els.colorWheelPreviewSwatch = this.shadowRoot.getElementById('colorWheelPreviewSwatch');
+    this._els.announcer = this.shadowRoot.querySelector('.sr-announcer');
 
     if (this._colorWheelObserver) {
       this._colorWheelObserver.disconnect();
@@ -2142,9 +2469,23 @@ class SpatialLightColorCard extends HTMLElement {
     }
     if (this._els.canvas && typeof window !== 'undefined' && 'ResizeObserver' in window) {
       this._canvasObserver = new ResizeObserver(() => {
-        // Cheap when nothing actually needs to change — `_applyWallShadows`
-        // version-keys per entity and bails out on cache hit.
-        this._updateAllGlows();
+        // Leading + trailing debounce. The leading call keeps the initial
+        // layout flush instant (this observer is what renders walls on first
+        // paint); during a continuous window resize the per-frame size
+        // changes miss every mask cache, so intermediate frames coalesce
+        // into one trailing recompute at the settled size.
+        const now = Date.now();
+        if (!this._glowResizeLast || now - this._glowResizeLast > 250) {
+          this._glowResizeLast = now;
+          this._updateAllGlows();
+          return;
+        }
+        this._glowResizeLast = now;
+        if (this._glowResizeTimer) clearTimeout(this._glowResizeTimer);
+        this._glowResizeTimer = setTimeout(() => {
+          this._glowResizeTimer = null;
+          this._updateAllGlows();
+        }, 150);
       });
       this._canvasObserver.observe(this._els.canvas);
     }
@@ -2192,24 +2533,6 @@ class SpatialLightColorCard extends HTMLElement {
       *, *::before, *::after { box-sizing: border-box; }
       :host {
         margin: 0; padding: 0;
-        --surface-primary: #0a0a0a;
-        --surface-secondary: #141414;
-        --surface-tertiary: #1a1a1a;
-        --surface-elevated: #1f1f1f;
-
-        --text-primary: #ffffff;
-        --text-secondary: rgba(255,255,255,0.7);
-        --text-tertiary: rgba(255,255,255,0.45);
-
-        --border-subtle: rgba(255,255,255,0.06);
-        --border-medium: rgba(255,255,255,0.12);
-
-        --accent-primary: #6366f1;
-
-        --grid-dots: rgba(255,255,255,0.035);
-
-        --shadow-sm: 0 1px 2px rgba(0,0,0,0.35);
-        --shadow-md: 0 4px 8px rgba(0,0,0,0.45);
 
         --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Helvetica Neue', Arial, sans-serif;
 
@@ -2217,13 +2540,19 @@ class SpatialLightColorCard extends HTMLElement {
 
         --transition-fast: 120ms cubic-bezier(0.4,0,0.2,1);
         --transition-base: 200ms cubic-bezier(0.4,0,0.2,1);
+
+        /* Theme tokens (mode palette + user overrides) — injected last so
+           they win over the static defaults above (e.g. --radius-lg). */
+        ${this._themeTokens()}
       }
       @media (prefers-reduced-motion: reduce) {
         :host { --transition-fast: 0ms; --transition-base: 0ms; }
         * { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
       }
       ha-card {
-        background: var(--surface-primary);
+        ${(this._config.theme_mode === 'auto' || this._config.theme_mode == null) && !(this._config.theme && this._config.theme.card_background)
+          ? '/* auto theme: let ha-card style itself from the dashboard theme (background, border, radius, backdrop blur on glass themes) */'
+          : 'background: var(--surface-primary);'}
         overflow: hidden;
         font-family: var(--font-sans);
         position: relative;
@@ -2232,15 +2561,33 @@ class SpatialLightColorCard extends HTMLElement {
 
       .header {
         padding: 16px 20px; display: flex; justify-content: space-between; align-items: center;
-        border-bottom: 1px solid var(--border-subtle); background: var(--surface-secondary);
+        border-bottom: 1px solid var(--border-subtle); background: var(--header-bg, var(--surface-secondary));
+        backdrop-filter: var(--header-backdrop, none);
       }
       .title { font-size: 14px; font-weight: 600; color: var(--text-secondary); letter-spacing: -0.01em; }
 
+      /* Visually hidden (but not display:none, which screen readers skip)
+         polite live region for announcing action outcomes non-visually. */
+      .sr-announcer {
+        position: absolute; width: 1px; height: 1px;
+        padding: 0; margin: -1px; border: 0;
+        overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap;
+      }
+
       .canvas-wrapper { position: relative; }
       .canvas {
-        position: relative; width: 100%; height: ${this._config.canvas_height}px; background: var(--surface-primary);
+        position: relative; width: 100%; background: var(--canvas-bg, var(--surface-primary));
+        ${this._config.aspect_ratio
+          ? `aspect-ratio: ${this._config.aspect_ratio.w} / ${this._config.aspect_ratio.h}; height: auto;`
+          : `height: ${this._config.canvas_height}px;`}
         overflow: hidden; user-select: none; touch-action: none;
       }
+      /* Locked mode with canvas_touch_scroll: touch-action auto, with gesture
+         ownership decided in JS (_handleCanvasTouchMove) on the first
+         cancelable touchmove — pan-y's own heuristic reclaimed any drag with
+         early vertical movement, i.e. most attempts to draw a selection box.
+         Edit mode keeps touch-action:none so drags aren't stolen by scroll. */
+      .canvas.touch-scroll { touch-action: auto; }
       .canvas::before {
         content: ''; position: absolute; inset: 0;
         background-image: var(--canvas-background-image, none);
@@ -2279,7 +2626,7 @@ class SpatialLightColorCard extends HTMLElement {
       }
       /* Remove forced gradient, allow JS to override background if needed */
       .light.off { opacity: 0.55; }
-      .light.off:not([style*="background"]) { background: linear-gradient(135deg,#3a3a3a 0%, #2a2a2a 100%); }
+      .light.off:not([style*="background"]) { background: var(--light-off-bg, linear-gradient(135deg,#3a3a3a 0%, #2a2a2a 100%)); }
       .light.off::after { display:none; }
 
       /* Icon-only mode styles */
@@ -2314,13 +2661,13 @@ class SpatialLightColorCard extends HTMLElement {
       .light.icon-only.selected::before {
         border-color: var(--accent-primary);
         border-width: 2.5px;
-        background: rgba(99,102,241,0.1);
-        box-shadow: 0 0 0 1px rgba(99,102,241,0.3), 0 0 12px rgba(99,102,241,0.55);
+        background: color-mix(in srgb, var(--accent-primary) 10%, transparent);
+        box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent-primary) 30%, transparent), 0 0 12px color-mix(in srgb, var(--accent-primary) 55.00000000000001%, transparent);
       }
       .light.icon-only.selected.on::before {
         border-color: var(--accent-primary);
-        background: rgba(99,102,241,0.08);
-        box-shadow: 0 0 0 1px rgba(99,102,241,0.3), 0 0 12px rgba(99,102,241,0.55), var(--light-shadow-baked, 0 0 8px var(--light-color, #ffa500));
+        background: color-mix(in srgb, var(--accent-primary) 8%, transparent);
+        box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent-primary) 30%, transparent), 0 0 12px color-mix(in srgb, var(--accent-primary) 55.00000000000001%, transparent), var(--light-shadow-baked, 0 0 8px var(--light-color, #ffa500));
       }
 
       /* Minimal UI mode - hides circles completely, shows only icons */
@@ -2355,13 +2702,13 @@ class SpatialLightColorCard extends HTMLElement {
       /* Show circle with accent highlight when selected in minimal mode */
       .light.minimal-ui.selected::before {
         border: 2px solid var(--accent-primary);
-        background: rgba(99,102,241,0.12);
-        box-shadow: 0 0 10px rgba(99,102,241,0.45);
+        background: color-mix(in srgb, var(--accent-primary) 12%, transparent);
+        box-shadow: 0 0 10px color-mix(in srgb, var(--accent-primary) 45%, transparent);
       }
       .light.minimal-ui.selected.on::before {
         border-color: var(--accent-primary);
-        background: rgba(99,102,241,0.08);
-        box-shadow: 0 0 10px rgba(99,102,241,0.45), var(--light-shadow-baked, 0 0 8px var(--light-color, #ffa500));
+        background: color-mix(in srgb, var(--accent-primary) 8%, transparent);
+        box-shadow: 0 0 10px color-mix(in srgb, var(--accent-primary) 45%, transparent), var(--light-shadow-baked, 0 0 8px var(--light-color, #ffa500));
       }
 
       /* Glow element — works in all display modes (cone, round, oval, beam, spotlight, bar) */
@@ -2422,7 +2769,8 @@ class SpatialLightColorCard extends HTMLElement {
       .light-label {
         position: absolute; top: calc(100% + 8px); left: 50%;
         transform: translateX(calc(-50% + var(--label-offset, 0px)));
-        padding: 4px 8px; background: var(--surface-elevated); color: var(--text-primary);
+        padding: 4px 8px; background: var(--label-bg, var(--surface-elevated)); color: var(--label-text, var(--text-primary));
+        backdrop-filter: var(--controls-below-backdrop, none);
         font-size: 11px; font-weight: 600; border-radius: var(--radius-sm); white-space: nowrap; pointer-events: none;
         opacity: 0; transition: opacity var(--transition-fast); z-index: 5; border: 1px solid var(--border-subtle);
       }
@@ -2439,7 +2787,7 @@ class SpatialLightColorCard extends HTMLElement {
 
       .light.selected { z-index: 3; }
       .light.selected::before {
-        box-shadow: 0 0 0 2.5px rgba(99,102,241,0.9), 0 0 0 5px rgba(99,102,241,0.25), 0 0 15px rgba(99,102,241,0.5);
+        box-shadow: 0 0 0 2.5px color-mix(in srgb, var(--accent-primary) 90%, transparent), 0 0 0 5px color-mix(in srgb, var(--accent-primary) 25%, transparent), 0 0 15px color-mix(in srgb, var(--accent-primary) 50%, transparent);
       }
       /* Selected off lights should be more visible than normal off lights */
       .light.selected.off { opacity: 0.82; }
@@ -2474,7 +2822,7 @@ class SpatialLightColorCard extends HTMLElement {
       .color-preset:focus-visible::after,
       .temp-preset:focus-visible,
       .effect-preset:focus-visible {
-        box-shadow: 0 0 0 2px var(--accent-primary, #6366f1), 0 0 0 4px rgba(99,102,241,0.35);
+        box-shadow: 0 0 0 2px var(--accent-primary, #6366f1), 0 0 0 4px color-mix(in srgb, var(--accent-primary) 35%, transparent);
       }
       .canvas-element:focus { outline: none; }
       .canvas-element:focus-visible {
@@ -2541,7 +2889,7 @@ class SpatialLightColorCard extends HTMLElement {
       .light.minimal-ui .light-status-badge { top: 0; right: 0; }
 
       .selection-box {
-        position: absolute; border: 1.5px solid rgba(99,102,241,0.5); background: rgba(99,102,241,0.08);
+        position: absolute; border: 1.5px solid color-mix(in srgb, var(--accent-primary) 50%, transparent); background: color-mix(in srgb, var(--accent-primary) 8%, transparent);
         border-radius: 8px; pointer-events: none; backdrop-filter: blur(2px);
       }
 
@@ -2686,8 +3034,8 @@ class SpatialLightColorCard extends HTMLElement {
 
       .controls-floating {
         position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%);
-        background: rgba(20,20,20,0.95); backdrop-filter: blur(16px) saturate(160%);
-        border: 1px solid var(--border-medium); border-radius: 12px; padding: 16px 20px;
+        background: var(--controls-bg, rgba(20,20,20,0.95)); backdrop-filter: var(--controls-backdrop, blur(16px) saturate(160%));
+        border: 1px solid var(--border-medium); border-radius: var(--radius-lg, 12px); padding: 16px 20px;
         display: grid; grid-template-columns: auto 1fr; grid-template-rows: 1fr auto;
         gap: 12px 20px; align-items: center; box-shadow: var(--shadow-md);
         opacity: 0; pointer-events: none; transition: opacity var(--transition-base);
@@ -2696,7 +3044,8 @@ class SpatialLightColorCard extends HTMLElement {
       .controls-floating.visible { opacity: 1; pointer-events: auto; }
 
       .controls-below {
-        padding: 20px; border-top: 1px solid var(--border-subtle); background: var(--surface-secondary);
+        padding: 20px; border-top: 1px solid var(--border-subtle); background: var(--controls-below-bg, var(--surface-secondary));
+        backdrop-filter: var(--controls-below-backdrop, none);
         display: none;
         grid-template-columns: auto 1fr; grid-template-rows: 1fr auto;
         gap: 12px 24px; align-items: center; justify-content: center;
@@ -2815,7 +3164,7 @@ class SpatialLightColorCard extends HTMLElement {
         border-radius: var(--slider-track-radius);
         background:
           linear-gradient(to right, var(--slider-fill) 0%, var(--slider-fill) 100%),
-          linear-gradient(to right, var(--surface-tertiary) 0%, var(--surface-tertiary) 100%);
+          linear-gradient(to right, var(--slider-track, var(--surface-tertiary)) 0%, var(--slider-track, var(--surface-tertiary)) 100%);
         background-size:
           calc((100% - var(--slider-thumb-size)) * var(--slider-ratio) + (var(--slider-thumb-size) / 2)) 100%,
           100% 100%;
@@ -2835,7 +3184,7 @@ class SpatialLightColorCard extends HTMLElement {
             #ffffff 50%,
             #87ceeb 70%,
             #4d9fff 100%),
-          linear-gradient(to right, var(--surface-tertiary) 0%, var(--surface-tertiary) 100%);
+          linear-gradient(to right, var(--slider-track, var(--surface-tertiary)) 0%, var(--slider-track, var(--surface-tertiary)) 100%);
         background-size:
           calc((100% - var(--slider-thumb-size)) * var(--slider-ratio) + (var(--slider-thumb-size) / 2)) 100%,
           100% 100%,
@@ -3132,8 +3481,7 @@ class SpatialLightColorCard extends HTMLElement {
         style += styleOverride + (styleOverride.endsWith(';') ? '' : ';');
       }
 
-      const friendly = st.attributes.friendly_name || entity_id;
-      const ariaLabel = isUnavailable ? `${friendly} (unavailable)` : friendly;
+      const ariaLabel = this._buildLightAriaLabel(entity_id, st);
       const unavailableBadge = isUnavailable
         ? '<div class="light-status-badge" aria-hidden="true" title="Unavailable">?</div>'
         : '';
@@ -3150,7 +3498,7 @@ class SpatialLightColorCard extends HTMLElement {
           ${haloHtml}
           ${glowHtml}
           ${iconData ? this._renderIcon(iconData) : ''}
-          <div class="light-label">${this._escapeHtml(label)}</div>
+          ${label ? `<div class="light-label">${this._escapeHtml(label)}</div>` : ''}
           ${unavailableBadge}
         </div>
       `;
@@ -3267,7 +3615,7 @@ class SpatialLightColorCard extends HTMLElement {
       : 0;
     const brightnessColor = Array.isArray(avgState.color) ? `rgb(${avgState.color.join(',')})` : 'var(--accent-primary)';
     return `
-      <div class="controls-floating ${visible ? 'visible' : ''}" id="controlsFloating" role="region" aria-label="Light controls" aria-live="polite">
+      <div class="controls-floating ${visible ? 'visible' : ''}" id="controlsFloating" role="region" aria-label="Light controls">
         <canvas id="colorWheelMini" class="color-wheel-mini" width="256" height="256" role="img" aria-label="Color picker"></canvas>
         <div class="slider-group">
           <div class="slider-row">
@@ -3295,7 +3643,7 @@ class SpatialLightColorCard extends HTMLElement {
       : 0;
     const brightnessColor = Array.isArray(avgState.color) ? `rgb(${avgState.color.join(',')})` : 'var(--accent-primary)';
     return `
-      <div class="controls-below ${(this._config.always_show_controls || this._selectedLights.size > 0 || this._config.default_entity) ? 'visible' : ''}" id="controlsBelow" role="region" aria-label="Light controls" aria-live="polite">
+      <div class="controls-below ${(this._config.always_show_controls || this._selectedLights.size > 0 || this._config.default_entity) ? 'visible' : ''}" id="controlsBelow" role="region" aria-label="Light controls">
         <canvas id="colorWheelMini" class="color-wheel-mini" width="256" height="256" role="img" aria-label="Color picker"></canvas>
         <div class="slider-group">
           <div class="slider-row">
@@ -3460,7 +3808,7 @@ class SpatialLightColorCard extends HTMLElement {
     el.addEventListener('pointerdown', (e) => {
       // Prevent default browser dragging to ensure we handle the gesture
       e.preventDefault();
-      el.setPointerCapture(e.pointerId);
+      try { el.setPointerCapture(e.pointerId); } catch (_) { /* pointer may already be gone */ }
 
       state.pointerId = e.pointerId;
       state.startX = e.clientX;
@@ -3572,6 +3920,39 @@ class SpatialLightColorCard extends HTMLElement {
         }
       };
       window.addEventListener('hass-more-info', this._boundMoreInfo, { passive: true });
+
+      // Edit-positions channel. Only a card living inside the editor's
+      // preview may enter edit mode; the live dashboard card ignores these
+      // broadcasts entirely.
+      if (this._boundEditModeChange) window.removeEventListener('spatial-card-edit-mode', this._boundEditModeChange);
+      this._boundEditModeChange = (e) => {
+        const d = e.detail || {};
+        if (!this._isInsideEditorPreview()) return;
+        const active = !!d.active;
+        if (this._editPositionsMode === active && (!active || this._editorId === d.editorId)) return;
+        this._editPositionsMode = active;
+        this._editorId = active ? (d.editorId || null) : null;
+        if (this._hass && this._config && this._config.entities) this._renderAll();
+      };
+      window.addEventListener('spatial-card-edit-mode', this._boundEditModeChange);
+      if (this._isInsideEditorPreview()) {
+        // The preview card is recreated by HA on config changes; ask any
+        // live editor for the current edit-mode state (the reply callback
+        // is invoked synchronously during dispatch).
+        window.dispatchEvent(new CustomEvent('spatial-card-preview-hello', {
+          detail: {
+            reply: (editorId, active) => {
+              this._editPositionsMode = !!active;
+              this._editorId = active ? editorId : null;
+            },
+          },
+        }));
+      } else if (this._editPositionsMode) {
+        // Re-parented outside a preview (e.g. dialog closed): drop edit mode.
+        this._editPositionsMode = false;
+        this._editorId = null;
+      }
+
       // H11: cancel in-flight gestures when the tab is hidden or the window
       // loses focus. Mobile browsers don't always emit `pointercancel` on
       // backgrounding, leaving `_dragState` and timers stuck.
@@ -3600,6 +3981,15 @@ class SpatialLightColorCard extends HTMLElement {
       this._boundKeyDown = null;
     }
     if (this._raf) cancelAnimationFrame(this._raf);
+    if (this._selectionRaf) {
+      cancelAnimationFrame(this._selectionRaf);
+      this._selectionRaf = null;
+    }
+    if (this._selectionHoldTimer) {
+      clearTimeout(this._selectionHoldTimer);
+      this._selectionHoldTimer = null;
+    }
+    this._selectionTouchClaim = null;
     if (this._boundIconsetAdded && typeof window !== 'undefined') {
       window.removeEventListener('iron-iconset-added', this._boundIconsetAdded);
       this._boundIconsetAdded = null;
@@ -3607,6 +3997,10 @@ class SpatialLightColorCard extends HTMLElement {
     if (this._boundMoreInfo && typeof window !== 'undefined') {
       window.removeEventListener('hass-more-info', this._boundMoreInfo);
       this._boundMoreInfo = null;
+    }
+    if (this._boundEditModeChange && typeof window !== 'undefined') {
+      window.removeEventListener('spatial-card-edit-mode', this._boundEditModeChange);
+      this._boundEditModeChange = null;
     }
     if (this._boundVisibilityChange) {
       document.removeEventListener('visibilitychange', this._boundVisibilityChange);
@@ -3636,6 +4030,10 @@ class SpatialLightColorCard extends HTMLElement {
       this._canvasObserver.disconnect();
       this._canvasObserver = null;
     }
+    if (this._glowResizeTimer) {
+      clearTimeout(this._glowResizeTimer);
+      this._glowResizeTimer = null;
+    }
     if (this._colorWheelFrame) {
       const cancel = this._colorWheelCancel || (typeof cancelAnimationFrame === 'function' ? cancelAnimationFrame : clearTimeout);
       cancel(this._colorWheelFrame);
@@ -3651,6 +4049,17 @@ class SpatialLightColorCard extends HTMLElement {
     }
     this._colorWheelLongPressed = false;
     this._largeWheelGesture = null;
+    this._cancelLiveWheelThrottle();
+    for (const kind of Object.keys(this._sliderCommitTimers)) {
+      if (this._sliderCommitTimers[kind]) {
+        clearTimeout(this._sliderCommitTimers[kind]);
+        this._sliderCommitTimers[kind] = null;
+      }
+    }
+    if (this._announceTimer) {
+      clearTimeout(this._announceTimer);
+      this._announceTimer = null;
+    }
     this.classList.remove('overlay-active');
 
     // Clean up canvas element state
@@ -3683,6 +4092,9 @@ class SpatialLightColorCard extends HTMLElement {
       this._els.canvas.addEventListener('pointermove', (e) => this._onPointerMove(e));
       this._els.canvas.addEventListener('pointerup', (e) => this._onPointerUp(e));
       this._els.canvas.addEventListener('pointercancel', (e) => this._onPointerCancel(e));
+      // Non-passive on purpose: the first cancelable touchmove is the one
+      // chance to claim the gesture before the browser starts scrolling.
+      this._els.canvas.addEventListener('touchmove', (e) => this._handleCanvasTouchMove(e), { passive: false });
       this._els.canvas.addEventListener('dblclick', (e) => this._handleCanvasDoubleClick(e));
       this._els.canvas.addEventListener('contextmenu', (e) => this._handleCanvasContextMenu(e));
       // Reposition labels when hovering over lights (delegated, deferred to next frame
@@ -3729,7 +4141,7 @@ class SpatialLightColorCard extends HTMLElement {
           longPressActive: true,  // defer all color application while long-press might fire
         };
         e.preventDefault();
-        e.target.setPointerCapture?.(e.pointerId);
+        try { e.target.setPointerCapture?.(e.pointerId); } catch (_) { /* pointer may already be gone */ }
 
         // Long-press detection for large color wheel
         if (this._colorWheelLongPressTimer) clearTimeout(this._colorWheelLongPressTimer);
@@ -3763,7 +4175,7 @@ class SpatialLightColorCard extends HTMLElement {
               gesture.longPressActive = false;
               // Now that long-press is cancelled, apply the deferred pending color (mouse only)
               if (!gesture.isTouch && gesture.pendingColor) {
-                this._applyColorWheelSelection(gesture.pendingColor);
+                this._applyColorWheelSelectionLive(gesture.pendingColor);
               }
             }
           }
@@ -3781,9 +4193,9 @@ class SpatialLightColorCard extends HTMLElement {
           if (gesture.isTouch) {
             gesture.pendingColor = color;
           } else if (!gesture.longPressActive) {
-            // Only apply immediately for mouse after long-press window has passed
+            // Only apply live for mouse after long-press window has passed
             e.preventDefault();
-            this._applyColorWheelSelection(color);
+            this._applyColorWheelSelectionLive(color);
           } else {
             gesture.pendingColor = color;
           }
@@ -3807,8 +4219,10 @@ class SpatialLightColorCard extends HTMLElement {
         this._colorWheelGesture = null;
         if (!gesture || gesture.pointerId !== e.pointerId) return;
 
-        // Apply pending color on release (for both touch and mouse with deferred long-press)
+        // Apply pending color on release (for both touch and mouse with deferred long-press).
+        // The release commit is authoritative: drop any queued trailing live apply first.
         if (!gesture.scrolled) {
+          this._cancelLiveWheelThrottle();
           const color = this._getColorWheelColorAtEvent(e) || gesture.pendingColor;
           if (color) this._applyColorWheelSelection(color);
         }
@@ -3819,21 +4233,41 @@ class SpatialLightColorCard extends HTMLElement {
         this._colorWheelLongPressed = false;
         e.target.releasePointerCapture?.(e.pointerId);
         this._colorWheelGesture = null;
+        this._cancelLiveWheelThrottle();
       });
     }
     // Preset click and highlight handlers (color + temperature)
     this._bindPresetHandlers();
     if (this._els.brightnessSlider) {
-      // Input/Change listeners kept for keyboard support but logic dominated by pointer events
+      // Input/Change listeners kept for keyboard support but logic dominated by
+      // pointer events. Change commits are debounced so a held arrow key doesn't
+      // stream a service call per step; pointer gestures commit directly.
       this._els.brightnessSlider.addEventListener('input', (e) => this._handleBrightnessInput(e));
-      this._els.brightnessSlider.addEventListener('change', () => this._handleBrightnessChange());
+      this._els.brightnessSlider.addEventListener('change', () => this._scheduleSliderCommit('brightness'));
       this._bindSliderGesture(this._els.brightnessSlider);
     }
     if (this._els.temperatureSlider) {
       this._els.temperatureSlider.addEventListener('input', (e) => this._handleTemperatureInput(e));
-      this._els.temperatureSlider.addEventListener('change', () => this._handleTemperatureChange());
+      this._els.temperatureSlider.addEventListener('change', () => this._scheduleSliderCommit('temperature'));
       this._bindSliderGesture(this._els.temperatureSlider);
     }
+  }
+
+  /**
+   * Trailing debounce for slider `change` commits (keyboard arrows fire one
+   * change per step). Safe against double-commit: `_handleBrightnessChange` /
+   * `_handleTemperatureChange` no-op once the pending value has been consumed
+   * (e.g. by a pointer-gesture release or `_cancelActiveInteractions`).
+   */
+  _scheduleSliderCommit(kind) {
+    const COMMIT_DEBOUNCE = 150;
+    const timers = this._sliderCommitTimers;
+    if (timers[kind]) clearTimeout(timers[kind]);
+    timers[kind] = setTimeout(() => {
+      timers[kind] = null;
+      if (kind === 'brightness') this._handleBrightnessChange();
+      else this._handleTemperatureChange();
+    }, COMMIT_DEBOUNCE);
   }
 
   _rerenderLightIconsOnly() {
@@ -3935,8 +4369,17 @@ class SpatialLightColorCard extends HTMLElement {
     // the shadow root because `document.activeElement` returns the host.
     const path = (typeof e.composedPath === 'function') ? e.composedPath() : [];
     const isOurCard = path.includes(this);
-    const active = document.activeElement;
-    const isEditable = active && (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA' || active.tagName === 'SELECT' || active.isContentEditable);
+    // The real focused element is the event's deep target (composedPath()[0]).
+    // document.activeElement only reports the shadow HOST, so inputs inside
+    // HA's own dialogs (all shadow DOM) were invisible to this guard and the
+    // card hijacked Ctrl+A / arrows while the user typed in them.
+    const deepActive = path.length ? path[0] : document.activeElement;
+    const isEditable = deepActive && deepActive.tagName && (
+      deepActive.tagName === 'INPUT' ||
+      deepActive.tagName === 'TEXTAREA' ||
+      deepActive.tagName === 'SELECT' ||
+      deepActive.isContentEditable
+    );
     if (isEditable && !isOurCard) return;
 
     // Undo/Redo — only when card is focused (or has selection), to avoid
@@ -4092,7 +4535,7 @@ class SpatialLightColorCard extends HTMLElement {
     // Right-click (2) and middle-click (1) should not start drags or long-press
     // timers — `_handleCanvasContextMenu` handles right-click separately.
     if (e.pointerType === 'mouse' && e.button !== 0) return;
-    e.target.setPointerCapture?.(e.pointerId);
+    try { e.target.setPointerCapture?.(e.pointerId); } catch (_) { /* pointer may already be gone */ }
 
     const targetLight = e.target.closest('.light');
     if (targetLight) {
@@ -4258,18 +4701,50 @@ class SpatialLightColorCard extends HTMLElement {
       return;
     }
 
-    // Start canvas selection rubberband
+    // Arm canvas rubber-band selection. The box is created lazily once the
+    // pointer actually moves past a slop threshold, and the current selection
+    // is only cleared then (or on a completed tap in _onPointerUp) — so a
+    // touch the browser reclaims for scrolling (pointercancel) or a stray
+    // brush on empty canvas no longer destroys a multi-selection outright.
     if (e.target.id === 'canvas' || e.target.classList.contains('grid')) {
       const rect = this._els.canvas.getBoundingClientRect();
-      this._selectionStart = { x: e.clientX - rect.left, y: e.clientY - rect.top };
-      this._selectionBox = document.createElement('div');
-      this._selectionBox.className = 'selection-box';
-      this._els.canvas.appendChild(this._selectionBox);
+      this._selectionStart = {
+        x: e.clientX - rect.left,
+        y: e.clientY - rect.top,
+        clientX: e.clientX,
+        clientY: e.clientY,
+      };
+      this._selectionPointerId = e.pointerId;
       this._selectionModeAdditive = e.shiftKey || e.ctrlKey || e.metaKey;
       this._selectionBase = this._selectionModeAdditive ? new Set(this._selectedLights) : null;
-      if (!this._selectionModeAdditive) {
-        this._selectedLights.clear();
-        this.updateLights();
+
+      // Touch: fresh gesture, no ownership decision yet.
+      this._selectionTouchClaim = null;
+      // Holding still briefly claims the marquee outright — the escape hatch
+      // for box drags that START straight down (which the move-direction
+      // arbitration would otherwise hand to the scroller).
+      if (e.pointerType === 'touch' || e.pointerType === 'pen') {
+        if (this._selectionHoldTimer) clearTimeout(this._selectionHoldTimer);
+        this._selectionHoldTimer = setTimeout(() => {
+          this._selectionHoldTimer = null;
+          if (!this._selectionStart || this._selectionPointerId == null) return;
+          this._selectionTouchClaim = 'select';
+          if (typeof navigator !== 'undefined' && navigator.vibrate) navigator.vibrate(15);
+          // Materialize the box right away as the "selection mode" cue.
+          if (!this._selectionBox) {
+            this._selectionBox = document.createElement('div');
+            this._selectionBox.className = 'selection-box';
+            Object.assign(this._selectionBox.style, {
+              left: `${this._selectionStart.x}px`, top: `${this._selectionStart.y}px`,
+              width: '0px', height: '0px',
+            });
+            this._els.canvas.appendChild(this._selectionBox);
+            if (!this._selectionModeAdditive && this._selectedLights.size > 0) {
+              this._selectedLights.clear();
+              this.updateLights();
+            }
+          }
+        }, 300);
       }
     }
   }
@@ -4337,7 +4812,39 @@ class SpatialLightColorCard extends HTMLElement {
       return;
     }
 
-    if (this._selectionBox && this._selectionStart) {
+    // A drag that starts moving before the hold completes is either a page
+    // scroll (browser will cancel us) or an immediate sideways marquee —
+    // either way it's no longer a hold, so disarm the hold timer.
+    if (this._selectionHoldTimer && this._selectionStart && e.pointerId === this._selectionPointerId) {
+      const dxh = e.clientX - this._selectionStart.clientX;
+      const dyh = e.clientY - this._selectionStart.clientY;
+      if (Math.hypot(dxh, dyh) > 10) {
+        clearTimeout(this._selectionHoldTimer);
+        this._selectionHoldTimer = null;
+      }
+    }
+
+    // Lazily materialize the rubber-band once the armed pointer commits to a
+    // drag. Touch waits for the arbitration verdict (_handleCanvasTouchMove
+    // / hold timer) — pointermoves flow for a beat before a declined gesture
+    // is reclaimed by the scroller, and creating the box (which clears the
+    // selection) during that window would wreck a plain scroll.
+    if (!this._selectionBox && this._selectionStart && e.pointerId === this._selectionPointerId
+        && (e.pointerType !== 'touch' || this._selectionTouchClaim === 'select')) {
+      const dx = e.clientX - this._selectionStart.clientX;
+      const dy = e.clientY - this._selectionStart.clientY;
+      if (Math.hypot(dx, dy) > 5) {
+        this._selectionBox = document.createElement('div');
+        this._selectionBox.className = 'selection-box';
+        this._els.canvas.appendChild(this._selectionBox);
+        if (!this._selectionModeAdditive && this._selectedLights.size > 0) {
+          this._selectedLights.clear();
+          this.updateLights();
+        }
+      }
+    }
+
+    if (this._selectionBox && this._selectionStart && e.pointerId === this._selectionPointerId) {
       e.preventDefault();
       const rect = this._els.canvas.getBoundingClientRect();
       const x = e.clientX - rect.left;
@@ -4349,7 +4856,18 @@ class SpatialLightColorCard extends HTMLElement {
       Object.assign(this._selectionBox.style, {
         left: `${left}px`, top: `${top}px`, width: `${width}px`, height: `${height}px`,
       });
-      this._selectLightsInBox(left, top, width, height);
+      // Box visuals track every move; the hit-testing + selection commit is
+      // coalesced to one run per frame (it walks all lights with
+      // getBoundingClientRect and can trigger the full update pipeline).
+      this._pendingSelectionRect = { left, top, width, height };
+      if (!this._selectionRaf) {
+        this._selectionRaf = requestAnimationFrame(() => {
+          this._selectionRaf = null;
+          const r = this._pendingSelectionRect;
+          this._pendingSelectionRect = null;
+          if (r && this._selectionBox) this._selectLightsInBox(r.left, r.top, r.width, r.height);
+        });
+      }
     }
   }
 
@@ -4408,10 +4926,35 @@ class SpatialLightColorCard extends HTMLElement {
       this._dragState = null;
     }
 
-    if (this._selectionBox) {
-      this._selectionBox.remove();
-      this._selectionBox = null;
+    if (this._selectionStart && e.pointerId === this._selectionPointerId) {
+      if (this._selectionHoldTimer) {
+        clearTimeout(this._selectionHoldTimer);
+        this._selectionHoldTimer = null;
+      }
+      this._selectionTouchClaim = null;
+      if (this._selectionBox) {
+        // Rubber-band completed. Flush any hit-test still waiting on its
+        // frame so the final selection matches the box the user released.
+        if (this._selectionRaf) {
+          cancelAnimationFrame(this._selectionRaf);
+          this._selectionRaf = null;
+        }
+        if (this._pendingSelectionRect) {
+          const r = this._pendingSelectionRect;
+          this._pendingSelectionRect = null;
+          this._selectLightsInBox(r.left, r.top, r.width, r.height);
+        }
+        this._selectionBox.remove();
+        this._selectionBox = null;
+      } else if (!this._selectionModeAdditive && this._selectedLights.size > 0) {
+        // A completed tap on empty canvas deselects. This lives here (not in
+        // pointerdown) so a scroll the browser reclaims mid-gesture — which
+        // ends in pointercancel, never here — leaves the selection intact.
+        this._selectedLights.clear();
+        this.updateLights();
+      }
       this._selectionStart = null;
+      this._selectionPointerId = null;
       this._selectionBase = null;
       this._selectionModeAdditive = false;
     }
@@ -4526,7 +5069,73 @@ class SpatialLightColorCard extends HTMLElement {
     this._lastTap = null;
   }
 
+  /**
+   * Decides who owns a touch drag that started on empty canvas. The canvas
+   * is touch-action:auto in locked mode, so the browser must wait for this
+   * non-passive listener's verdict on the first touchmove before it may
+   * scroll — which makes the direction call OURS instead of the browser's
+   * coarse pan-y heuristic (which reclaimed any drag with early vertical
+   * movement, i.e. most box-selects). Rules:
+   * - already claimed: keep preventDefault-ing ('select') or stay out of
+   *   the way ('scroll');
+   * - second finger before a claim: it's a pinch, decline;
+   * - movement within ~22° of vertical: decline — the browser scrolls
+   *   natively and fires pointercancel (selection untouched);
+   * - anything else — the way humans actually draw selection boxes — is
+   *   claimed, and the box can then travel in any direction, including
+   *   straight down, without being reclaimed.
+   * With canvas_touch_scroll off (or edit mode) the canvas is
+   * touch-action:none; claim 'select' unconditionally so the marquee works
+   * exactly as it did before this arbitration existed.
+   */
+  _handleCanvasTouchMove(e) {
+    if (!this._selectionStart) return;
+    if (this._selectionTouchClaim === 'scroll') return;
+    if (this._selectionTouchClaim === 'select') {
+      e.preventDefault();
+      return;
+    }
+    const touchScrollActive = this._config.canvas_touch_scroll && this._lockPositions && !this._editPositionsMode;
+    if (!touchScrollActive) {
+      this._selectionTouchClaim = 'select';
+      e.preventDefault();
+      return;
+    }
+    if (e.touches.length > 1) {
+      this._selectionTouchClaim = 'scroll';
+      return;
+    }
+    const t = e.touches[0];
+    const dx = Math.abs(t.clientX - this._selectionStart.clientX);
+    const dy = Math.abs(t.clientY - this._selectionStart.clientY);
+    if (Math.hypot(dx, dy) < 4) return; // too early to judge the direction
+    // Scroll only wins for near-vertical strokes (within ~22° of vertical);
+    // anything shallower is a box-select. Scroll flicks are naturally close
+    // to vertical, box drags rarely are.
+    if (dy > dx * 2.5) {
+      this._selectionTouchClaim = 'scroll';
+      if (this._selectionHoldTimer) {
+        clearTimeout(this._selectionHoldTimer);
+        this._selectionHoldTimer = null;
+      }
+      return;
+    }
+    this._selectionTouchClaim = 'select';
+    if (this._selectionHoldTimer) {
+      clearTimeout(this._selectionHoldTimer);
+      this._selectionHoldTimer = null;
+    }
+    if (typeof navigator !== 'undefined' && navigator.vibrate) navigator.vibrate(10);
+    e.preventDefault();
+  }
+
   _handleCanvasContextMenu(e) {
+    // An armed hold-to-select marquee owns the gesture: Android fires
+    // contextmenu from the same long-press (~500ms) that armed us at 300ms.
+    if (this._selectionTouchClaim === 'select') {
+      e.preventDefault();
+      return;
+    }
     // Canvas elements: prevent default context menu
     const targetElement = e.target.closest('.canvas-element');
     if (targetElement) {
@@ -4573,8 +5182,19 @@ class SpatialLightColorCard extends HTMLElement {
       this._selectionBox = null;
     }
     this._selectionStart = null;
+    this._selectionPointerId = null;
     this._selectionBase = null;
     this._selectionModeAdditive = false;
+    if (this._selectionRaf) {
+      cancelAnimationFrame(this._selectionRaf);
+      this._selectionRaf = null;
+    }
+    this._pendingSelectionRect = null;
+    if (this._selectionHoldTimer) {
+      clearTimeout(this._selectionHoldTimer);
+      this._selectionHoldTimer = null;
+    }
+    this._selectionTouchClaim = null;
     if (this._longPressTimer) {
       clearTimeout(this._longPressTimer);
       this._longPressTimer = null;
@@ -4590,6 +5210,8 @@ class SpatialLightColorCard extends HTMLElement {
     this._colorWheelLongPressStart = null;
     this._colorWheelGesture = null;
     this._colorWheelActive = false;
+    this._cancelLiveWheelThrottle();
+    this._suppressPresetClick = false;
     // H12: commit any pending slider value so end-of-gesture survives DOM rebuild.
     this._activeSliderGesture = null;
     if (this._pendingBrightness != null) this._handleBrightnessChange();
@@ -4610,11 +5232,15 @@ class SpatialLightColorCard extends HTMLElement {
         }
       }
     });
-    if (this._selectionModeAdditive && this._selectionBase) {
-      this._commitSelection(new Set([...this._selectionBase, ...inside]));
-    } else {
-      this._commitSelection(inside);
+    const target = this._selectionModeAdditive && this._selectionBase
+      ? new Set([...this._selectionBase, ...inside])
+      : inside;
+    // The rubber-band calls this per frame; skip the full update pipeline
+    // whenever the crossing set hasn't actually changed.
+    if (target.size === this._selectedLights.size && [...target].every(id => this._selectedLights.has(id))) {
+      return;
     }
+    this._commitSelection(target);
   }
 
   _syncOverlayState() {
@@ -4786,6 +5412,9 @@ class SpatialLightColorCard extends HTMLElement {
     let holdTimer = null;
     let clearHighlight = null;
     el.addEventListener('pointerdown', (e) => {
+      // A new gesture is starting: any suppress flag left over from a prior
+      // preview (whose click never fired, e.g. finger moved) is stale.
+      this._suppressPresetClick = false;
       if (e.pointerType === 'mouse') return; // handled by pointerenter
       // Clean up any leftover listeners from a prior interaction
       if (clearHighlight) {
@@ -4794,6 +5423,9 @@ class SpatialLightColorCard extends HTMLElement {
       }
       holdTimer = setTimeout(() => {
         holdTimer = null;
+        // The gesture is now a preview, not a tap: swallow the click that
+        // fires when the finger lifts so inspecting never applies the preset.
+        this._suppressPresetClick = true;
         this._highlightEntities(entities);
         if (typeof navigator !== 'undefined' && navigator.vibrate) navigator.vibrate(15);
       }, 300);
@@ -4816,6 +5448,7 @@ class SpatialLightColorCard extends HTMLElement {
       el._presetBound = true;
       el.addEventListener('click', (e) => {
         e.stopPropagation();
+        if (this._suppressPresetClick) { this._suppressPresetClick = false; return; }
         const rgbAttr = el.dataset.presetRgb;
         let rgb;
         if (rgbAttr) {
@@ -4832,6 +5465,7 @@ class SpatialLightColorCard extends HTMLElement {
       el._presetBound = true;
       el.addEventListener('click', (e) => {
         e.stopPropagation();
+        if (this._suppressPresetClick) { this._suppressPresetClick = false; return; }
         const kelvin = parseInt(el.dataset.presetKelvin, 10);
         if (Number.isFinite(kelvin)) this._applyTemperaturePreset(kelvin);
       });
@@ -4842,6 +5476,7 @@ class SpatialLightColorCard extends HTMLElement {
       el._presetBound = true;
       el.addEventListener('click', (e) => {
         e.stopPropagation();
+        if (this._suppressPresetClick) { this._suppressPresetClick = false; return; }
         const effectName = el.dataset.presetEffect;
         if (effectName) this._applyEffectPreset(effectName);
       });
@@ -5144,11 +5779,13 @@ class SpatialLightColorCard extends HTMLElement {
     });
   }
 
-  _applyColorWheelSelection(rgb) {
+  _applyColorWheelSelection(rgb, { announce = true } = {}) {
     const controlled = this._selectedLights.size > 0
       ? [...this._selectedLights]
       : (this._config.default_entity ? [this._config.default_entity] : []);
     if (controlled.length === 0 || !rgb) return;
+
+    if (announce) this._announceApplied('Color', controlled);
 
     // Cover as many selected lights as possible with Z2M group entities so
     // each group becomes a single Zigbee groupcast; leftover bulbs go out as
@@ -5163,6 +5800,41 @@ class SpatialLightColorCard extends HTMLElement {
     if (targets.length === 0) return;
     this._hass.callService('light', 'turn_on', { entity_id: targets, rgb_color: rgb })
       .catch(err => console.warn('[spatial-light-card] light.turn_on (rgb) failed:', err));
+  }
+
+  /**
+   * Throttled variant for live (mid-drag) application. Leading edge applies
+   * immediately for responsiveness; while the gate is closed the newest color
+   * accumulates and flushes on the trailing edge, so the lights always end on
+   * the color under the cursor without a call per pointermove.
+   */
+  _applyColorWheelSelectionLive(rgb) {
+    const LIVE_APPLY_INTERVAL = 150; // ms → at most ~7 calls/sec
+    if (!rgb) return;
+    if (this._liveWheelTimer != null) {
+      this._liveWheelPendingRgb = rgb;
+      return;
+    }
+    this._applyColorWheelSelection(rgb, { announce: false });
+    this._liveWheelTimer = setTimeout(() => {
+      this._liveWheelTimer = null;
+      const pending = this._liveWheelPendingRgb;
+      this._liveWheelPendingRgb = null;
+      if (pending) this._applyColorWheelSelectionLive(pending);
+    }, LIVE_APPLY_INTERVAL);
+  }
+
+  /**
+   * Drop any queued trailing live apply. Called before the release commit
+   * (which supersedes it) and from gesture aborts — a stale trailing color
+   * must never land after the final one.
+   */
+  _cancelLiveWheelThrottle() {
+    if (this._liveWheelTimer != null) {
+      clearTimeout(this._liveWheelTimer);
+      this._liveWheelTimer = null;
+    }
+    this._liveWheelPendingRgb = null;
   }
 
   /** ---------- Large color wheel (long-press) ---------- */
@@ -5413,7 +6085,7 @@ class SpatialLightColorCard extends HTMLElement {
 
     canvas.addEventListener('pointerdown', (e) => {
       e.preventDefault();
-      e.target.setPointerCapture?.(e.pointerId);
+      try { e.target.setPointerCapture?.(e.pointerId); } catch (_) { /* pointer may already be gone */ }
 
       const color = this._getLargeWheelColorAtEvent(e);
       this._largeWheelGesture = { pointerId: e.pointerId, pendingColor: color };
@@ -5522,6 +6194,7 @@ class SpatialLightColorCard extends HTMLElement {
     if (this._els.temperatureValue) {
       this._els.temperatureValue.textContent = `${kelvin}K`;
     }
+    this._announceApplied(`${kelvin} Kelvin`, controlled);
   }
 
   _applyEffectPreset(effectName) {
@@ -5566,6 +6239,7 @@ class SpatialLightColorCard extends HTMLElement {
       this._hass.callService('light', 'turn_on', { entity_id: leftover, effect: effectName })
         .catch(err => console.warn('[spatial-light-card] light.turn_on (effect) failed:', err));
     }
+    this._announceApplied(`Effect ${effectName}`, supported);
   }
 
   _handleBrightnessInput(e) {
@@ -6104,9 +6778,17 @@ class SpatialLightColorCard extends HTMLElement {
     // Build a lightweight version key from the inputs that DO change.
     if (!this._wallMaskPerEntity) this._wallMaskPerEntity = {};
     const pos = this._config.positions[entityId] || { x: 50, y: 50 };
-    const glowW = parseFloat(glowEl.style.width) || gc.width;
-    const glowH = parseFloat(glowEl.style.height) || gc.length;
-    if (glowW <= 0 || glowH <= 0) return;
+    const glowWRaw = parseFloat(glowEl.style.width) || gc.width;
+    const glowHRaw = parseFloat(glowEl.style.height) || gc.length;
+    if (glowWRaw <= 0 || glowHRaw <= 0) return;
+    // Quantize glow dimensions to 8px buckets. scale_with_brightness sweeps
+    // the glow through hundreds of fractional sizes during one slider drag;
+    // computing the mask for the bucket size (it gets stretched over the
+    // element regardless) turns that sweep into a few cached masks instead
+    // of a canvas + PNG encode per brightness step per light. Worst-case
+    // geometric error is 4px on an already-soft shadow edge.
+    const glowW = Math.max(8, Math.round(glowWRaw / 8) * 8);
+    const glowH = Math.max(8, Math.round(glowHRaw / 8) * 8);
 
     const versionKey = `${(pos.x * 10) | 0},${(pos.y * 10) | 0},${glowW | 0},${glowH | 0},${canvasW | 0},${canvasH | 0},${gc.shape},${gc.direction || 0},${this._wallConfigVersion || 0}`;
     const cached = this._wallMaskPerEntity[entityId];
@@ -6312,11 +6994,15 @@ class SpatialLightColorCard extends HTMLElement {
       // available, so we avoid touching DOM when nothing changes.
       const isUnavailable = st.state === 'unavailable' || st.state === 'unknown';
       const wasUnavailable = light.classList.contains('unavailable');
+      // Keep the accessible name's power/brightness state current (compare
+      // first — most updates change nothing and skip the attribute write).
+      const ariaLabel = this._buildLightAriaLabel(id, st);
+      if (light.getAttribute('aria-label') !== ariaLabel) {
+        light.setAttribute('aria-label', ariaLabel);
+      }
       if (isUnavailable !== wasUnavailable) {
         light.classList.toggle('unavailable', isUnavailable);
         light.setAttribute('aria-disabled', isUnavailable ? 'true' : 'false');
-        const friendly = st.attributes.friendly_name || id;
-        light.setAttribute('aria-label', isUnavailable ? `${friendly} (unavailable)` : friendly);
         let badge = light.querySelector(':scope > .light-status-badge');
         if (isUnavailable && !badge) {
           badge = document.createElement('div');
@@ -6333,6 +7019,12 @@ class SpatialLightColorCard extends HTMLElement {
       // Ensure selected styling matches current selection set
       const selected = this._selectedLights.has(id);
       light.classList.toggle('selected', selected);
+      // aria-pressed encodes selection; without this sync it goes stale
+      // after the first selection change (it was only set at render time).
+      const pressed = String(selected);
+      if (light.getAttribute('aria-pressed') !== pressed) {
+        light.setAttribute('aria-pressed', pressed);
+      }
     });
 
     // Toggle has-selection class on canvas for unselected dimming
@@ -6473,12 +7165,25 @@ class SpatialLightColorCard extends HTMLElement {
 
     if (this._config.title) yamlLines.push(`title: ${this._config.title}`);
     yamlLines.push(`canvas_height: ${this._config.canvas_height}`);
+    if (this._config.aspect_ratio) {
+      yamlLines.push(`aspect_ratio: "${this._config.aspect_ratio.w}:${this._config.aspect_ratio.h}"`);
+    }
     yamlLines.push(`grid_size: ${this._config.grid_size}`);
     if (this._config.label_mode) yamlLines.push(`label_mode: ${this._config.label_mode}`);
     yamlLines.push(`always_show_controls: ${!!this._config.always_show_controls}`);
     yamlLines.push(`controls_below: ${!!this._config.controls_below}`);
     yamlLines.push(`show_entity_icons: ${!!this._config.show_entity_icons}`);
     yamlLines.push(`switch_single_tap: ${!!this._config.switch_single_tap}`);
+    if (this._config.canvas_touch_scroll === false) yamlLines.push('canvas_touch_scroll: false');
+    if (this._config.theme_mode && this._config.theme_mode !== 'auto') {
+      yamlLines.push(`theme_mode: ${this._config.theme_mode}`);
+    }
+    if (this._config.theme && Object.keys(this._config.theme).length > 0) {
+      yamlLines.push('theme:');
+      for (const [k, v] of Object.entries(this._config.theme)) {
+        yamlLines.push(typeof v === 'string' ? `  ${k}: "${v}"` : `  ${k}: ${v}`);
+      }
+    }
     yamlLines.push(`icon_style: ${this._config.icon_style}`);
     if (this._config.default_entity) yamlLines.push(`default_entity: ${this._config.default_entity}`);
     if (Number.isFinite(this._config.temperature_min)) yamlLines.push(`temperature_min: ${this._config.temperature_min}`);
@@ -6609,9 +7314,11 @@ class SpatialLightColorCard extends HTMLElement {
   }
 
   // Approximate card size for Lovelace masonry layout. 50px per row of canvas
-  // height + 1 row for the controls area.
+  // height + 1 row for the controls area. With aspect_ratio the height is
+  // width-dependent; estimate against a typical ~500px masonry column.
   getCardSize() {
-    const h = (this._config && this._config.canvas_height) || 450;
+    const ar = this._config && this._config.aspect_ratio;
+    const h = ar ? 500 * (ar.h / ar.w) : ((this._config && this._config.canvas_height) || 450);
     return Math.max(3, Math.ceil(h / 50) + 1);
   }
   // Hint to the modern grid/sections layout: full-width works best because
@@ -6653,6 +7360,14 @@ class SpatialLightColorCardEditor extends HTMLElement {
     this._hass = null;
     this._configFromEditor = false;
     this._editorId = Math.random().toString(36).substr(2, 9);
+    /**
+     * Whether "Edit Positions" is on. Editor-instance state only — it is
+     * broadcast to the preview card over window events and NEVER written
+     * into the config (older versions persisted `_edit_positions` on save,
+     * leaving live dashboards stuck in reposition mode).
+     */
+    this._editPositionsActive = false;
+    this._boundPreviewHello = null;
     this._expandedEntity = null;
     this._expandedCanvasElement = null;
     this._boundPositionHandler = null;
@@ -6681,7 +7396,29 @@ class SpatialLightColorCardEditor extends HTMLElement {
     };
     window.addEventListener('spatial-card-positions-changed', this._boundPositionHandler);
 
+    // HA recreates the preview card on config changes; each new instance
+    // says hello and gets the current edit-mode state back synchronously.
+    this._boundPreviewHello = (e) => {
+      if (e.detail && typeof e.detail.reply === 'function') {
+        e.detail.reply(this._editorId, this._editPositionsActive);
+      }
+    };
+    window.addEventListener('spatial-card-preview-hello', this._boundPreviewHello);
+
     this._boundEditorKeyDown = (e) => {
+      // Never steal undo/redo from text editing. This runs in the capture
+      // phase on window, so check the event's deep target (composedPath()[0]
+      // pierces shadow DOM — document.activeElement only reports the host)
+      // and let editable elements keep their native chords.
+      const path = (typeof e.composedPath === 'function') ? e.composedPath() : [];
+      const deepTarget = path.length ? path[0] : e.target;
+      const isEditable = deepTarget && deepTarget.tagName && (
+        deepTarget.tagName === 'INPUT' ||
+        deepTarget.tagName === 'TEXTAREA' ||
+        deepTarget.tagName === 'SELECT' ||
+        deepTarget.isContentEditable
+      );
+      if (isEditable) return;
       if ((e.ctrlKey || e.metaKey) && e.key === 'z' && !e.shiftKey) {
         if (this._positionHistory.length > 0) {
           e.preventDefault();
@@ -6769,12 +7506,17 @@ class SpatialLightColorCardEditor extends HTMLElement {
       window.removeEventListener('keydown', this._boundEditorKeyDown, true);
       this._boundEditorKeyDown = null;
     }
+    if (this._boundPreviewHello) {
+      window.removeEventListener('spatial-card-preview-hello', this._boundPreviewHello);
+      this._boundPreviewHello = null;
+    }
     this._positionHistory = [];
     this._positionRedoStack = [];
-    if (this._config._edit_positions) {
-      delete this._config._edit_positions;
-      delete this._config._editor_id;
-      this._fireConfigChanged();
+    if (this._editPositionsActive) {
+      this._editPositionsActive = false;
+      window.dispatchEvent(new CustomEvent('spatial-card-edit-mode', {
+        detail: { editorId: this._editorId, active: false },
+      }));
     }
   }
 
@@ -6831,6 +7573,11 @@ class SpatialLightColorCardEditor extends HTMLElement {
 
   setConfig(config) {
     this._config = JSON.parse(JSON.stringify(config));
+    // Strip edit-session flags that older versions persisted into saved
+    // configs — the next save then writes clean YAML. Edit mode itself
+    // lives in _editPositionsActive, never in config.
+    delete this._config._edit_positions;
+    delete this._config._editor_id;
     this._ensureCanvasElementIds();
     if (this._configFromEditor) {
       this._configFromEditor = false;
@@ -6864,6 +7611,9 @@ class SpatialLightColorCardEditor extends HTMLElement {
   _fireConfigChanged() {
     this._configFromEditor = true;
     const config = JSON.parse(JSON.stringify(this._config));
+    // Defense in depth: edit-session flags must never reach a saved config.
+    delete config._edit_positions;
+    delete config._editor_id;
     // Clean effect_presets: omit empty default values for clean YAML
     if (Array.isArray(config.effect_presets)) {
       config.effect_presets = config.effect_presets.map(ep => {
@@ -7717,7 +8467,7 @@ class SpatialLightColorCardEditor extends HTMLElement {
   _render() {
     const config = this._config;
     const entities = config.entities || [];
-    const editPositions = !!config._edit_positions;
+    const editPositions = this._editPositionsActive;
     const presets = Array.isArray(config.color_presets) ? config.color_presets : [];
     const canvasElements = Array.isArray(config.canvas_elements) ? config.canvas_elements : [];
     const glow = config.glow || {};
@@ -7822,6 +8572,11 @@ class SpatialLightColorCardEditor extends HTMLElement {
               </div>
             </div>
             <div class="input-row">
+              <label for="cfgAspectRatio">Aspect Ratio (optional, e.g. 16:9)</label>
+              <input type="text" id="cfgAspectRatio" placeholder="Empty = fixed canvas height">
+              <div class="sublabel">Keeps lights aligned with a floor-plan background at any card width. When set, Canvas Height is ignored.</div>
+            </div>
+            <div class="input-row">
               <label>Background Image</label>
               <div id="cfgBgImageContainer"></div>
             </div>
@@ -7898,9 +8653,10 @@ class SpatialLightColorCardEditor extends HTMLElement {
               <div class="input-row">
                 <label for="cfgLabelMode">Label Mode</label>
                 <select id="cfgLabelMode">
-                  <option value="smart">Smart</option>
+                  <option value="smart">Smart (compact abbreviation)</option>
                   <option value="full">Full Name</option>
                   <option value="initials">Initials</option>
+                  <option value="entity_id">Entity ID</option>
                   <option value="none">None</option>
                 </select>
               </div>
@@ -7958,6 +8714,128 @@ class SpatialLightColorCardEditor extends HTMLElement {
                 <option value="both">Both</option>
               </select>
             </div>
+          </div>
+        </div>
+
+        <!-- Appearance Section -->
+        <div class="section${(config.theme_mode && config.theme_mode !== 'auto') || (config.theme && Object.keys(config.theme).length) ? '' : ' collapsed'}" id="section-appearance">
+          <div class="section-header" data-section="appearance">
+            <h3>Appearance</h3>
+            <span class="chevron">&#9660;</span>
+          </div>
+          <div class="section-body">
+            <div class="input-row">
+              <label for="cfgThemeMode">Theme</label>
+              <select id="cfgThemeMode">
+                <option value="auto">Auto (follow dashboard theme)</option>
+                <option value="dark">Dark (original look)</option>
+                <option value="light">Light</option>
+              </select>
+              <div class="sublabel">Auto picks up your Home Assistant theme's colors, card background, and corner radius — including translucent "glass" themes.</div>
+            </div>
+            <div class="option-row">
+              <div><div class="label">Frosted Glass Panels</div><div class="sublabel">Translucent, blurred control panels and header</div></div>
+              <ha-switch id="cfgThemeGlass"></ha-switch>
+            </div>
+            <div class="two-col">
+              <div class="input-row">
+                <label for="cfgThemeGlassBlur">Glass Blur (px)</label>
+                <input type="number" id="cfgThemeGlassBlur" min="0" max="60" step="1" placeholder="16">
+              </div>
+              <div class="input-row">
+                <label for="cfgThemeRadius">Corner Radius (px)</label>
+                <input type="number" id="cfgThemeRadius" min="0" max="48" step="1" placeholder="Theme default">
+              </div>
+            </div>
+            <div class="input-row">
+              <label>Accent Color</label>
+              <div class="color-input-row">
+                <input type="color" id="cfgThemeAccentPicker" value="${this._esc((config.theme && config.theme.accent_color) || '#6366f1')}">
+                <input type="text" id="cfgThemeAccent" placeholder="Theme default">
+              </div>
+              <div class="sublabel">Selection rings, focus outlines, and slider fill</div>
+            </div>
+            <div class="two-col">
+              <div class="input-row">
+                <label>Card Background</label>
+                <div class="color-input-row">
+                  <input type="color" id="cfgThemeCardBgPicker" value="#0a0a0a">
+                  <input type="text" id="cfgThemeCardBg" placeholder="Theme default">
+                </div>
+              </div>
+              <div class="input-row">
+                <label>Canvas Background</label>
+                <div class="color-input-row">
+                  <input type="color" id="cfgThemeCanvasBgPicker" value="#0a0a0a">
+                  <input type="text" id="cfgThemeCanvasBg" placeholder="Theme default">
+                </div>
+              </div>
+            </div>
+            <div class="two-col">
+              <div class="input-row">
+                <label>Controls Background</label>
+                <div class="color-input-row">
+                  <input type="color" id="cfgThemeControlsBgPicker" value="#141414">
+                  <input type="text" id="cfgThemeControlsBg" placeholder="Theme default">
+                </div>
+              </div>
+              <div class="input-row">
+                <label>Slider Track</label>
+                <div class="color-input-row">
+                  <input type="color" id="cfgThemeSliderTrackPicker" value="#1a1a1a">
+                  <input type="text" id="cfgThemeSliderTrack" placeholder="Theme default">
+                </div>
+              </div>
+            </div>
+            <div class="two-col">
+              <div class="input-row">
+                <label>Text Color</label>
+                <div class="color-input-row">
+                  <input type="color" id="cfgThemeTextPicker" value="#ffffff">
+                  <input type="text" id="cfgThemeText" placeholder="Theme default">
+                </div>
+              </div>
+              <div class="input-row">
+                <label>Secondary Text</label>
+                <div class="color-input-row">
+                  <input type="color" id="cfgThemeText2Picker" value="#b3b3b3">
+                  <input type="text" id="cfgThemeText2" placeholder="Theme default">
+                </div>
+              </div>
+            </div>
+            <div class="two-col">
+              <div class="input-row">
+                <label>Border Color</label>
+                <div class="color-input-row">
+                  <input type="color" id="cfgThemeBorderPicker" value="#2a2a2a">
+                  <input type="text" id="cfgThemeBorder" placeholder="Theme default">
+                </div>
+              </div>
+              <div class="input-row">
+                <label>Grid Dots</label>
+                <div class="color-input-row">
+                  <input type="color" id="cfgThemeGridPicker" value="#2a2a2a">
+                  <input type="text" id="cfgThemeGrid" placeholder="Theme default">
+                </div>
+              </div>
+            </div>
+            <div class="two-col">
+              <div class="input-row">
+                <label>Label Background</label>
+                <div class="color-input-row">
+                  <input type="color" id="cfgThemeLabelBgPicker" value="#1f1f1f">
+                  <input type="text" id="cfgThemeLabelBg" placeholder="Theme default">
+                </div>
+              </div>
+              <div class="input-row">
+                <label>Label Text</label>
+                <div class="color-input-row">
+                  <input type="color" id="cfgThemeLabelTextPicker" value="#ffffff">
+                  <input type="text" id="cfgThemeLabelText" placeholder="Theme default">
+                </div>
+              </div>
+            </div>
+            <div class="sublabel">All colors accept any CSS color (hex, rgb(), rgba(), color names). Leave a field empty to use the theme's value.</div>
           </div>
         </div>
 
@@ -8272,6 +9150,10 @@ class SpatialLightColorCardEditor extends HTMLElement {
               <div><div class="label">Single-Tap for Switches &amp; Scenes</div><div class="sublabel">Toggle switches and activate scenes with one tap</div></div>
               <ha-switch id="cfgSwitchTap"></ha-switch>
             </div>
+            <div class="option-row">
+              <div><div class="label">Scroll Page Over Canvas</div><div class="sublabel">Vertical touch swipes on the canvas scroll the dashboard; area selection needs a sideways drag. Turn off to reserve all canvas touches for selection.</div></div>
+              <ha-switch id="cfgCanvasTouchScroll"></ha-switch>
+            </div>
           </div>
         </div>
 
@@ -8319,8 +9201,32 @@ class SpatialLightColorCardEditor extends HTMLElement {
     const setVal = (id, val) => { const el = root.getElementById(id); if (el) el.value = val; };
     setVal('cfgTitle', c.title || '');
     setVal('cfgCanvasHeight', c.canvas_height || 450);
+    setVal('cfgAspectRatio', c.aspect_ratio || '');
     setVal('cfgGridSize', c.grid_size || 25);
-    setVal('cfgLabelMode', c.label_mode || 'smart');
+    setVal('cfgLabelMode', c.label_mode === 'friendly_name' ? 'full' : (c.label_mode || 'smart'));
+
+    // Appearance (theme)
+    const th = c.theme || {};
+    setVal('cfgThemeMode', c.theme_mode || 'auto');
+    setVal('cfgThemeGlassBlur', th.glass_blur != null ? th.glass_blur : '');
+    setVal('cfgThemeRadius', th.border_radius != null ? parseFloat(th.border_radius) : '');
+    const themePairs = {
+      cfgThemeAccent: th.accent_color,
+      cfgThemeCardBg: th.card_background,
+      cfgThemeCanvasBg: th.canvas_background,
+      cfgThemeControlsBg: th.controls_background,
+      cfgThemeSliderTrack: th.slider_track,
+      cfgThemeText: th.text_color,
+      cfgThemeText2: th.secondary_text_color,
+      cfgThemeBorder: th.border_color,
+      cfgThemeGrid: th.grid_color,
+      cfgThemeLabelBg: th.label_background,
+      cfgThemeLabelText: th.label_text,
+    };
+    for (const [id, val] of Object.entries(themePairs)) {
+      setVal(id, val || '');
+      if (val && /^#[0-9a-fA-F]{6}$/.test(val)) setVal(`${id}Picker`, val);
+    }
     setVal('cfgLightSize', c.light_size || 56);
 
     const lsv = root.getElementById('cfgLightSizeValue');
@@ -8420,7 +9326,7 @@ class SpatialLightColorCardEditor extends HTMLElement {
 
     // Switches
     const switches = {
-      cfgEditPositions: !!c._edit_positions,
+      cfgEditPositions: this._editPositionsActive,
       cfgMinimalUI: c.minimal_ui || false,
       cfgShowIcons: c.show_entity_icons !== false,
       cfgIconOnly: c.icon_only_mode || false,
@@ -8428,6 +9334,8 @@ class SpatialLightColorCardEditor extends HTMLElement {
       cfgAlwaysControls: c.always_show_controls || false,
       cfgControlsBelow: c.controls_below !== false,
       cfgSwitchTap: c.switch_single_tap || false,
+      cfgCanvasTouchScroll: c.canvas_touch_scroll !== false,
+      cfgThemeGlass: !!(c.theme && c.theme.glass),
       cfgGlowEnabled: !!(g.enabled),
       cfgGlowScaleBrightness: g.scale_with_brightness !== false,
     };
@@ -8468,14 +9376,13 @@ class SpatialLightColorCardEditor extends HTMLElement {
     const editPosSwitch = root.getElementById('cfgEditPositions');
     if (editPosSwitch) {
       editPosSwitch.addEventListener('change', () => {
-        if (editPosSwitch.checked) {
-          this._config._edit_positions = true;
-          this._config._editor_id = this._editorId;
-        } else {
-          delete this._config._edit_positions;
-          delete this._config._editor_id;
-        }
-        this._fireConfigChanged();
+        // Pure editor state + broadcast — deliberately no _fireConfigChanged:
+        // toggling edit mode is not a config change, and writing it into the
+        // config is how it used to leak into saved dashboards.
+        this._editPositionsActive = editPosSwitch.checked;
+        window.dispatchEvent(new CustomEvent('spatial-card-edit-mode', {
+          detail: { editorId: this._editorId, active: this._editPositionsActive },
+        }));
         this._render();
       });
     }
@@ -8695,6 +9602,11 @@ class SpatialLightColorCardEditor extends HTMLElement {
     // --- General inputs ---
     this._bindTextInput('cfgTitle', (val) => { this._config.title = val; });
     this._bindNumberInput('cfgCanvasHeight', (val) => { if (val >= 100 && val <= 2000) this._config.canvas_height = val; });
+    this._bindTextInput('cfgAspectRatio', (val) => {
+      const trimmed = (val || '').trim();
+      if (trimmed) this._config.aspect_ratio = trimmed;
+      else delete this._config.aspect_ratio;
+    });
     this._bindNumberInput('cfgGridSize', (val) => { if (val >= 5 && val <= 100) this._config.grid_size = val; });
     // Default entity picker
     const defEntityPicker = root.getElementById('cfgDefaultEntity');
@@ -8770,6 +9682,40 @@ class SpatialLightColorCardEditor extends HTMLElement {
     this._bindSwitch('cfgAlwaysControls', 'always_show_controls');
     this._bindSwitch('cfgControlsBelow', 'controls_below');
     this._bindSwitch('cfgSwitchTap', 'switch_single_tap');
+    this._bindSwitch('cfgCanvasTouchScroll', 'canvas_touch_scroll');
+
+    // --- Appearance (theme) ---
+    const themeModeEl = root.getElementById('cfgThemeMode');
+    if (themeModeEl) {
+      themeModeEl.addEventListener('change', () => {
+        if (themeModeEl.value === 'auto') delete this._config.theme_mode;
+        else this._config.theme_mode = themeModeEl.value;
+        this._fireConfigChanged();
+      });
+    }
+    const themeGlassEl = root.getElementById('cfgThemeGlass');
+    if (themeGlassEl) {
+      themeGlassEl.addEventListener('change', () => this._setThemeKey('glass', themeGlassEl.checked));
+    }
+    this._bindNumberInput('cfgThemeGlassBlur', (val) => {
+      if (val == null) this._setThemeKey('glass_blur', null);
+      else if (val >= 0 && val <= 60) this._setThemeKey('glass_blur', val);
+    });
+    this._bindNumberInput('cfgThemeRadius', (val) => {
+      if (val == null) this._setThemeKey('border_radius', null);
+      else if (val >= 0 && val <= 48) this._setThemeKey('border_radius', val);
+    });
+    this._bindThemeColor('cfgThemeAccent', 'cfgThemeAccentPicker', 'accent_color');
+    this._bindThemeColor('cfgThemeCardBg', 'cfgThemeCardBgPicker', 'card_background');
+    this._bindThemeColor('cfgThemeCanvasBg', 'cfgThemeCanvasBgPicker', 'canvas_background');
+    this._bindThemeColor('cfgThemeControlsBg', 'cfgThemeControlsBgPicker', 'controls_background');
+    this._bindThemeColor('cfgThemeSliderTrack', 'cfgThemeSliderTrackPicker', 'slider_track');
+    this._bindThemeColor('cfgThemeText', 'cfgThemeTextPicker', 'text_color');
+    this._bindThemeColor('cfgThemeText2', 'cfgThemeText2Picker', 'secondary_text_color');
+    this._bindThemeColor('cfgThemeBorder', 'cfgThemeBorderPicker', 'border_color');
+    this._bindThemeColor('cfgThemeGrid', 'cfgThemeGridPicker', 'grid_color');
+    this._bindThemeColor('cfgThemeLabelBg', 'cfgThemeLabelBgPicker', 'label_background');
+    this._bindThemeColor('cfgThemeLabelText', 'cfgThemeLabelTextPicker', 'label_text');
 
     // Light size slider
     const lsSlider = root.getElementById('cfgLightSize');
@@ -9408,6 +10354,47 @@ class SpatialLightColorCardEditor extends HTMLElement {
         if (val) { this._config.style_overrides[entity] = val; }
         else { delete this._config.style_overrides[entity]; }
       });
+    });
+  }
+
+  /** Set/delete a key under config.theme, pruning the object when empty. */
+  _setThemeKey(key, val) {
+    if (!this._config.theme || typeof this._config.theme !== 'object') this._config.theme = {};
+    if (val === '' || val == null || val === false) {
+      delete this._config.theme[key];
+    } else {
+      this._config.theme[key] = val;
+    }
+    if (Object.keys(this._config.theme).length === 0) delete this._config.theme;
+    this._fireConfigChanged();
+  }
+
+  /**
+   * Like _bindColorPair, but nested under config.theme and with "empty means
+   * inherit from the theme" semantics instead of a hardcoded fallback.
+   */
+  _bindThemeColor(textId, pickerId, key) {
+    const root = this.shadowRoot;
+    const textEl = root.getElementById(textId);
+    const pickerEl = root.getElementById(pickerId);
+    if (!textEl || !pickerEl) return;
+
+    let timer = null;
+    const commit = (val) => {
+      this._setThemeKey(key, val.trim());
+      if (/^#[0-9a-fA-F]{6}$/.test(val.trim())) pickerEl.value = val.trim();
+    };
+    textEl.addEventListener('input', () => {
+      clearTimeout(timer);
+      timer = setTimeout(() => commit(textEl.value), 400);
+    });
+    textEl.addEventListener('change', () => {
+      clearTimeout(timer);
+      commit(textEl.value);
+    });
+    pickerEl.addEventListener('input', () => {
+      textEl.value = pickerEl.value;
+      this._setThemeKey(key, pickerEl.value);
     });
   }
 

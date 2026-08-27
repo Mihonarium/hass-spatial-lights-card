@@ -323,6 +323,12 @@ class SpatialLightColorCard extends HTMLElement {
       effect_filter_default: ['any', 'all'].includes(config.effect_filter_default) ? config.effect_filter_default : 'any',
       effect_filter_selected: ['any', 'all'].includes(config.effect_filter_selected) ? config.effect_filter_selected : 'all',
 
+      // Adaptive Lighting preset button (basnijholt/adaptive-lighting
+      // integration). Shown automatically when an adaptive_lighting switch is
+      // detected in hass; `adaptive_lighting: false` hides it, an object
+      // pins the switch and tunes the apply call.
+      adaptive_lighting: this._normalizeAdaptiveLighting(config.adaptive_lighting),
+
       // Canvas elements (non-entity elements: links, sensors, templates)
       canvas_elements: this._normalizeCanvasElements(config.canvas_elements),
 
@@ -354,6 +360,8 @@ class SpatialLightColorCard extends HTMLElement {
     this._canvasElementCache = null;
     this._customMaskCache = null;
     this._wallMaskCache = null;
+    this._alSwitchCache = null;
+    this._alSwitchId = null;
 
     // Re-render if hass is already available (config changed after first render)
     if (this._hass) {
@@ -370,6 +378,29 @@ class SpatialLightColorCard extends HTMLElement {
       });
     }
     return result;
+  }
+
+  /**
+   * Normalize the `adaptive_lighting` config. Accepts `false` (hide the
+   * preset), an options object, or nothing (auto-detect). All apply-call
+   * options mirror the adaptive_lighting.apply service fields.
+   */
+  _normalizeAdaptiveLighting(raw) {
+    if (raw === false) return { enabled: false };
+    const o = (raw && typeof raw === 'object') ? raw : {};
+    const transition = Number(o.transition);
+    return {
+      enabled: o.enabled !== false,
+      switch: typeof o.switch === 'string' ? o.switch.trim() : '',
+      name: (typeof o.name === 'string' && o.name.trim()) ? o.name.trim() : 'Adaptive',
+      icon: (typeof o.icon === 'string' && o.icon.trim()) ? o.icon.trim() : 'mdi:theme-light-dark',
+      transition: Number.isFinite(transition) && transition >= 0 ? transition : null,
+      turn_on_lights: o.turn_on_lights === true,
+      adapt_brightness: o.adapt_brightness !== false,
+      adapt_color: o.adapt_color !== false,
+      prefer_rgb_color: o.prefer_rgb_color === true,
+      clear_manual_control: o.clear_manual_control !== false,
+    };
   }
 
   _normalizeMirrorOverrides(obj) {
@@ -1290,6 +1321,10 @@ class SpatialLightColorCard extends HTMLElement {
       // Sensors fall back to icon, prefix, suffix from the entity attributes;
       // the `entity` check above covers them.
     }
+    // The adaptive-lighting switch drives the adaptive preset's active state
+    // (its manual_control attribute changes as lights get touched).
+    const alId = this._alSwitchId || (this._config.adaptive_lighting && this._config.adaptive_lighting.switch);
+    if (alId && prev.states[alId] !== next.states[alId]) return true;
     return false;
   }
 
@@ -4488,6 +4523,8 @@ class SpatialLightColorCard extends HTMLElement {
       } else if (target.classList.contains('temp-preset')) {
         const k = parseInt(target.dataset.presetKelvin, 10);
         if (Number.isFinite(k)) this._applyTemperaturePreset(k);
+      } else if (target.classList.contains('adaptive-preset')) {
+        this._applyAdaptiveLighting();
       } else if (target.classList.contains('effect-preset')) {
         const effect = target.dataset.presetEffect;
         if (effect) this._applyEffectPreset(effect);
@@ -5477,6 +5514,7 @@ class SpatialLightColorCard extends HTMLElement {
       el.addEventListener('click', (e) => {
         e.stopPropagation();
         if (this._suppressPresetClick) { this._suppressPresetClick = false; return; }
+        if (el.classList.contains('adaptive-preset')) { this._applyAdaptiveLighting(); return; }
         const effectName = el.dataset.presetEffect;
         if (effectName) this._applyEffectPreset(effectName);
       });
@@ -5707,6 +5745,169 @@ class SpatialLightColorCard extends HTMLElement {
     return referenceEffect;
   }
 
+  /** ---------- Adaptive Lighting (basnijholt/adaptive-lighting) ---------- */
+
+  /**
+   * Find the main switches of the Adaptive Lighting custom integration. Each
+   * AL config entry creates `switch.adaptive_lighting_<name>` plus three
+   * sub-switches (sleep_mode / adapt_brightness / adapt_color); only the
+   * main switch exposes a `configuration` attribute (with the managed
+   * `lights` list) and accepts the apply/set_manual_control services.
+   * Static so the editor can reuse it for its switch datalist.
+   */
+  static findAdaptiveSwitches(hass) {
+    const states = hass && hass.states;
+    if (!states) return [];
+    const subPrefixes = [
+      'switch.adaptive_lighting_sleep_mode_',
+      'switch.adaptive_lighting_adapt_brightness_',
+      'switch.adaptive_lighting_adapt_color_',
+    ];
+    const found = [];
+    for (const id of Object.keys(states)) {
+      if (!id.startsWith('switch.')) continue;
+      if (subPrefixes.some(p => id.startsWith(p))) continue;
+      const conf = states[id].attributes && states[id].attributes.configuration;
+      // Attribute check catches renamed entities; the name-prefix fallback
+      // covers AL versions that don't expose `configuration`.
+      if ((conf && Array.isArray(conf.lights)) || id.startsWith('switch.adaptive_lighting_')) {
+        found.push(id);
+      }
+    }
+    return found;
+  }
+
+  /**
+   * Cached wrapper — the set of AL config entries changes rarely. An empty
+   * result is retried at most every 30 s: after an HA restart the card often
+   * renders before the AL integration has created its switches.
+   */
+  _getAdaptiveLightingSwitches() {
+    if (this._alSwitchCache && this._alSwitchCache.length > 0) return this._alSwitchCache;
+    const now = Date.now();
+    if (this._alSwitchCache && now - (this._alScanTs || 0) < 30000) return this._alSwitchCache;
+    const found = SpatialLightColorCard.findAdaptiveSwitches(this._hass);
+    if (this._hass?.states) { this._alSwitchCache = found; this._alScanTs = now; }
+    return found;
+  }
+
+  /**
+   * Resolve the AL switch to act through plus its managed/manual light sets,
+   * or null when the adaptive preset should not exist: disabled by config,
+   * integration absent, or ambiguous (several AL switches, none configured,
+   * none overlapping this card's lights).
+   */
+  _getAdaptiveLightingContext() {
+    const al = this._config.adaptive_lighting;
+    if (!al || al.enabled === false || !this._hass) return null;
+    let switchId = al.switch;
+    if (!switchId) {
+      const detected = this._getAdaptiveLightingSwitches();
+      if (detected.length === 0) return null;
+      if (detected.length === 1) {
+        switchId = detected[0];
+      } else {
+        // Several AL config entries: pick the switch managing the most of
+        // this card's lights.
+        const cardLights = new Set((this._config.entities || []).filter(id => id.startsWith('light.')));
+        let best = null;
+        let bestOverlap = 0;
+        for (const id of detected) {
+          const lights = this._hass.states[id]?.attributes?.configuration?.lights;
+          if (!Array.isArray(lights)) continue;
+          const overlap = lights.filter(l => cardLights.has(l)).length;
+          if (overlap > bestOverlap) { best = id; bestOverlap = overlap; }
+        }
+        if (!best) return null;
+        switchId = best;
+      }
+    }
+    const st = this._hass.states[switchId];
+    if (!st) return null;
+    const attrs = st.attributes || {};
+    const configLights = (attrs.configuration && Array.isArray(attrs.configuration.lights))
+      ? new Set(attrs.configuration.lights)
+      : null;
+    const manualControl = new Set(Array.isArray(attrs.manual_control) ? attrs.manual_control : []);
+    this._alSwitchId = switchId; // lets _isRelevantHassChange watch the switch
+    return { switchId, configLights, manualControl, isOn: st.state === 'on' };
+  }
+
+  /** Lights the adaptive preset would act on right now (selection or all). */
+  _getAdaptiveTargets() {
+    const pool = this._selectedLights.size > 0
+      ? [...this._selectedLights]
+      : [...(this._config.entities || [])];
+    return pool.filter(id => id.startsWith('light.') && this._isEntityAvailable(id));
+  }
+
+  _renderAdaptivePreset() {
+    const ctx = this._getAdaptiveLightingContext();
+    if (!ctx) return '';
+    const al = this._config.adaptive_lighting;
+    const targets = this._getAdaptiveTargets();
+    if (targets.length === 0) return '';
+    // "Active" = every target is currently under adaptive control: the AL
+    // switch is on, manages the light, and hasn't flagged it as manually
+    // controlled. Without the configuration attribute (old AL versions)
+    // membership is unknowable, so never show active.
+    const isActive = ctx.isOn && !!ctx.configLights
+      && targets.every(id => ctx.configLights.has(id) && !ctx.manualControl.has(id));
+    // Hover/long-press highlights the card lights being adapted right now.
+    let highlight = [];
+    if (ctx.isOn && ctx.configLights) {
+      highlight = (this._config.entities || []).filter(id =>
+        ctx.configLights.has(id)
+        && !ctx.manualControl.has(id)
+        && this._hass?.states?.[id]?.state === 'on');
+    }
+    const name = this._escapeHtml(al.name);
+    const entitiesAttr = highlight.length ? ` data-preset-entities="${this._escapeHtml(highlight.join(','))}"` : '';
+    return `<div class="effect-preset adaptive-preset${isActive ? ' active' : ''}"${entitiesAttr} title="${name}" tabindex="0" role="button" aria-label="${name} lighting${isActive ? ', active' : ''}"><ha-icon icon="${this._escapeHtml(al.icon)}"></ha-icon><span class="effect-label">${name}</span></div>`;
+  }
+
+  /**
+   * Hand the target lights over to the Adaptive Lighting integration:
+   * un-flag them as manually controlled (so the switch resumes adapting the
+   * lights it manages) and call adaptive_lighting.apply so the switch's
+   * current adaptive brightness/color land immediately — including on lights
+   * outside the switch's managed set, which get a one-shot adaptation.
+   */
+  _applyAdaptiveLighting() {
+    const ctx = this._getAdaptiveLightingContext();
+    if (!ctx || !this._hass) return;
+    const al = this._config.adaptive_lighting;
+    const targets = this._getAdaptiveTargets();
+    if (targets.length === 0) return;
+
+    if (al.clear_manual_control) {
+      // set_manual_control only means something for lights the switch
+      // manages; filter when the managed set is known.
+      const managed = ctx.configLights ? targets.filter(id => ctx.configLights.has(id)) : targets;
+      if (managed.length > 0) {
+        this._hass.callService('adaptive_lighting', 'set_manual_control', {
+          entity_id: ctx.switchId,
+          lights: managed,
+          manual_control: false,
+        }).catch(err => console.warn('[spatial-light-card] adaptive_lighting.set_manual_control failed:', err));
+      }
+    }
+
+    const data = {
+      entity_id: ctx.switchId,
+      lights: targets,
+      turn_on_lights: al.turn_on_lights,
+      adapt_brightness: al.adapt_brightness,
+      adapt_color: al.adapt_color,
+      prefer_rgb_color: al.prefer_rgb_color,
+    };
+    if (al.transition != null) data.transition = al.transition;
+    this._hass.callService('adaptive_lighting', 'apply', data)
+      .catch(err => console.warn('[spatial-light-card] adaptive_lighting.apply failed:', err));
+
+    this._announceApplied(`${al.name} lighting`, targets);
+  }
+
   _renderEffectPresets() {
     const available = this._getAvailableEffects();
     if (available.length === 0) return '';
@@ -5744,7 +5945,9 @@ class SpatialLightColorCard extends HTMLElement {
   _renderPresetsContent() {
     const colorHtml = this._renderColorPresets();
     const tempHtml = this._renderTemperaturePresets();
-    const effectHtml = this._renderEffectPresets();
+    // The adaptive preset lives in the effect block: it's a mode button, not
+    // a color swatch, and shares the effect-preset look and separators.
+    const effectHtml = this._renderEffectPresets() + this._renderAdaptivePreset();
     if (!colorHtml && !tempHtml && !effectHtml) return '';
     let html = colorHtml || '';
     if (colorHtml && tempHtml) {
@@ -7236,6 +7439,27 @@ class SpatialLightColorCard extends HTMLElement {
       });
     }
     if (this._config.show_live_colors) yamlLines.push(`show_live_colors: true`);
+
+    // Adaptive Lighting: emit only what deviates from the defaults
+    const al = this._config.adaptive_lighting;
+    if (al && al.enabled === false) {
+      yamlLines.push('adaptive_lighting: false');
+    } else if (al) {
+      const alLines = [];
+      if (al.switch) alLines.push(`${indent}switch: ${al.switch}`);
+      if (al.name !== 'Adaptive') alLines.push(`${indent}name: ${al.name}`);
+      if (al.icon !== 'mdi:theme-light-dark') alLines.push(`${indent}icon: ${al.icon}`);
+      if (al.transition != null) alLines.push(`${indent}transition: ${al.transition}`);
+      if (al.turn_on_lights) alLines.push(`${indent}turn_on_lights: true`);
+      if (!al.adapt_brightness) alLines.push(`${indent}adapt_brightness: false`);
+      if (!al.adapt_color) alLines.push(`${indent}adapt_color: false`);
+      if (al.prefer_rgb_color) alLines.push(`${indent}prefer_rgb_color: true`);
+      if (!al.clear_manual_control) alLines.push(`${indent}clear_manual_control: false`);
+      if (alLines.length) {
+        yamlLines.push('adaptive_lighting:');
+        yamlLines.push(...alLines);
+      }
+    }
 
     if (this._config.label_overrides && Object.keys(this._config.label_overrides).length) {
       yamlLines.push('label_overrides:');
@@ -8972,6 +9196,24 @@ class SpatialLightColorCardEditor extends HTMLElement {
                 <option value="all">If all selected have it</option>
               </select>
             </div>
+            <div class="option-row">
+              <div><div class="label">Adaptive Lighting button</div><div class="sublabel">Effect-style preset that hands selected lights back to the Adaptive Lighting integration (requires the adaptive_lighting HACS integration)</div></div>
+              <select id="cfgAdaptiveEnabled" style="padding:6px 10px; border-radius:6px; border:1px solid var(--divider-color, rgba(0,0,0,0.12)); background:var(--card-background-color, #fff); color:var(--primary-text-color, #212121); font-size:14px;">
+                <option value="auto">Auto (when detected)</option>
+                <option value="off">Off</option>
+              </select>
+            </div>
+            <div class="input-row">
+              <label>Adaptive Lighting switch (optional — auto-detected when empty)</label>
+              <input type="text" id="cfgAdaptiveSwitch" list="alSwitchesList" placeholder="switch.adaptive_lighting_...">
+              <datalist id="alSwitchesList">
+                ${SpatialLightColorCard.findAdaptiveSwitches(this._hass).map(id => `<option value="${this._esc(id)}">`).join('')}
+              </datalist>
+            </div>
+            <div class="option-row">
+              <div><div class="label">Adaptive: turn on lights</div><div class="sublabel">Applying adaptive lighting also turns on lights that are off</div></div>
+              <ha-switch id="cfgAdaptiveTurnOn"></ha-switch>
+            </div>
           </div>
         </div>
 
@@ -9239,6 +9481,11 @@ class SpatialLightColorCardEditor extends HTMLElement {
     setVal('cfgEffectFilterDefault', c.effect_filter_default || 'any');
     setVal('cfgEffectFilterSelected', c.effect_filter_selected || 'all');
 
+    const alRaw = c.adaptive_lighting;
+    const alObj = (alRaw && typeof alRaw === 'object') ? alRaw : {};
+    setVal('cfgAdaptiveEnabled', (alRaw === false || alObj.enabled === false) ? 'off' : 'auto');
+    setVal('cfgAdaptiveSwitch', alObj.switch || '');
+
     // Background image (ha-picture-upload created programmatically after lazy load)
     let bgUrl = '';
     if (c.background_image) {
@@ -9331,6 +9578,7 @@ class SpatialLightColorCardEditor extends HTMLElement {
       cfgShowIcons: c.show_entity_icons !== false,
       cfgIconOnly: c.icon_only_mode || false,
       cfgLiveColors: c.show_live_colors || false,
+      cfgAdaptiveTurnOn: !!(c.adaptive_lighting && typeof c.adaptive_lighting === 'object' && c.adaptive_lighting.turn_on_lights),
       cfgAlwaysControls: c.always_show_controls || false,
       cfgControlsBelow: c.controls_below !== false,
       cfgSwitchTap: c.switch_single_tap || false,
@@ -9761,6 +10009,39 @@ class SpatialLightColorCardEditor extends HTMLElement {
       efSelected.addEventListener('change', () => {
         this._config.effect_filter_selected = efSelected.value;
         this._fireConfigChanged();
+      });
+    }
+
+    // --- Adaptive Lighting ---
+    const updateAdaptive = (mutator) => {
+      const raw = this._config.adaptive_lighting;
+      const obj = raw === false ? { enabled: false } : ((raw && typeof raw === 'object') ? { ...raw } : {});
+      mutator(obj);
+      // Keep saved YAML minimal: drop editor-managed keys at their defaults;
+      // advanced keys set by hand (transition, adapt_color, ...) survive.
+      if (obj.enabled !== false) delete obj.enabled;
+      if (!obj.switch) delete obj.switch;
+      if (!obj.turn_on_lights) delete obj.turn_on_lights;
+      if (Object.keys(obj).length === 0) delete this._config.adaptive_lighting;
+      else this._config.adaptive_lighting = obj;
+      this._fireConfigChanged();
+    };
+    const alEnabled = root.getElementById('cfgAdaptiveEnabled');
+    if (alEnabled) {
+      alEnabled.addEventListener('change', () => {
+        updateAdaptive(obj => { obj.enabled = alEnabled.value !== 'off'; });
+      });
+    }
+    const alSwitchInput = root.getElementById('cfgAdaptiveSwitch');
+    if (alSwitchInput) {
+      alSwitchInput.addEventListener('change', () => {
+        updateAdaptive(obj => { obj.switch = alSwitchInput.value.trim(); });
+      });
+    }
+    const alTurnOn = root.getElementById('cfgAdaptiveTurnOn');
+    if (alTurnOn) {
+      alTurnOn.addEventListener('change', () => {
+        updateAdaptive(obj => { obj.turn_on_lights = !!alTurnOn.checked; });
       });
     }
 

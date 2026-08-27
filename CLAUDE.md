@@ -50,7 +50,9 @@
 
 **Separator:** A 1×20 px div between RGB and temp presets. `_updateSeparatorVisibility()` checks via `getBoundingClientRect()` whether the previous color preset and the next temp preset are on the same row, and hides the separator otherwise.
 
-**Preset interaction:** `_bindPresetHighlight(el)` and `_bindPresetHandlers()`. Mouse hover highlights matching lights via `pointerenter`/`pointerleave`; touch uses a 300 ms long-press to highlight, then clears on `pointerup`. Click applies via `_applyColorWheelSelection(rgb)` / `_applyTemperaturePreset(kelvin)` / `_applyEffectPreset(effect)`. Keyboard Enter/Space activates from `_handleKeyDown` → `composedPath()` lookup.
+**Preset interaction:** `_bindPresetHighlight(el)` and `_bindPresetHandlers()`. Mouse hover highlights matching lights via `pointerenter`/`pointerleave`; touch uses a 300 ms long-press to highlight, then clears on `pointerup`. Click applies via `_applyColorWheelSelection(rgb)` / `_applyTemperaturePreset(kelvin)` / `_applyEffectPreset(effect)` / `_applyAdaptiveLighting()`. Keyboard Enter/Space activates from `_handleKeyDown` → `composedPath()` lookup.
+
+**Adaptive Lighting preset:** `_renderAdaptivePreset()` emits one extra `.effect-preset.adaptive-preset` button in the effect block when `_getAdaptiveLightingContext()` resolves a main switch of the basnijholt/adaptive-lighting integration (config `adaptive_lighting.switch`, else auto-detect via `findAdaptiveSwitches` — cached in `_alSwitchCache`, invalidated in `setConfig`). Clicking calls `adaptive_lighting.set_manual_control` (`manual_control: false`, managed lights only) then `adaptive_lighting.apply` on the selected-or-all `light.*` targets. Active state = switch on + every target in the switch's `configuration.lights` attribute and absent from its `manual_control` attribute. `_isRelevantHassChange` also watches the resolved switch (`_alSwitchId`).
 
 ---
 

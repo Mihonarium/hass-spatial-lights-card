@@ -115,6 +115,7 @@ class SpatialLightColorCard extends HTMLElement {
       canvas: null,
       controlsFloating: null,
       controlsBelow: null,
+      powerToggle: null,
       brightnessSlider: null,
       brightnessValue: null,
       temperatureSlider: null,
@@ -255,6 +256,8 @@ class SpatialLightColorCard extends HTMLElement {
       default_entity: config.default_entity || null,
       controls_below: config.controls_below !== false,
       show_entity_icons: config.show_entity_icons !== false,
+      // On/off toggle for the controlled lights, left of the sliders
+      show_power_button: config.show_power_button !== false,
       switch_single_tap: config.switch_single_tap || false,
       // When true (default), vertical touch swipes on the canvas scroll the
       // page and pinch zooms; rubber-band selection needs a deliberate
@@ -323,10 +326,9 @@ class SpatialLightColorCard extends HTMLElement {
       effect_filter_default: ['any', 'all'].includes(config.effect_filter_default) ? config.effect_filter_default : 'any',
       effect_filter_selected: ['any', 'all'].includes(config.effect_filter_selected) ? config.effect_filter_selected : 'all',
 
-      // Adaptive Lighting preset button (basnijholt/adaptive-lighting
-      // integration). Shown automatically when an adaptive_lighting switch is
-      // detected in hass; `adaptive_lighting: false` hides it, an object
-      // pins the switch and tunes the apply call.
+      // Adaptive Lighting toggle button (basnijholt/adaptive-lighting
+      // integration). Opt-in: `adaptive_lighting: true` or `{enabled: true}`;
+      // the AL switch is auto-detected unless pinned with `switch`.
       adaptive_lighting: this._normalizeAdaptiveLighting(config.adaptive_lighting),
 
       // Canvas elements (non-entity elements: links, sensors, templates)
@@ -381,16 +383,16 @@ class SpatialLightColorCard extends HTMLElement {
   }
 
   /**
-   * Normalize the `adaptive_lighting` config. Accepts `false` (hide the
-   * preset), an options object, or nothing (auto-detect). All apply-call
-   * options mirror the adaptive_lighting.apply service fields.
+   * Normalize the `adaptive_lighting` config. Accepts `true` (show the
+   * button, auto-detect the switch), an options object (needs
+   * `enabled: true`), or nothing/`false` (hidden — the default). All
+   * apply-call options mirror the adaptive_lighting.apply service fields.
    */
   _normalizeAdaptiveLighting(raw) {
-    if (raw === false) return { enabled: false };
     const o = (raw && typeof raw === 'object') ? raw : {};
     const transition = Number(o.transition);
     return {
-      enabled: o.enabled !== false,
+      enabled: raw === true || o.enabled === true,
       switch: typeof o.switch === 'string' ? o.switch.trim() : '',
       name: (typeof o.name === 'string' && o.name.trim()) ? o.name.trim() : 'Adaptive',
       icon: (typeof o.icon === 'string' && o.icon.trim()) ? o.icon.trim() : 'mdi:theme-light-dark',
@@ -2460,6 +2462,7 @@ class SpatialLightColorCard extends HTMLElement {
     this._els.canvas = this.shadowRoot.getElementById('canvas');
     this._els.controlsFloating = this.shadowRoot.getElementById('controlsFloating');
     this._els.controlsBelow = this.shadowRoot.getElementById('controlsBelow');
+    this._els.powerToggle = this.shadowRoot.getElementById('powerToggle');
     this._els.brightnessSlider = this.shadowRoot.getElementById('brightnessSlider');
     this._els.brightnessValue = this.shadowRoot.getElementById('brightnessValue');
     this._els.temperatureSlider = this.shadowRoot.getElementById('temperatureSlider');
@@ -2883,6 +2886,9 @@ class SpatialLightColorCard extends HTMLElement {
           border: 1px solid CanvasText;
         }
         .color-preset, .temp-preset, .effect-preset { border: 1px solid CanvasText; }
+        .power-toggle { background: ButtonFace; color: ButtonText; border: 1px solid ButtonText; }
+        .power-toggle.on { background: Highlight; color: HighlightText; border-color: Highlight; }
+        .power-toggle:focus-visible { outline: 2px solid Highlight; }
         .color-preset.active, .temp-preset.active, .effect-preset.active {
           outline: 2px solid Highlight; outline-offset: 1px;
         }
@@ -3184,8 +3190,33 @@ class SpatialLightColorCard extends HTMLElement {
       }
       .effect-preset:hover .effect-label { opacity: 1; }
 
-      .slider-group { display:flex; flex-direction:column; gap:10px; min-width: 240px; grid-column: 2; grid-row: 1; }
+      .slider-group { display:flex; flex-direction:row; align-items:center; gap:14px; min-width: 240px; grid-column: 2; grid-row: 1; }
+      .slider-stack { display:flex; flex-direction:column; gap:10px; flex:1 1 auto; min-width:0; }
       .slider-row { display:flex; align-items:center; gap:8px; width:100%; padding: 2px 0; }
+
+      /* Power toggle: group on/off for the controlled lights. Spans both
+         slider rows. Filled = all on (press turns off); accent outline =
+         mixed (press turns the rest on); neutral = all off. */
+      .power-toggle {
+        flex-shrink: 0; width: 44px; height: 44px; border-radius: 9999px; padding: 0;
+        display: inline-flex; align-items: center; justify-content: center;
+        background: var(--surface-elevated); color: var(--text-secondary);
+        border: 1.5px solid var(--border-medium); cursor: pointer;
+        --mdc-icon-size: 24px;
+        transition: background var(--transition-fast), color var(--transition-fast),
+          border-color var(--transition-fast), transform var(--transition-fast), box-shadow var(--transition-fast);
+      }
+      .power-toggle ha-icon { display: flex; }
+      .power-toggle:hover { transform: scale(1.06); border-color: var(--text-secondary); }
+      .power-toggle:active { transform: scale(0.94); }
+      .power-toggle.mixed { color: var(--accent-primary); border-color: var(--accent-primary); }
+      .power-toggle.on { background: var(--accent-primary); color: #fff; border-color: transparent; box-shadow: var(--shadow-sm); }
+      .power-toggle.on:hover { border-color: transparent; filter: brightness(1.08); }
+      .power-toggle:disabled { opacity: 0.35; cursor: not-allowed; transform: none; filter: none; }
+      .power-toggle:focus { outline: none; }
+      .power-toggle:focus-visible {
+        box-shadow: 0 0 0 2px var(--accent-primary, #6366f1), 0 0 0 4px color-mix(in srgb, var(--accent-primary) 35%, transparent);
+      }
 
       .slider {
         flex:1; -webkit-appearance:none; appearance:none;
@@ -3653,6 +3684,8 @@ class SpatialLightColorCard extends HTMLElement {
       <div class="controls-floating ${visible ? 'visible' : ''}" id="controlsFloating" role="region" aria-label="Light controls">
         <canvas id="colorWheelMini" class="color-wheel-mini" width="256" height="256" role="img" aria-label="Color picker"></canvas>
         <div class="slider-group">
+          ${this._renderPowerToggle(controlContext)}
+          <div class="slider-stack">
           <div class="slider-row">
             <input type="range" class="slider" id="brightnessSlider" min="0" max="255" value="${avgState.brightness}" aria-label="Brightness" style="--slider-percent:${brightnessPercent}%;--slider-ratio:${brightnessPercent/100};--slider-fill:${brightnessColor};">
             <span class="slider-value" id="brightnessValue">${Math.round((avgState.brightness/255)*100)}%</span>
@@ -3660,6 +3693,7 @@ class SpatialLightColorCard extends HTMLElement {
           <div class="slider-row">
             <input type="range" class="slider temperature" id="temperatureSlider" min="${tempRange.min}" max="${tempRange.max}" value="${clampedTemp}" aria-label="Color temperature" style="--slider-percent:${tempPercent}%;--slider-ratio:${tempPercent/100};">
             <span class="slider-value" id="temperatureValue">${clampedTemp}K</span>
+          </div>
           </div>
         </div>
         <div class="presets-area">
@@ -3681,6 +3715,8 @@ class SpatialLightColorCard extends HTMLElement {
       <div class="controls-below ${(this._config.always_show_controls || this._selectedLights.size > 0 || this._config.default_entity) ? 'visible' : ''}" id="controlsBelow" role="region" aria-label="Light controls">
         <canvas id="colorWheelMini" class="color-wheel-mini" width="256" height="256" role="img" aria-label="Color picker"></canvas>
         <div class="slider-group">
+          ${this._renderPowerToggle(controlContext)}
+          <div class="slider-stack">
           <div class="slider-row">
             <input type="range" class="slider" id="brightnessSlider" min="0" max="255" value="${avgState.brightness}" aria-label="Brightness" style="--slider-percent:${brightnessPercent}%;--slider-ratio:${brightnessPercent/100};--slider-fill:${brightnessColor};">
             <span class="slider-value" id="brightnessValue">${Math.round((avgState.brightness/255)*100)}%</span>
@@ -3688,6 +3724,7 @@ class SpatialLightColorCard extends HTMLElement {
           <div class="slider-row">
             <input type="range" class="slider temperature" id="temperatureSlider" min="${tempRange.min}" max="${tempRange.max}" value="${clampedTemp}" aria-label="Color temperature" style="--slider-percent:${tempPercent}%;--slider-ratio:${tempPercent/100};">
             <span class="slider-value" id="temperatureValue">${clampedTemp}K</span>
+          </div>
           </div>
         </div>
         <div class="presets-area">
@@ -3799,6 +3836,7 @@ class SpatialLightColorCard extends HTMLElement {
       c.classList.toggle('no-temp-support', !caps.color_temp);
       c.classList.toggle('no-brightness-support', !caps.brightness);
     });
+    this._updatePowerToggle(context.controlled || []);
   }
 
   _updateSliderVisual(el) {
@@ -4285,6 +4323,14 @@ class SpatialLightColorCard extends HTMLElement {
       this._els.temperatureSlider.addEventListener('input', (e) => this._handleTemperatureInput(e));
       this._els.temperatureSlider.addEventListener('change', () => this._scheduleSliderCommit('temperature'));
       this._bindSliderGesture(this._els.temperatureSlider);
+    }
+    if (this._els.powerToggle) {
+      // Group on/off for whatever the controls are driving (selection, else
+      // default_entity) — same any-off → all-on rule as the Space key.
+      this._els.powerToggle.addEventListener('click', (e) => {
+        e.stopPropagation();
+        this._toggleSelection(this._getControlledEntities());
+      });
     }
   }
 
@@ -5745,6 +5791,64 @@ class SpatialLightColorCard extends HTMLElement {
     return referenceEffect;
   }
 
+  /** ---------- Power toggle (controlled lights on/off) ---------- */
+
+  /**
+   * On/off state of the toggleable subset of `controlled` (available lights,
+   * switches, input_booleans): 'on' when all are on, 'off' when none are,
+   * 'mixed' otherwise, 'none' when nothing is toggleable.
+   */
+  _getPowerState(controlled) {
+    const toggleable = (controlled || []).filter(id => {
+      const [d] = id.split('.');
+      return (d === 'light' || d === 'switch' || d === 'input_boolean') && this._isEntityAvailable(id);
+    });
+    if (toggleable.length === 0) return { toggleable, state: 'none' };
+    const onCount = toggleable.filter(id => this._hass?.states?.[id]?.state === 'on').length;
+    const state = onCount === 0 ? 'off' : (onCount === toggleable.length ? 'on' : 'mixed');
+    return { toggleable, state };
+  }
+
+  /** Accessible name doubling as tooltip: says what a press will do. */
+  _powerToggleLabel(power) {
+    if (power.state === 'none') return 'Nothing to turn on or off';
+    // Mirrors _toggleSelection: any off → everything on; all on → all off.
+    const turnOn = power.state !== 'on';
+    const n = power.toggleable.length;
+    if (n === 1) {
+      const st = this._hass?.states?.[power.toggleable[0]];
+      return `Turn ${turnOn ? 'on' : 'off'} ${st?.attributes?.friendly_name || power.toggleable[0]}`;
+    }
+    return `Turn ${turnOn ? 'on' : 'off'} ${n} lights`;
+  }
+
+  _powerTogglePressed(power) {
+    return power.state === 'on' ? 'true' : (power.state === 'mixed' ? 'mixed' : 'false');
+  }
+
+  _renderPowerToggle(controlContext) {
+    if (!this._config.show_power_button) return '';
+    const power = this._getPowerState(controlContext?.controlled || []);
+    const label = this._escapeHtml(this._powerToggleLabel(power));
+    const disabled = power.state === 'none' ? ' disabled' : '';
+    return `<button type="button" class="power-toggle ${power.state}" id="powerToggle" aria-label="${label}" title="${label}" aria-pressed="${this._powerTogglePressed(power)}"${disabled}><ha-icon icon="mdi:power" data-icon="mdi:power"></ha-icon></button>`;
+  }
+
+  /** In-place sync (called from _updateControlValues on every relevant change). */
+  _updatePowerToggle(controlled) {
+    const el = this._els.powerToggle;
+    if (!el) return;
+    const power = this._getPowerState(controlled || []);
+    ['on', 'off', 'mixed', 'none'].forEach(s => el.classList.toggle(s, power.state === s));
+    el.disabled = power.state === 'none';
+    el.setAttribute('aria-pressed', this._powerTogglePressed(power));
+    const label = this._powerToggleLabel(power);
+    if (el.getAttribute('aria-label') !== label) {
+      el.setAttribute('aria-label', label);
+      el.title = label;
+    }
+  }
+
   /** ---------- Adaptive Lighting (basnijholt/adaptive-lighting) ---------- */
 
   /**
@@ -5841,18 +5945,24 @@ class SpatialLightColorCard extends HTMLElement {
     return pool.filter(id => id.startsWith('light.') && this._isEntityAvailable(id));
   }
 
+  /** True when every target is currently being adapted by the switch. */
+  _isAdaptiveActive(ctx, targets) {
+    return !!ctx && ctx.isOn && !!ctx.configLights && targets.length > 0
+      && targets.every(id => ctx.configLights.has(id) && !ctx.manualControl.has(id));
+  }
+
   _renderAdaptivePreset() {
     const ctx = this._getAdaptiveLightingContext();
     if (!ctx) return '';
     const al = this._config.adaptive_lighting;
     const targets = this._getAdaptiveTargets();
     if (targets.length === 0) return '';
-    // "Active" = every target is currently under adaptive control: the AL
+    // "Active" = every target is under adaptive control right now: the AL
     // switch is on, manages the light, and hasn't flagged it as manually
     // controlled. Without the configuration attribute (old AL versions)
-    // membership is unknowable, so never show active.
-    const isActive = ctx.isOn && !!ctx.configLights
-      && targets.every(id => ctx.configLights.has(id) && !ctx.manualControl.has(id));
+    // membership is unknowable, so never show active. The button is a
+    // toggle: pressing it while active pauses adaptation for the targets.
+    const isActive = this._isAdaptiveActive(ctx, targets);
     // Hover/long-press highlights the card lights being adapted right now.
     let highlight = [];
     if (ctx.isOn && ctx.configLights) {
@@ -5862,16 +5972,23 @@ class SpatialLightColorCard extends HTMLElement {
         && this._hass?.states?.[id]?.state === 'on');
     }
     const name = this._escapeHtml(al.name);
+    const title = isActive ? `${name} lighting is on — press to pause` : `${name} lighting — press to enable`;
     const entitiesAttr = highlight.length ? ` data-preset-entities="${this._escapeHtml(highlight.join(','))}"` : '';
-    return `<div class="effect-preset adaptive-preset${isActive ? ' active' : ''}"${entitiesAttr} title="${name}" tabindex="0" role="button" aria-label="${name} lighting${isActive ? ', active' : ''}"><ha-icon icon="${this._escapeHtml(al.icon)}"></ha-icon><span class="effect-label">${name}</span></div>`;
+    return `<div class="effect-preset adaptive-preset${isActive ? ' active' : ''}"${entitiesAttr} title="${title}" tabindex="0" role="button" aria-pressed="${isActive ? 'true' : 'false'}" aria-label="${name} lighting"><ha-icon icon="${this._escapeHtml(al.icon)}"></ha-icon><span class="effect-label">${name}</span></div>`;
   }
 
   /**
-   * Hand the target lights over to the Adaptive Lighting integration:
-   * un-flag them as manually controlled (so the switch resumes adapting the
-   * lights it manages) and call adaptive_lighting.apply so the switch's
-   * current adaptive brightness/color land immediately — including on lights
-   * outside the switch's managed set, which get a one-shot adaptation.
+   * Toggle adaptive control of the target lights.
+   *
+   * Inactive → enable: un-flag them as manually controlled (so the switch
+   * resumes adapting the lights it manages) and call adaptive_lighting.apply
+   * so the current adaptive brightness/color land immediately — lights
+   * outside the switch's managed set get a one-shot adaptation.
+   *
+   * Active (every target adapted) → pause: flag them as manually controlled,
+   * which is exactly what AL does itself when a light is adjusted by hand.
+   * They hold their current values until pressed again (or turned off and
+   * on, which AL treats as a reset).
    */
   _applyAdaptiveLighting() {
     const ctx = this._getAdaptiveLightingContext();
@@ -5879,6 +5996,19 @@ class SpatialLightColorCard extends HTMLElement {
     const al = this._config.adaptive_lighting;
     const targets = this._getAdaptiveTargets();
     if (targets.length === 0) return;
+
+    if (this._isAdaptiveActive(ctx, targets)) {
+      this._hass.callService('adaptive_lighting', 'set_manual_control', {
+        entity_id: ctx.switchId,
+        lights: targets,
+        manual_control: true,
+      }).catch(err => console.warn('[spatial-light-card] adaptive_lighting.set_manual_control failed:', err));
+      const who = targets.length === 1
+        ? (this._hass.states?.[targets[0]]?.attributes?.friendly_name || targets[0])
+        : `${targets.length} lights`;
+      this._announce(`${al.name} lighting paused for ${who}`);
+      return;
+    }
 
     if (al.clear_manual_control) {
       // set_manual_control only means something for lights the switch
@@ -7376,6 +7506,7 @@ class SpatialLightColorCard extends HTMLElement {
     yamlLines.push(`always_show_controls: ${!!this._config.always_show_controls}`);
     yamlLines.push(`controls_below: ${!!this._config.controls_below}`);
     yamlLines.push(`show_entity_icons: ${!!this._config.show_entity_icons}`);
+    if (this._config.show_power_button === false) yamlLines.push('show_power_button: false');
     yamlLines.push(`switch_single_tap: ${!!this._config.switch_single_tap}`);
     if (this._config.canvas_touch_scroll === false) yamlLines.push('canvas_touch_scroll: false');
     if (this._config.theme_mode && this._config.theme_mode !== 'auto') {
@@ -7442,10 +7573,9 @@ class SpatialLightColorCard extends HTMLElement {
 
     // Adaptive Lighting: emit only what deviates from the defaults
     const al = this._config.adaptive_lighting;
-    if (al && al.enabled === false) {
-      yamlLines.push('adaptive_lighting: false');
-    } else if (al) {
+    if (al) {
       const alLines = [];
+      if (al.enabled) alLines.push(`${indent}enabled: true`);
       if (al.switch) alLines.push(`${indent}switch: ${al.switch}`);
       if (al.name !== 'Adaptive') alLines.push(`${indent}name: ${al.name}`);
       if (al.icon !== 'mdi:theme-light-dark') alLines.push(`${indent}icon: ${al.icon}`);
@@ -8696,6 +8826,7 @@ class SpatialLightColorCardEditor extends HTMLElement {
     const canvasElements = Array.isArray(config.canvas_elements) ? config.canvas_elements : [];
     const glow = config.glow || {};
     const glowWalls = Array.isArray(config.glow_walls) ? config.glow_walls : [];
+    const alSwitches = SpatialLightColorCard.findAdaptiveSwitches(this._hass);
 
     // Save section collapsed state before re-render
     if (this.shadowRoot.querySelector('.section')) {
@@ -8914,6 +9045,10 @@ class SpatialLightColorCardEditor extends HTMLElement {
             <div class="option-row">
               <div><div class="label">Always Show Controls</div><div class="sublabel">Keep brightness/color controls visible</div></div>
               <ha-switch id="cfgAlwaysControls"></ha-switch>
+            </div>
+            <div class="option-row">
+              <div><div class="label">Power Button</div><div class="sublabel">On/off toggle for the selected lights, next to the sliders</div></div>
+              <ha-switch id="cfgShowPowerButton"></ha-switch>
             </div>
             <div class="option-row">
               <div class="label">Light Size</div>
@@ -9197,17 +9332,16 @@ class SpatialLightColorCardEditor extends HTMLElement {
               </select>
             </div>
             <div class="option-row">
-              <div><div class="label">Adaptive Lighting button</div><div class="sublabel">Effect-style preset that hands selected lights back to the Adaptive Lighting integration (requires the adaptive_lighting HACS integration)</div></div>
-              <select id="cfgAdaptiveEnabled" style="padding:6px 10px; border-radius:6px; border:1px solid var(--divider-color, rgba(0,0,0,0.12)); background:var(--card-background-color, #fff); color:var(--primary-text-color, #212121); font-size:14px;">
-                <option value="auto">Auto (when detected)</option>
-                <option value="off">Off</option>
-              </select>
+              <div><div class="label">Adaptive Lighting button</div><div class="sublabel">${alSwitches.length
+                ? `Effect-style toggle: hands the selected lights to Adaptive Lighting, or pauses it. Detected: ${alSwitches.map(id => this._esc(id)).join(', ')}`
+                : 'Effect-style toggle that hands the selected lights to Adaptive Lighting. Requires the adaptive_lighting HACS integration — no switch detected'}</div></div>
+              <ha-switch id="cfgAdaptiveEnabled"></ha-switch>
             </div>
             <div class="input-row">
               <label>Adaptive Lighting switch (optional — auto-detected when empty)</label>
               <input type="text" id="cfgAdaptiveSwitch" list="alSwitchesList" placeholder="switch.adaptive_lighting_...">
               <datalist id="alSwitchesList">
-                ${SpatialLightColorCard.findAdaptiveSwitches(this._hass).map(id => `<option value="${this._esc(id)}">`).join('')}
+                ${alSwitches.map(id => `<option value="${this._esc(id)}">`).join('')}
               </datalist>
             </div>
             <div class="option-row">
@@ -9481,9 +9615,7 @@ class SpatialLightColorCardEditor extends HTMLElement {
     setVal('cfgEffectFilterDefault', c.effect_filter_default || 'any');
     setVal('cfgEffectFilterSelected', c.effect_filter_selected || 'all');
 
-    const alRaw = c.adaptive_lighting;
-    const alObj = (alRaw && typeof alRaw === 'object') ? alRaw : {};
-    setVal('cfgAdaptiveEnabled', (alRaw === false || alObj.enabled === false) ? 'off' : 'auto');
+    const alObj = (c.adaptive_lighting && typeof c.adaptive_lighting === 'object') ? c.adaptive_lighting : {};
     setVal('cfgAdaptiveSwitch', alObj.switch || '');
 
     // Background image (ha-picture-upload created programmatically after lazy load)
@@ -9578,7 +9710,9 @@ class SpatialLightColorCardEditor extends HTMLElement {
       cfgShowIcons: c.show_entity_icons !== false,
       cfgIconOnly: c.icon_only_mode || false,
       cfgLiveColors: c.show_live_colors || false,
+      cfgAdaptiveEnabled: c.adaptive_lighting === true || !!(c.adaptive_lighting && typeof c.adaptive_lighting === 'object' && c.adaptive_lighting.enabled === true),
       cfgAdaptiveTurnOn: !!(c.adaptive_lighting && typeof c.adaptive_lighting === 'object' && c.adaptive_lighting.turn_on_lights),
+      cfgShowPowerButton: c.show_power_button !== false,
       cfgAlwaysControls: c.always_show_controls || false,
       cfgControlsBelow: c.controls_below !== false,
       cfgSwitchTap: c.switch_single_tap || false,
@@ -9928,6 +10062,7 @@ class SpatialLightColorCardEditor extends HTMLElement {
     this._bindSwitch('cfgIconOnly', 'icon_only_mode');
     this._bindSwitch('cfgLiveColors', 'show_live_colors');
     this._bindSwitch('cfgAlwaysControls', 'always_show_controls');
+    this._bindSwitch('cfgShowPowerButton', 'show_power_button');
     this._bindSwitch('cfgControlsBelow', 'controls_below');
     this._bindSwitch('cfgSwitchTap', 'switch_single_tap');
     this._bindSwitch('cfgCanvasTouchScroll', 'canvas_touch_scroll');
@@ -10015,11 +10150,11 @@ class SpatialLightColorCardEditor extends HTMLElement {
     // --- Adaptive Lighting ---
     const updateAdaptive = (mutator) => {
       const raw = this._config.adaptive_lighting;
-      const obj = raw === false ? { enabled: false } : ((raw && typeof raw === 'object') ? { ...raw } : {});
+      const obj = (raw && typeof raw === 'object') ? { ...raw } : (raw === true ? { enabled: true } : {});
       mutator(obj);
       // Keep saved YAML minimal: drop editor-managed keys at their defaults;
       // advanced keys set by hand (transition, adapt_color, ...) survive.
-      if (obj.enabled !== false) delete obj.enabled;
+      if (obj.enabled !== true) delete obj.enabled;
       if (!obj.switch) delete obj.switch;
       if (!obj.turn_on_lights) delete obj.turn_on_lights;
       if (Object.keys(obj).length === 0) delete this._config.adaptive_lighting;
@@ -10029,7 +10164,7 @@ class SpatialLightColorCardEditor extends HTMLElement {
     const alEnabled = root.getElementById('cfgAdaptiveEnabled');
     if (alEnabled) {
       alEnabled.addEventListener('change', () => {
-        updateAdaptive(obj => { obj.enabled = alEnabled.value !== 'off'; });
+        updateAdaptive(obj => { obj.enabled = !!alEnabled.checked; });
       });
     }
     const alSwitchInput = root.getElementById('cfgAdaptiveSwitch');

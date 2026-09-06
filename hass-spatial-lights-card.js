@@ -3115,11 +3115,20 @@ class SpatialLightColorCard extends HTMLElement {
         opacity: 0.35; pointer-events: none;
       }
 
-      .presets-area {
+      /* Row 2 of the controls: [power toggle] | [wrapping presets]. The
+         separator and the (empty) presets area collapse when there are no
+         presets, leaving just the power toggle. */
+      .presets-row {
         grid-column: 2; grid-row: 2;
-        display: flex; flex-wrap: wrap; gap: 0; align-items: center;
+        display: flex; align-items: center; gap: 6px; min-width: 0;
+      }
+      .presets-area {
+        display: flex; flex-wrap: wrap; gap: 0; align-items: center; min-width: 0;
         margin-left: -4px; /* Align visual preset circles with slider left edge */
       }
+      .presets-row:not(.has-presets) .power-separator,
+      .presets-row:not(.has-presets) .presets-area,
+      .presets-row > .power-separator:first-child { display: none; } /* no toggle → nothing to separate */
 
       .preset-separator {
         width: 1px; height: 20px; background: rgba(255,255,255,0.12);
@@ -3190,19 +3199,20 @@ class SpatialLightColorCard extends HTMLElement {
       }
       .effect-preset:hover .effect-label { opacity: 1; }
 
-      .slider-group { display:flex; flex-direction:row; align-items:center; gap:14px; min-width: 240px; grid-column: 2; grid-row: 1; }
-      .slider-stack { display:flex; flex-direction:column; gap:10px; flex:1 1 auto; min-width:0; }
+      .slider-group { display:flex; flex-direction:column; gap:10px; min-width: 240px; grid-column: 2; grid-row: 1; }
       .slider-row { display:flex; align-items:center; gap:8px; width:100%; padding: 2px 0; }
 
-      /* Power toggle: group on/off for the controlled lights. Spans both
-         slider rows. Filled = all on (press turns off); accent outline =
-         mixed (press turns the rest on); neutral = all off. */
+      /* Power toggle: group on/off for the controlled lights. Anchors the
+         presets row (beside the wheel on mobile, under the sliders on
+         desktop) so the sliders keep their full width. Filled = all on
+         (press turns off); accent outline = mixed (press turns the rest
+         on); neutral = all off. */
       .power-toggle {
-        flex-shrink: 0; width: 44px; height: 44px; border-radius: 9999px; padding: 0;
+        flex-shrink: 0; width: 36px; height: 36px; border-radius: 9999px; padding: 0;
         display: inline-flex; align-items: center; justify-content: center;
         background: var(--surface-elevated); color: var(--text-secondary);
         border: 1.5px solid var(--border-medium); cursor: pointer;
-        --mdc-icon-size: 24px;
+        --mdc-icon-size: 20px;
         transition: background var(--transition-fast), color var(--transition-fast),
           border-color var(--transition-fast), transform var(--transition-fast), box-shadow var(--transition-fast);
       }
@@ -3317,10 +3327,13 @@ class SpatialLightColorCard extends HTMLElement {
         }
         .light { --light-size: ${Math.min(this._config.light_size, 50)}px; }
         .color-wheel-mini { order: 1; flex-shrink: 0; align-self: start; }
-        .presets-area {
+        .presets-row {
           order: 2; flex: 0 1 auto; align-self: center;
-          margin-left: 0; /* Reset desktop alignment offset */
           max-width: calc(100% - 140px); /* 128px wheel + 12px gap */
+          justify-content: center;
+        }
+        .presets-area {
+          margin-left: 0; /* Reset desktop alignment offset */
           justify-content: center;
         }
         .slider-group { order: 3; flex: 1 1 100%; min-width: 0; }
@@ -3680,12 +3693,11 @@ class SpatialLightColorCard extends HTMLElement {
       ? Math.min(100, Math.max(0, ((clampedTemp - tempRange.min) / (tempRange.max - tempRange.min)) * 100))
       : 0;
     const brightnessColor = Array.isArray(avgState.color) ? `rgb(${avgState.color.join(',')})` : 'var(--accent-primary)';
+    const presetsHtml = this._renderPresetsContent();
     return `
       <div class="controls-floating ${visible ? 'visible' : ''}" id="controlsFloating" role="region" aria-label="Light controls">
         <canvas id="colorWheelMini" class="color-wheel-mini" width="256" height="256" role="img" aria-label="Color picker"></canvas>
         <div class="slider-group">
-          ${this._renderPowerToggle(controlContext)}
-          <div class="slider-stack">
           <div class="slider-row">
             <input type="range" class="slider" id="brightnessSlider" min="0" max="255" value="${avgState.brightness}" aria-label="Brightness" style="--slider-percent:${brightnessPercent}%;--slider-ratio:${brightnessPercent/100};--slider-fill:${brightnessColor};">
             <span class="slider-value" id="brightnessValue">${Math.round((avgState.brightness/255)*100)}%</span>
@@ -3694,10 +3706,11 @@ class SpatialLightColorCard extends HTMLElement {
             <input type="range" class="slider temperature" id="temperatureSlider" min="${tempRange.min}" max="${tempRange.max}" value="${clampedTemp}" aria-label="Color temperature" style="--slider-percent:${tempPercent}%;--slider-ratio:${tempPercent/100};">
             <span class="slider-value" id="temperatureValue">${clampedTemp}K</span>
           </div>
-          </div>
         </div>
-        <div class="presets-area">
-          ${this._renderPresetsContent()}
+        <div class="presets-row${presetsHtml ? ' has-presets' : ''}">
+          ${this._renderPowerToggle(controlContext)}
+          <div class="preset-separator power-separator" aria-hidden="true"></div>
+          <div class="presets-area">${presetsHtml}</div>
         </div>
       </div>
     `;
@@ -3711,12 +3724,11 @@ class SpatialLightColorCard extends HTMLElement {
       ? Math.min(100, Math.max(0, ((clampedTemp - tempRange.min) / (tempRange.max - tempRange.min)) * 100))
       : 0;
     const brightnessColor = Array.isArray(avgState.color) ? `rgb(${avgState.color.join(',')})` : 'var(--accent-primary)';
+    const presetsHtml = this._renderPresetsContent();
     return `
       <div class="controls-below ${(this._config.always_show_controls || this._selectedLights.size > 0 || this._config.default_entity) ? 'visible' : ''}" id="controlsBelow" role="region" aria-label="Light controls">
         <canvas id="colorWheelMini" class="color-wheel-mini" width="256" height="256" role="img" aria-label="Color picker"></canvas>
         <div class="slider-group">
-          ${this._renderPowerToggle(controlContext)}
-          <div class="slider-stack">
           <div class="slider-row">
             <input type="range" class="slider" id="brightnessSlider" min="0" max="255" value="${avgState.brightness}" aria-label="Brightness" style="--slider-percent:${brightnessPercent}%;--slider-ratio:${brightnessPercent/100};--slider-fill:${brightnessColor};">
             <span class="slider-value" id="brightnessValue">${Math.round((avgState.brightness/255)*100)}%</span>
@@ -3725,10 +3737,11 @@ class SpatialLightColorCard extends HTMLElement {
             <input type="range" class="slider temperature" id="temperatureSlider" min="${tempRange.min}" max="${tempRange.max}" value="${clampedTemp}" aria-label="Color temperature" style="--slider-percent:${tempPercent}%;--slider-ratio:${tempPercent/100};">
             <span class="slider-value" id="temperatureValue">${clampedTemp}K</span>
           </div>
-          </div>
         </div>
-        <div class="presets-area">
-          ${this._renderPresetsContent()}
+        <div class="presets-row${presetsHtml ? ' has-presets' : ''}">
+          ${this._renderPowerToggle(controlContext)}
+          <div class="preset-separator power-separator" aria-hidden="true"></div>
+          <div class="presets-area">${presetsHtml}</div>
         </div>
       </div>
     `;
@@ -5456,7 +5469,11 @@ class SpatialLightColorCard extends HTMLElement {
     if (combinedHtml !== this._lastPresetsHtml) {
       this._lastPresetsHtml = combinedHtml;
       const presetsAreas = this.shadowRoot.querySelectorAll('.presets-area');
-      presetsAreas.forEach(area => { area.innerHTML = combinedHtml; });
+      presetsAreas.forEach(area => {
+        area.innerHTML = combinedHtml;
+        const row = area.closest('.presets-row');
+        if (row) row.classList.toggle('has-presets', !!combinedHtml);
+      });
       this._bindPresetHandlers();
       this._refreshEffectPresetIcons();
       requestAnimationFrame(() => this._updateSeparatorVisibility());
@@ -6094,7 +6111,9 @@ class SpatialLightColorCard extends HTMLElement {
 
   _updateSeparatorVisibility() {
     if (!this.shadowRoot) return;
-    this.shadowRoot.querySelectorAll('.preset-separator').forEach(sep => {
+    // The power separator sits in the non-wrapping .presets-row and is
+    // governed by CSS (.has-presets / :first-child), not by row measurement.
+    this.shadowRoot.querySelectorAll('.preset-separator:not(.power-separator)').forEach(sep => {
       const prev = sep.previousElementSibling;
       const next = sep.nextElementSibling;
       if (!prev || !next) {

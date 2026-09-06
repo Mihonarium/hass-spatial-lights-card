@@ -16,13 +16,13 @@
 
 ## 1. Slider Controls Rendering
 
-**Renderers:** `_renderControlsFloating(visible, controlContext)` and `_renderControlsBelow(controlContext)`. Both emit the same children: a 256×256 mini color wheel canvas, a `.slider-group` holding the power toggle (`_renderPowerToggle`, gated by `show_power_button`) beside a `.slider-stack` of two `<input type="range">` sliders (brightness 0-255, temperature in `tempRange.min..max`), and the presets area.
+**Renderers:** `_renderControlsFloating(visible, controlContext)` and `_renderControlsBelow(controlContext)`. Both emit the same children: a 256×256 mini color wheel canvas, two `<input type="range">` sliders (brightness 0-255, temperature in `tempRange.min..max`), and a `.presets-row` = power toggle (`_renderPowerToggle`, gated by `show_power_button`) + `.power-separator` + `.presets-area`. The row carries `.has-presets` (set at render and kept in sync by `_refreshColorPresets`); without it the separator and the empty presets area are `display: none`, leaving just the toggle.
 
-**Power toggle:** `<button class="power-toggle" id="powerToggle">` spanning both slider rows. `_getPowerState(controlled)` classifies the available light/switch/input_boolean subset as `on` / `off` / `mixed` / `none` (→ disabled); `_updatePowerToggle` syncs class, `aria-pressed` (`mixed` for partial) and the label from `_updateControlValues`. Click calls `_toggleSelection(_getControlledEntities())` — the same any-off → all-on rule as the Space key.
+**Power toggle:** `<button class="power-toggle" id="powerToggle">` at the start of `.presets-row` — the slot beside the wheel on mobile / under the sliders on desktop, whose height the 128 px wheel already sets — so it costs neither slider width nor card height. `_getPowerState(controlled)` classifies the available light/switch/input_boolean subset as `on` / `off` / `mixed` / `none` (→ disabled); `_updatePowerToggle` syncs class, `aria-pressed` (`mixed` for partial) and the label from `_updateControlValues`. Click calls `_toggleSelection(_getControlledEntities())` — the same any-off → all-on rule as the Space key.
 
 **Layout modes:**
-- Desktop (`@media (min-width: 769px)`): CSS Grid 2×2. Color wheel `grid-column: 1; grid-row: 1/3`; sliders top-right; presets bottom-right wrap.
-- Mobile (`@media (max-width: 768px)`): flex-wrap row. Wheel order 1, presets order 2 with `max-width: calc(100% - 140px)`, sliders order 3 at full width.
+- Desktop (`@media (min-width: 769px)`): CSS Grid 2×2. Color wheel `grid-column: 1; grid-row: 1/3`; sliders top-right; `.presets-row` bottom-right (presets wrap inside it).
+- Mobile (`@media (max-width: 768px)`): flex-wrap row. Wheel order 1, `.presets-row` order 2 with `max-width: calc(100% - 140px)`, sliders order 3 at full width.
 - Floating vs below: `controls_below: true` (default) renders the controls block after the canvas; otherwise they're absolutely positioned over the canvas with mobile-aware insets.
 
 **Slider gesture (`_bindSliderGesture`):** Pointer-down captures and immediately calls `_applyPointerValue(el, clientX)`. Pointermove follows the finger, with a 6 px / `dy > dx` heuristic that releases capture and reverts the value when the user is actually trying to scroll the page. Pointerup commits via `_handleBrightnessChange()` or `_handleTemperatureChange()`. The active gesture is recorded in `this._activeSliderGesture` so `_updateControlValues` skips clobbering the value while the user's finger is down. Keyboard-driven `change` events commit through `_scheduleSliderCommit` (150 ms trailing debounce).

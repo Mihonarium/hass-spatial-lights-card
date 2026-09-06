@@ -16,7 +16,9 @@
 
 ## 1. Slider Controls Rendering
 
-**Renderers:** `_renderControlsFloating(visible, controlContext)` and `_renderControlsBelow(controlContext)`. Both emit the same children: a 256×256 mini color wheel canvas, two `<input type="range">` sliders (brightness 0-255, temperature in `tempRange.min..max`), and the presets area.
+**Renderers:** `_renderControlsFloating(visible, controlContext)` and `_renderControlsBelow(controlContext)`. Both emit the same children: a 256×256 mini color wheel canvas, a `.slider-group` holding the power toggle (`_renderPowerToggle`, gated by `show_power_button`) beside a `.slider-stack` of two `<input type="range">` sliders (brightness 0-255, temperature in `tempRange.min..max`), and the presets area.
+
+**Power toggle:** `<button class="power-toggle" id="powerToggle">` spanning both slider rows. `_getPowerState(controlled)` classifies the available light/switch/input_boolean subset as `on` / `off` / `mixed` / `none` (→ disabled); `_updatePowerToggle` syncs class, `aria-pressed` (`mixed` for partial) and the label from `_updateControlValues`. Click calls `_toggleSelection(_getControlledEntities())` — the same any-off → all-on rule as the Space key.
 
 **Layout modes:**
 - Desktop (`@media (min-width: 769px)`): CSS Grid 2×2. Color wheel `grid-column: 1; grid-row: 1/3`; sliders top-right; presets bottom-right wrap.
@@ -50,7 +52,9 @@
 
 **Separator:** A 1×20 px div between RGB and temp presets. `_updateSeparatorVisibility()` checks via `getBoundingClientRect()` whether the previous color preset and the next temp preset are on the same row, and hides the separator otherwise.
 
-**Preset interaction:** `_bindPresetHighlight(el)` and `_bindPresetHandlers()`. Mouse hover highlights matching lights via `pointerenter`/`pointerleave`; touch uses a 300 ms long-press to highlight, then clears on `pointerup`. Click applies via `_applyColorWheelSelection(rgb)` / `_applyTemperaturePreset(kelvin)` / `_applyEffectPreset(effect)`. Keyboard Enter/Space activates from `_handleKeyDown` → `composedPath()` lookup.
+**Preset interaction:** `_bindPresetHighlight(el)` and `_bindPresetHandlers()`. Mouse hover highlights matching lights via `pointerenter`/`pointerleave`; touch uses a 300 ms long-press to highlight, then clears on `pointerup`. Click applies via `_applyColorWheelSelection(rgb)` / `_applyTemperaturePreset(kelvin)` / `_applyEffectPreset(effect)` / `_applyAdaptiveLighting()`. Keyboard Enter/Space activates from `_handleKeyDown` → `composedPath()` lookup.
+
+**Adaptive Lighting toggle:** opt-in (`adaptive_lighting: true` / `{enabled: true}`). `_renderAdaptivePreset()` emits one extra `.effect-preset.adaptive-preset` button in the effect block when `_getAdaptiveLightingContext()` resolves a main switch of the basnijholt/adaptive-lighting integration (config `adaptive_lighting.switch`, else auto-detect via `findAdaptiveSwitches` — cached in `_alSwitchCache`, invalidated in `setConfig`). Active (`_isAdaptiveActive`) = switch on + every target in the switch's `configuration.lights` attribute and absent from its `manual_control` attribute. `_applyAdaptiveLighting()` toggles: inactive → `adaptive_lighting.set_manual_control` (`manual_control: false`, managed lights only) then `adaptive_lighting.apply` on the selected-or-all `light.*` targets; active → `set_manual_control` with `manual_control: true` (pause). `_isRelevantHassChange` also watches the resolved switch (`_alSwitchId`).
 
 ---
 

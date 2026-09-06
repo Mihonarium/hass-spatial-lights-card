@@ -30,11 +30,12 @@ Very useful when you have a lot of lights, and searching for the one you need by
 5. [Configuration Reference](#-all-configuration-options)
 6. [Custom Colors & Backgrounds](#-custom-colors--backgrounds)
 7. [Effect Presets](#-effect-presets) — Quick-apply named light effects with filtering
-8. [Glow Effects](#-glow-effects) — Shapes, walls, custom polar shapes, per-entity overrides
-9. [Canvas Elements](#canvas-elements) — Links, sensors, and template elements on the canvas
-10. [Custom CSS](#-custom-css) — Global and per-entity style customization
-11. [Visual Layout Options](#-visual-options)
-12. [Troubleshooting](#troubleshooting)
+8. [Adaptive Lighting](#-adaptive-lighting) — Hand selected lights back to the Adaptive Lighting integration
+9. [Glow Effects](#-glow-effects) — Shapes, walls, custom polar shapes, per-entity overrides
+10. [Canvas Elements](#canvas-elements) — Links, sensors, and template elements on the canvas
+11. [Custom CSS](#-custom-css) — Global and per-entity style customization
+12. [Visual Layout Options](#-visual-options)
+13. [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -108,8 +109,11 @@ When lights are selected, the color wheel, brightness slider, and temperature sl
 |--------|---------|--------|
 | Toggle a light | Double-click | Double-tap |
 | Toggle a switch/scene | Double-click (or single click if `switch_single_tap` is on) | Double-tap (or single tap if `switch_single_tap` is on) |
+| Turn the whole selection on/off | Power button left of the sliders | Power button left of the sliders |
 
 > **Note:** If `switch_single_tap` is enabled, switches and scenes activate immediately on a single tap/click instead of being selected.
+
+The **power button** acts on whatever the sliders control: the selected lights, or the default entity when nothing is selected. It is filled when every one of them is on (pressing turns them all off), outlined when only some are on (pressing turns the rest on), and neutral when all are off. Hide it with `show_power_button: false`.
 
 ### Opening Light Details
 
@@ -214,6 +218,7 @@ Position history stores up to 50 steps.
 | `switch_off_color` | string | `"#3a3a3a"` | Default color for inactive switches. |
 | `scene_color` | string | `"#6366f1"` | Default color for scenes. |
 | `always_show_controls` | boolean | `false` | Always show color controls even when nothing selected. Use if you prefer persistent sliders that are always there even if nothing is selected and there's no default_entity. |
+| `show_power_button` | boolean | `true` | Round on/off button to the left of the sliders that toggles the selected lights (or the default entity) as a group. Filled = all on (press turns off); outlined = some on (press turns the rest on). |
 | `minimal_ui` | boolean | `false` | Hides light circles; shows only icons. Automatically enables `icon_only_mode`. |
 | `controls_below` | boolean | `true` | Render controls below (`true`) or floating over (`false`). |
 | `default_entity` | string | `null` | Entity to control when nothing is selected. |
@@ -234,6 +239,7 @@ Position history stores up to 50 steps.
 | `effect_presets` | list | `[]` | Named effect presets with icons and optional light restrictions (see [Effect Presets](#-effect-presets)). |
 | `effect_filter_default` | string | `"any"` | Effect visibility when nothing selected: `any` (show if any light supports it) or `all` (only if all lights support it). |
 | `effect_filter_selected` | string | `"all"` | Effect visibility when lights are selected: `any` or `all`. |
+| `adaptive_lighting` | boolean/map | `false` | Adaptive-lighting toggle button among the effect presets; needs the [Adaptive Lighting](https://github.com/basnijholt/adaptive-lighting) integration. `true` enables it (switch auto-detected); a map with `enabled: true` pins the switch and tunes the call (see [Adaptive Lighting](#-adaptive-lighting)). |
 | `binary_sensor_on_color` | string | `"#4caf50"` | Default color for binary sensors in the `on` state. |
 | `binary_sensor_off_color` | string | `"#2a2a2a"` | Default color for binary sensors in the `off` state. |
 | `temperature_min` | number | `null` | Override minimum Kelvin for temperature slider. |
@@ -416,6 +422,47 @@ effect_presets:
 When all controlled lights share the same active effect, the matching preset button shows a ring indicator — the same behavior as color presets.
 
 Effect presets can be configured in the visual editor's **Effect Presets** section.
+
+---
+
+## 🌗 Adaptive Lighting
+
+If you run the [Adaptive Lighting](https://github.com/basnijholt/adaptive-lighting) custom integration (HACS), the card can show an extra effect-style **toggle button** that hands the selected lights to adaptive control — brightness and color temperature follow the sun — or pauses it again.
+
+**Requires the integration**: the card itself doesn't compute sun-based brightness; it drives the integration's services. Enable the button with `adaptive_lighting: true` (or the switch in the visual editor's **Presets** section, which also tells you which Adaptive Lighting switches it found). The `switch.adaptive_lighting_*` main switch is auto-detected, so that one line is all you need when you have a single Adaptive Lighting configuration.
+
+**What a press does** (to the selected lights, or all card lights when nothing is selected):
+
+- **Not adapted → enable.** Calls `adaptive_lighting.set_manual_control` with `manual_control: false` for the pressed lights that the switch manages — Adaptive Lighting marks a light "manually controlled" and stops adapting it the moment you touch its brightness or color (e.g. with this card's sliders); this un-marks them so continuous adaptation resumes. Then calls `adaptive_lighting.apply` so the current adaptive brightness/color land immediately — including on lights the switch doesn't manage, which get a one-shot adaptation.
+- **Adapted (button lit) → pause.** Calls `adaptive_lighting.set_manual_control` with `manual_control: true`, so the lights hold their current values and Adaptive Lighting leaves them alone — the same thing it does by itself when you adjust a light by hand. Press again to resume; turning a light off and on also hands it back to Adaptive Lighting.
+
+**Lit state**: the button shows the ring indicator when every targeted light is currently under adaptive control (switch on, light managed, not marked manually controlled) — that is also when a press pauses instead of enables. Hovering (or long-pressing on touch) highlights the card lights being adapted right now.
+
+### Configuration
+
+```yaml
+adaptive_lighting: true   # that's it for the common case
+```
+
+All options:
+
+```yaml
+adaptive_lighting:
+  enabled: true              # required to show the button
+  switch: switch.adaptive_lighting_living_room  # pin a switch; auto-detected when omitted
+  name: Adaptive             # button label/tooltip
+  icon: mdi:theme-light-dark # button icon
+  turn_on_lights: false      # apply also turns on lights that are off
+  transition: 2              # seconds, passed to adaptive_lighting.apply
+  adapt_brightness: true     # let apply adjust brightness
+  adapt_color: true          # let apply adjust color temperature
+  prefer_rgb_color: false    # prefer RGB over color temp when applying
+  clear_manual_control: true # false = enabling is a one-shot apply that doesn't un-pause the lights
+```
+
+**Multiple Adaptive Lighting configurations**: with several main switches and no `switch:` configured, the card picks the switch managing the most of the card's lights (read from the switch's `configuration` attribute). If none of them overlaps, the button is hidden — set `switch:` explicitly.
+
+The visual editor exposes the essentials under **Presets → Adaptive Lighting button** (on/off, switch, turn-on-lights); the remaining options are YAML-only.
 
 ---
 

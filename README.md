@@ -15,9 +15,6 @@ You can drag to draw a rectangle around lights, which you'll immediately be able
 
 Very useful when you have a lot of lights, and searching for the one you need by name and icon is tiresome; you can position the lights in a layout that corresponds to the physical room layout, making it easy to select the light you need. You can add a background image, e.g., with the room layout.
 
-<img height="574" alt="image" src="https://github.com/user-attachments/assets/38f210c3-f4ab-405b-a43a-3c6b3128b18d" />
-
-
 
 ---
 

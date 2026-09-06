@@ -85,6 +85,8 @@ resources:
 
 ## 🎨 Usage
 
+<img width="720" alt="Drag-select, recolor from the wheel, dim, apply a preset, tap-and-hold the wheel for the full-screen picker, double-click to toggle a light, and start a fireplace effect" src="docs/demo-long.gif" />
+
 ### Selecting Lights
 
 | Action | Desktop | Mobile |

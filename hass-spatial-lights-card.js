@@ -144,6 +144,9 @@ class SpatialLightColorCard extends HTMLElement {
     this._longPressTriggered = false;
     this._pendingTap = null;
     this._lastTap = null;
+    /** Undo for light-state changes made from this card (see _captureUndo) */
+    this._lightUndoStack = [];
+    this._undoChipTimer = null;
     /**
      * True once a preset hold-to-preview fires; the click that the browser
      * synthesizes when the finger lifts must be swallowed, otherwise merely
@@ -259,6 +262,10 @@ class SpatialLightColorCard extends HTMLElement {
       // On/off toggle for the controlled lights, left of the sliders
       show_power_button: config.show_power_button !== false,
       switch_single_tap: config.switch_single_tap || false,
+      // Undo chip after each change made from the card; `undo_timeout` is how
+      // long (seconds) the chip stays visible.
+      undo: config.undo !== false,
+      undo_timeout: Number.isFinite(Number(config.undo_timeout)) && Number(config.undo_timeout) > 0 ? Number(config.undo_timeout) : 10,
       // When true (default), vertical touch swipes on the canvas scroll the
       // page and pinch zooms; rubber-band selection needs a deliberate
       // horizontal-ish drag. Set false to restore gesture-exclusive canvas.
@@ -1751,6 +1758,7 @@ class SpatialLightColorCard extends HTMLElement {
     if (!this._isEntityAvailable(entity)) return;
 
     const friendly = stateObj.attributes?.friendly_name || entity;
+    this._captureUndo('toggle');
     if (domain === 'scene') {
       this._hass.callService('scene', 'turn_on', { entity_id: entity })
         .catch(err => console.warn(`[spatial-light-card] scene.turn_on ${entity} failed:`, err));
@@ -1792,6 +1800,7 @@ class SpatialLightColorCard extends HTMLElement {
     const anyOff = stateContributors.some(id => this._hass.states?.[id]?.state !== 'on');
     const targetOn = stateContributors.length === 0 ? true : anyOff;
     const service = targetOn ? 'turn_on' : 'turn_off';
+    this._captureUndo('toggle');
 
     // Batch by domain — `light.turn_on { entity_id: [...] }` lets the platform
     // sync bulbs, and we still want one call per domain at most.
@@ -1884,6 +1893,7 @@ class SpatialLightColorCard extends HTMLElement {
         if (svc && this._hass) {
           const [domain, service] = svc.split('.', 2);
           if (domain && service) {
+            this._captureUndo('element');
             this._hass.callService(domain, service, actionConfig.service_data || actionConfig.data || {});
           }
         }
@@ -1998,6 +2008,152 @@ class SpatialLightColorCard extends HTMLElement {
       this._config.positions = this._clonePositions(this._history[this._historyIndex]);
       this._smoothApplyPositions();
     }
+  }
+
+  /** ---------- Undo for light-state changes ----------
+   * Every write the card makes (toggle, colour, brightness, temperature,
+   * effect, adaptive, canvas-element action) first snapshots the state of
+   * every entity the card can reach — its own entities, the default entity
+   * and, recursively, the members of any group among them. Undo restores the
+   * entities whose state differs from the snapshot. Groups are restored via
+   * their members (restoring a group would flatten per-light colours), and
+   * calls of the same kind within a second collapse into one step so a live
+   * wheel drag is a single undo.
+   */
+  static get UNDO_MAX_STEPS() { return 10; }
+  static get UNDO_MAX_AGE_MS() { return 5 * 60 * 1000; }
+  static get UNDO_COALESCE_MS() { return 1000; }
+
+  _undoEntityPool() {
+    const states = this._hass?.states || {};
+    const ids = new Set();
+    const visit = (id, depth) => {
+      if (!id || ids.has(id) || depth > 3) return;
+      const st = states[id];
+      if (!st) return;
+      ids.add(id);
+      const members = st.attributes?.entity_id;
+      if (Array.isArray(members)) members.forEach(m => visit(m, depth + 1));
+    };
+    (this._config.entities || []).forEach(id => visit(id, 0));
+    visit(this._config.default_entity, 0);
+    return [...ids];
+  }
+
+  _snapshotEntityState(id) {
+    const st = this._hass?.states?.[id];
+    if (!st) return null;
+    const a = st.attributes || {};
+    return {
+      state: st.state,
+      brightness: a.brightness != null ? Number(a.brightness) : null,
+      color_mode: a.color_mode || null,
+      rgb_color: Array.isArray(a.rgb_color) ? a.rgb_color.map(Number) : null,
+      color_temp_kelvin: a.color_temp_kelvin != null ? Number(a.color_temp_kelvin) : null,
+      effect: a.effect || null,
+      group: Array.isArray(a.entity_id),
+    };
+  }
+
+  _sameEntityState(x, y) {
+    if (!x || !y) return false;
+    if (x.state !== y.state) return false;
+    if (x.state !== 'on') return true;
+    const near = (p, q, tol) => (p == null && q == null) || (p != null && q != null && Math.abs(p - q) <= tol);
+    if (!near(x.brightness, y.brightness, 2)) return false;
+    if ((x.effect || null) !== (y.effect || null)) return false;
+    if (x.color_mode === 'color_temp' || y.color_mode === 'color_temp') {
+      return x.color_mode === y.color_mode && near(x.color_temp_kelvin, y.color_temp_kelvin, 25);
+    }
+    if (x.rgb_color && y.rgb_color) {
+      return x.rgb_color.every((v, i) => Math.abs(v - y.rgb_color[i]) <= 3);
+    }
+    return !x.rgb_color === !y.rgb_color;
+  }
+
+  _captureUndo(kind) {
+    if (!this._config.undo || !this._hass) return;
+    const now = Date.now();
+    const stack = this._lightUndoStack;
+    // Prune expired steps
+    while (stack.length && now - stack[0].at > SpatialLightColorCard.UNDO_MAX_AGE_MS) stack.shift();
+    const last = stack[stack.length - 1];
+    if (last && last.kind === kind && now - last.touched <= SpatialLightColorCard.UNDO_COALESCE_MS) {
+      last.touched = now;
+      this._showUndoChip();
+      return;
+    }
+    const snap = {};
+    for (const id of this._undoEntityPool()) {
+      if (!this._isEntityAvailable(id)) continue;
+      const [domain] = id.split('.');
+      if (domain !== 'light' && domain !== 'switch' && domain !== 'input_boolean') continue;
+      const s = this._snapshotEntityState(id);
+      if (s) snap[id] = s;
+    }
+    if (Object.keys(snap).length === 0) return;
+    stack.push({ at: now, touched: now, kind, snap });
+    while (stack.length > SpatialLightColorCard.UNDO_MAX_STEPS) stack.shift();
+    this._showUndoChip();
+  }
+
+  _undoLightState() {
+    const stack = this._lightUndoStack;
+    const now = Date.now();
+    while (stack.length && now - stack[0].at > SpatialLightColorCard.UNDO_MAX_AGE_MS) stack.shift();
+    const entry = stack.pop();
+    if (!entry || !this._hass) { this._hideUndoChip(); return; }
+    const snap = entry.snap;
+    // A group is restored through its members when any member was snapshotted.
+    const coveredGroups = new Set();
+    for (const id of Object.keys(snap)) {
+      if (!snap[id].group) continue;
+      const members = this._hass.states?.[id]?.attributes?.entity_id || [];
+      if (members.some(m => snap[m])) coveredGroups.add(id);
+    }
+    const calls = new Map(); // "domain.service|payload" -> { domain, service, data, ids }
+    let restored = 0;
+    for (const [id, before] of Object.entries(snap)) {
+      if (coveredGroups.has(id) || !this._isEntityAvailable(id)) continue;
+      if (this._sameEntityState(before, this._snapshotEntityState(id))) continue;
+      const [domain] = id.split('.');
+      let service = before.state === 'on' ? 'turn_on' : 'turn_off';
+      const data = {};
+      if (domain === 'light' && service === 'turn_on') {
+        if (before.brightness != null) data.brightness = Math.round(before.brightness);
+        if (before.effect) data.effect = before.effect;
+        else if (before.color_mode === 'color_temp' && before.color_temp_kelvin != null) data.color_temp_kelvin = Math.round(before.color_temp_kelvin);
+        else if (before.rgb_color) data.rgb_color = before.rgb_color;
+      }
+      const key = `${domain}.${service}|${JSON.stringify(data)}`;
+      if (!calls.has(key)) calls.set(key, { domain, service, data, ids: [] });
+      calls.get(key).ids.push(id);
+      restored++;
+    }
+    for (const { domain, service, data, ids } of calls.values()) {
+      this._hass.callService(domain, service, Object.assign({ entity_id: ids }, data))
+        .catch(err => console.warn(`[spatial-light-card] undo ${domain}.${service} failed:`, err));
+    }
+    this._announce(restored ? `Restored ${restored} ${restored === 1 ? 'entity' : 'entities'}` : 'Nothing to undo');
+    if (stack.length) this._showUndoChip(); else this._hideUndoChip();
+  }
+
+  _showUndoChip() {
+    const chip = this._els.undoChip;
+    if (!chip) return;
+    chip.hidden = false;
+    // restart the fade-in so repeated actions visibly re-trigger it
+    chip.classList.remove('visible');
+    void chip.offsetWidth;
+    chip.classList.add('visible');
+    if (this._undoChipTimer) clearTimeout(this._undoChipTimer);
+    this._undoChipTimer = setTimeout(() => { this._undoChipTimer = null; this._hideUndoChip(); }, this._config.undo_timeout * 1000);
+  }
+
+  _hideUndoChip() {
+    if (this._undoChipTimer) { clearTimeout(this._undoChipTimer); this._undoChipTimer = null; }
+    const chip = this._els.undoChip;
+    if (chip) { chip.classList.remove('visible'); chip.hidden = true; }
   }
 
   /** ---------- Grid snap ---------- */
@@ -2450,6 +2606,7 @@ class SpatialLightColorCard extends HTMLElement {
             ${this._renderCanvasElementsHTML()}
             ${controlsPosition === 'floating' ? this._renderControlsFloating(showControls, controlContext) : ''}
           </div>
+          ${this._config.undo ? '<button type="button" class="undo-chip" id="undoChip" hidden aria-label="Undo last change"><ha-icon icon="mdi:undo"></ha-icon><span>Undo</span></button>' : ''}
           ${controlsPosition === 'below' ? this._renderControlsBelow(controlContext) : ''}
         </div>
         ${this._renderYamlModal()}
@@ -2482,6 +2639,12 @@ class SpatialLightColorCard extends HTMLElement {
     this._els.colorWheelMagnifierCanvas = this.shadowRoot.getElementById('colorWheelMagnifierCanvas');
     this._els.colorWheelPreviewSwatch = this.shadowRoot.getElementById('colorWheelPreviewSwatch');
     this._els.announcer = this.shadowRoot.querySelector('.sr-announcer');
+    this._els.undoChip = this.shadowRoot.getElementById('undoChip');
+    if (this._els.undoChip) {
+      this._els.undoChip.addEventListener('click', (e) => { e.stopPropagation(); this._undoLightState(); });
+      // A re-render mid-timeout keeps the chip up for the remaining time.
+      if (this._undoChipTimer && this._lightUndoStack.length) { this._els.undoChip.hidden = false; this._els.undoChip.classList.add('visible'); }
+    }
 
     if (this._colorWheelObserver) {
       this._colorWheelObserver.disconnect();
@@ -2613,6 +2776,20 @@ class SpatialLightColorCard extends HTMLElement {
       }
 
       .canvas-wrapper { position: relative; }
+      .undo-chip {
+        position: absolute; top: 10px; left: 50%; transform: translate(-50%, -6px);
+        z-index: 5; display: inline-flex; align-items: center; gap: 6px;
+        padding: 6px 14px 6px 10px; border-radius: 9999px; cursor: pointer;
+        background: var(--surface-elevated); color: var(--text-primary);
+        border: 1.5px solid var(--border-medium); box-shadow: 0 4px 14px rgba(0,0,0,0.35);
+        font: inherit; font-size: 13px; font-weight: 600; line-height: 1;
+        --mdc-icon-size: 18px; opacity: 0; pointer-events: none;
+        transition: opacity var(--transition-fast), transform var(--transition-fast), border-color var(--transition-fast);
+      }
+      .undo-chip ha-icon { display: flex; color: var(--accent-primary); }
+      .undo-chip.visible { opacity: 1; transform: translate(-50%, 0); pointer-events: auto; }
+      .undo-chip:hover { border-color: var(--accent-primary); }
+      .undo-chip:active { transform: translate(-50%, 0) scale(0.96); }
       .canvas {
         position: relative; width: 100%; background: var(--canvas-bg, var(--surface-primary));
         ${this._config.aspect_ratio
@@ -4480,6 +4657,13 @@ class SpatialLightColorCard extends HTMLElement {
     // hijacking these chords across the rest of the dashboard.
     const cardEngaged = isOurCard || this._selectedLights.size > 0 || this._editPositionsMode || this._largeColorWheelOpen;
     if ((e.ctrlKey || e.metaKey) && e.key === 'z' && !e.shiftKey) {
+      if (!this._editPositionsMode && this._lightUndoStack.length) {
+        // Light-state undo is reachable whenever the chip could be: the card
+        // just made a change, so it doesn't need focus to own the chord.
+        e.preventDefault();
+        this._undoLightState();
+        return;
+      }
       if (!cardEngaged) return;
       e.preventDefault();
       this._undo();
@@ -6013,6 +6197,7 @@ class SpatialLightColorCard extends HTMLElement {
     const al = this._config.adaptive_lighting;
     const targets = this._getAdaptiveTargets();
     if (targets.length === 0) return;
+    this._captureUndo('adaptive');
 
     if (this._isAdaptiveActive(ctx, targets)) {
       this._hass.callService('adaptive_lighting', 'set_manual_control', {
@@ -6137,6 +6322,7 @@ class SpatialLightColorCard extends HTMLElement {
       : (this._config.default_entity ? [this._config.default_entity] : []);
     if (controlled.length === 0 || !rgb) return;
 
+    this._captureUndo('color');
     if (announce) this._announceApplied('Color', controlled);
 
     // Cover as many selected lights as possible with Z2M group entities so
@@ -6525,6 +6711,7 @@ class SpatialLightColorCard extends HTMLElement {
       : (this._config.default_entity ? [this._config.default_entity] : []);
     if (controlled.length === 0 || !Number.isFinite(kelvin)) return;
 
+    this._captureUndo('temperature');
     const plan = this._planGroupedDispatch(controlled, 'color_temp');
     for (const groupId of plan.groups) {
       this._hass.callService('light', 'turn_on', { entity_id: groupId, color_temp_kelvin: kelvin })
@@ -6579,6 +6766,7 @@ class SpatialLightColorCard extends HTMLElement {
       return Array.isArray(effectList) && effectList.includes(effectName);
     });
     if (supported.length === 0) return;
+    this._captureUndo('effect');
     // Try to cover the supporting subset with Z2M groups; remaining bulbs
     // go via the batched effect call.
     const plan = this._planGroupedDispatch(supported, 'effect', effectName);
@@ -6618,6 +6806,7 @@ class SpatialLightColorCard extends HTMLElement {
 
     const b = this._pendingBrightness;
     this._pendingBrightness = null;
+    this._captureUndo('brightness');
     const plan = this._planGroupedDispatch(controlled, 'brightness');
     for (const groupId of plan.groups) {
       this._hass.callService('light', 'turn_on', { entity_id: groupId, brightness: b })
@@ -6654,6 +6843,7 @@ class SpatialLightColorCard extends HTMLElement {
 
     const k = this._pendingTemperature;
     this._pendingTemperature = null;
+    this._captureUndo('temperature');
     const plan = this._planGroupedDispatch(controlled, 'color_temp');
     for (const groupId of plan.groups) {
       this._hass.callService('light', 'turn_on', { entity_id: groupId, color_temp_kelvin: k })
@@ -7527,6 +7717,8 @@ class SpatialLightColorCard extends HTMLElement {
     yamlLines.push(`show_entity_icons: ${!!this._config.show_entity_icons}`);
     if (this._config.show_power_button === false) yamlLines.push('show_power_button: false');
     yamlLines.push(`switch_single_tap: ${!!this._config.switch_single_tap}`);
+    if (this._config.undo === false) yamlLines.push('undo: false');
+    if (this._config.undo !== false && this._config.undo_timeout !== 10) yamlLines.push(`undo_timeout: ${this._config.undo_timeout}`);
     if (this._config.canvas_touch_scroll === false) yamlLines.push('canvas_touch_scroll: false');
     if (this._config.theme_mode && this._config.theme_mode !== 'auto') {
       yamlLines.push(`theme_mode: ${this._config.theme_mode}`);
@@ -9546,6 +9738,10 @@ class SpatialLightColorCardEditor extends HTMLElement {
               <ha-switch id="cfgSwitchTap"></ha-switch>
             </div>
             <div class="option-row">
+              <div><div class="label">Undo Chip</div><div class="sublabel">Show an Undo button for a few seconds after each change made from the card</div></div>
+              <ha-switch id="cfgUndo"></ha-switch>
+            </div>
+            <div class="option-row">
               <div><div class="label">Scroll Page Over Canvas</div><div class="sublabel">Vertical touch swipes on the canvas scroll the dashboard; area selection needs a sideways drag. Turn off to reserve all canvas touches for selection.</div></div>
               <ha-switch id="cfgCanvasTouchScroll"></ha-switch>
             </div>
@@ -9735,6 +9931,7 @@ class SpatialLightColorCardEditor extends HTMLElement {
       cfgAlwaysControls: c.always_show_controls || false,
       cfgControlsBelow: c.controls_below !== false,
       cfgSwitchTap: c.switch_single_tap || false,
+      cfgUndo: c.undo !== false,
       cfgCanvasTouchScroll: c.canvas_touch_scroll !== false,
       cfgThemeGlass: !!(c.theme && c.theme.glass),
       cfgGlowEnabled: !!(g.enabled),
@@ -10084,6 +10281,7 @@ class SpatialLightColorCardEditor extends HTMLElement {
     this._bindSwitch('cfgShowPowerButton', 'show_power_button');
     this._bindSwitch('cfgControlsBelow', 'controls_below');
     this._bindSwitch('cfgSwitchTap', 'switch_single_tap');
+    this._bindSwitch('cfgUndo', 'undo');
     this._bindSwitch('cfgCanvasTouchScroll', 'canvas_touch_scroll');
 
     // --- Appearance (theme) ---

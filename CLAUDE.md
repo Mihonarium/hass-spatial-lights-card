@@ -96,6 +96,8 @@
 
 ## 5. Service Calls
 
+**Undo:** every card-initiated write calls `_captureUndo(kind)` first, which snapshots `_undoEntityPool()` (config entities + `default_entity` + group members via the `entity_id` attribute, recursive) into `_lightUndoStack` (10 steps, 5 min, same-kind calls within 1 s coalesce so a live wheel drag is one step). `_undoLightState()` restores entities whose `_snapshotEntityState` differs (groups are restored through their members), batched per identical payload. The `#undoChip` button (sibling of `#canvas` in `.canvas-wrapper`, so canvas hit-testing never sees it) shows for `undo_timeout` s; Ctrl/Cmd+Z prefers it over position undo outside edit mode. Config: `undo` (default true), `undo_timeout`.
+
 All `light.turn_on` calls are routed through `_getServiceTargets(controlled, capability)`, which:
 - filters to `light.*` entities (no `light.turn_on` on switches/scenes),
 - skips unavailable entities,

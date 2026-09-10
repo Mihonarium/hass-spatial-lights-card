@@ -112,9 +112,15 @@ When lights are selected, the color wheel, brightness slider, and temperature sl
 
 The **power button** sits at the start of the presets row — under the sliders on desktop, beside the color wheel on mobile — so the sliders keep their full width. It acts on whatever the sliders control: the selected lights, or the default entity when nothing is selected. It is filled when every one of them is on (pressing turns them all off), outlined when only some are on (pressing turns the rest on), and neutral when all are off. Hide it with `show_power_button: false`.
 
-### Undo
+### Undo & Redo
 
-Every change made from the card (toggle, colour, brightness, temperature, preset, effect) first snapshots the state of every light the card can reach, including the members of the default entity. An **Undo** chip then appears over the canvas for a few seconds (`undo_timeout`, default 10 s); tap it, or press **Ctrl+Z / Cmd+Z**, to put the lights back. Up to 10 steps are kept for 5 minutes, so a stray tap that recoloured the whole room is one tap away from being reverted. Set `undo: false` to turn the chip off.
+The control strip ends with **↶ Undo** and **↷ Redo** buttons. Every change made from the card (toggle, power button, colour, brightness, temperature, preset, effect) first records the state of every light it can reach, including the members of the default entity, so a stray tap that recoloured the whole room is one tap away from being reverted. **Ctrl+Z / Cmd+Z** and **Ctrl+Y / Cmd+Shift+Z** do the same from the keyboard.
+
+- Undo restores only the lights the change actually affected, and leaves alone any light someone else (or an automation) changed in the meantime.
+- Groups are restored light by light, so per-light colours survive.
+- A drag on the wheel or a slider is a single step. Up to 20 steps are kept; the history clears after 30 minutes of inactivity.
+- Undo is itself undoable: Redo re-applies the change, so the pair doubles as a before/after comparison.
+- The buttons are greyed out when there is nothing to undo or redo. Set `undo: false` to remove them.
 
 ### Opening Light Details
 
@@ -175,7 +181,7 @@ Position history stores up to 50 steps.
 | Ctrl+A / Cmd+A | Select all lights |
 | Escape | Deselect all / close color wheel / close dialogs |
 | Ctrl+Z / Cmd+Z | Undo the last light change (or position change while editing positions) |
-| Ctrl+Y / Cmd+Shift+Z | Redo position change |
+| Ctrl+Y / Cmd+Shift+Z | Redo the last undone light change (or position change while editing positions) |
 | Arrow keys | Nudge selected lights (when positions unlocked) |
 | Alt + Arrow keys | Fine-nudge selected lights |
 
@@ -224,8 +230,7 @@ Position history stores up to 50 steps.
 | `controls_below` | boolean | `true` | Render controls below (`true`) or floating over (`false`). |
 | `default_entity` | string | `null` | Entity to control when nothing is selected. |
 | `switch_single_tap` | boolean | `false` | Toggle switches/scenes with a single tap instead of selecting them. |
-| `undo` | boolean | `true` | Show an Undo chip after each change made from the card (see [Undo](#undo)). |
-| `undo_timeout` | number | `10` | Seconds the Undo chip stays visible after a change. |
+| `undo` | boolean | `true` | Show Undo/Redo buttons in the control strip for changes made from the card (see [Undo & Redo](#undo--redo)). |
 | `show_entity_icons` | boolean | `true` | Show MDI icons inside the light circles. |
 | `icon_style` | string | `"mdi"` | Icon style (`mdi` or `emoji`). |
 | `light_size` | number | `56` | Size of light circles in pixels. On mobile (≤768 px viewport), the rendered size is capped at 50 px regardless of this value. |

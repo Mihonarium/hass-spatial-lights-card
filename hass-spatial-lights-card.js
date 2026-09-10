@@ -147,6 +147,8 @@ class SpatialLightColorCard extends HTMLElement {
     /** Undo/redo for light-state changes made from this card (see _captureUndo) */
     this._lightUndoStack = [];
     this._lightRedoStack = [];
+    this._openUndoStep = null;
+    this._expectedChanges = new Map(); // entity_id -> timestamp until which state changes are the card's own doing
     this._historyLastActivity = 0;
     this._historyPulsed = false;
     this._historyHintTimer = null;
@@ -265,8 +267,10 @@ class SpatialLightColorCard extends HTMLElement {
       // On/off toggle for the controlled lights, left of the sliders
       show_power_button: config.show_power_button !== false,
       switch_single_tap: config.switch_single_tap || false,
-      // Undo/redo buttons in the control strip for changes made from the card
+      // Undo/redo buttons in the control strip. `undo_external` also records
+      // changes made outside the card (automations, other users) as steps.
       undo: config.undo !== false,
+      undo_external: config.undo_external !== false,
       // When true (default), vertical touch swipes on the canvas scroll the
       // page and pinch zooms; rubber-band selection needs a deliberate
       // horizontal-ish drag. Set false to restore gesture-exclusive canvas.
@@ -1300,6 +1304,7 @@ class SpatialLightColorCard extends HTMLElement {
       this._initZigbeeGroupTracking();
       return;
     }
+    this._trackExternalChanges(prev, hass);
     // H3: HA fires `set hass` whenever ANY entity in the system changes. Skip
     // the full updateLights pipeline if no entity this card cares about
     // actually changed state. State objects are immutable per HA conventions
@@ -1759,9 +1764,9 @@ class SpatialLightColorCard extends HTMLElement {
     if (!this._isEntityAvailable(entity)) return;
 
     const friendly = stateObj.attributes?.friendly_name || entity;
-    this._captureUndo('toggle');
+    this._captureUndo('toggle', [entity]);
     if (domain === 'scene') {
-      this._hass.callService('scene', 'turn_on', { entity_id: entity })
+      this._svc('scene', 'turn_on', { entity_id: entity })
         .catch(err => console.warn(`[spatial-light-card] scene.turn_on ${entity} failed:`, err));
       this._announce(`Activating ${friendly}`);
       return;
@@ -1769,7 +1774,7 @@ class SpatialLightColorCard extends HTMLElement {
 
     if (domain !== 'light' && domain !== 'switch' && domain !== 'input_boolean') return;
     const service = stateObj.state === 'on' ? 'turn_off' : 'turn_on';
-    this._hass.callService(domain, service, { entity_id: entity })
+    this._svc(domain, service, { entity_id: entity })
       .catch(err => console.warn(`[spatial-light-card] ${domain}.${service} ${entity} failed:`, err));
     this._announce(`Turning ${service === 'turn_on' ? 'on' : 'off'} ${friendly}`);
   }
@@ -1801,7 +1806,7 @@ class SpatialLightColorCard extends HTMLElement {
     const anyOff = stateContributors.some(id => this._hass.states?.[id]?.state !== 'on');
     const targetOn = stateContributors.length === 0 ? true : anyOff;
     const service = targetOn ? 'turn_on' : 'turn_off';
-    this._captureUndo('toggle');
+    this._captureUndo('toggle', candidates);
 
     // Batch by domain — `light.turn_on { entity_id: [...] }` lets the platform
     // sync bulbs, and we still want one call per domain at most.
@@ -1821,7 +1826,7 @@ class SpatialLightColorCard extends HTMLElement {
       if (d === 'light') {
         const plan = this._planGroupedDispatch(entityId, null);
         for (const groupId of plan.groups) {
-          this._hass.callService(d, svc, { entity_id: groupId })
+          this._svc(d, svc, { entity_id: groupId })
             .catch(err => console.warn(`[spatial-light-card] ${d}.${svc} (group) failed:`, err));
         }
         if (plan.groups.length > 0) {
@@ -1829,7 +1834,7 @@ class SpatialLightColorCard extends HTMLElement {
           if (entityId.length === 0) continue;
         }
       }
-      this._hass.callService(d, svc, { entity_id: entityId })
+      this._svc(d, svc, { entity_id: entityId })
         .catch(err => console.warn(`[spatial-light-card] ${d}.${svc} bulk failed:`, err));
     }
     if (candidates.length === 1) {
@@ -1894,8 +1899,8 @@ class SpatialLightColorCard extends HTMLElement {
         if (svc && this._hass) {
           const [domain, service] = svc.split('.', 2);
           if (domain && service) {
-            this._captureUndo('element');
-            this._hass.callService(domain, service, actionConfig.service_data || actionConfig.data || {});
+            this._captureUndo('element', null);
+            this._svc(domain, service, actionConfig.service_data || actionConfig.data || {});
           }
         }
         break;
@@ -2012,233 +2017,337 @@ class SpatialLightColorCard extends HTMLElement {
   }
 
   /** ---------- Undo / redo for light-state changes ----------
-   * Every write the card makes (toggle, colour, brightness, temperature,
-   * effect, adaptive, canvas-element action) first snapshots the state of
-   * every entity the card can reach — its own entities, the default entity
-   * and, recursively, the members of any group among them. Once the change
-   * has settled (UNDO_SETTLE_MS after the last call of the step) the step
-   * records which entities actually changed and their new state. Undo puts
-   * exactly those entities back, skipping any that someone else changed in
-   * the meantime (Figma-style: only your own edits are walked back); redo
-   * re-applies the recorded "after" state under the same rule. Groups are
-   * restored through their members so per-light colours survive. Same-kind
-   * calls within UNDO_COALESCE_MS collapse into one step, so a live wheel
-   * drag is a single undo. A new action clears the redo stack. History is
-   * session-local and cleared after UNDO_MAX_IDLE_MS without activity.
+   * Two kinds of step share one history:
+   *  - card steps: every write the card makes first calls
+   *    `_captureUndo(kind, targets)`, which snapshots the targeted entities
+   *    (expanded through group membership — HA groups/scenes expose
+   *    `entity_id`, Zigbee2MQTT groups come from `_zigbeeGroups`) as the
+   *    step's `before`; the write itself goes through `_svc`, which records
+   *    the call for redo. Discrete actions are always separate steps; only a
+   *    continuous gesture (live wheel drag, repeated slider commits on the
+   *    same targets) extends the open step.
+   *  - external steps (`undo_external`): `_trackExternalChanges` watches every
+   *    hass update; a change to a pool entity that is not the card's own doing
+   *    (`_expectedChanges`: entity → deadline after a card call) and exceeds
+   *    the drift thresholds becomes, or joins (within EXTERNAL_GROUP_MS), an
+   *    external step with before/after snapshots.
+   * Undo restores every entity in the step's `before` unconditionally, with
+   * the bulb's native colour attribute for its recorded colour mode — it never
+   * waits for or reasons about state propagation, which lags for groups.
+   * Small differences within the card's colour tolerance are not changes.
+   * Redo replays a card step's recorded calls, or re-applies an external
+   * step's `after`. Groups are restored through their members. A new step
+   * clears redo. History is session-local and clears after UNDO_MAX_IDLE_MS.
    */
   static get UNDO_MAX_STEPS() { return 20; }
   static get UNDO_MAX_IDLE_MS() { return 30 * 60 * 1000; }
   static get UNDO_COALESCE_MS() { return 1000; }
-  static get UNDO_SETTLE_MS() { return 2500; }
+  static get UNDO_EXPECT_MS() { return 10 * 1000; }
+  static get UNDO_EXTERNAL_GROUP_MS() { return 2000; }
   static get UNDO_HINT_KEY() { return 'spatial-lights-card:undo-hint-seen'; }
 
-  _undoEntityPool() {
+  _groupMembers(id) {
+    const attr = this._hass?.states?.[id]?.attributes?.entity_id;
+    if (Array.isArray(attr)) return attr;
+    const z2m = this._zigbeeGroups?.get(id);
+    return z2m ? [...z2m] : [];
+  }
+
+  /** Targets plus, recursively, the members of any group among them. No targets → everything the card can reach. */
+  _expandUndoTargets(targets) {
     const states = this._hass?.states || {};
     const ids = new Set();
     const visit = (id, depth) => {
-      if (!id || ids.has(id) || depth > 3) return;
-      const st = states[id];
-      if (!st) return;
+      if (!id || ids.has(id) || depth > 3 || !states[id]) return;
       ids.add(id);
-      const members = st.attributes?.entity_id;
-      if (Array.isArray(members)) members.forEach(m => visit(m, depth + 1));
+      this._groupMembers(id).forEach(m => visit(m, depth + 1));
     };
-    (this._config.entities || []).forEach(id => visit(id, 0));
-    visit(this._config.default_entity, 0);
+    const roots = (Array.isArray(targets) && targets.length)
+      ? targets
+      : [...(this._config.entities || []), this._config.default_entity];
+    roots.forEach(id => visit(id, 0));
     return [...ids];
   }
 
+  _isUndoableDomain(id) {
+    const [domain] = id.split('.');
+    return domain === 'light' || domain === 'switch' || domain === 'input_boolean';
+  }
+
+  /** The state that matters for restoring a light: on/off, brightness, the native colour of its colour mode, effect. */
   _snapshotEntityState(id) {
     const st = this._hass?.states?.[id];
     if (!st) return null;
     const a = st.attributes || {};
+    const num = v => (v != null && Number.isFinite(Number(v)) ? Number(v) : null);
+    const arr = v => (Array.isArray(v) ? v.map(Number) : null);
+    const effect = a.effect && !/^(none|off)$/i.test(String(a.effect)) ? String(a.effect) : null;
     return {
       state: st.state,
-      brightness: a.brightness != null ? Number(a.brightness) : null,
+      brightness: num(a.brightness),
       color_mode: a.color_mode || null,
-      rgb_color: Array.isArray(a.rgb_color) ? a.rgb_color.map(Number) : null,
-      color_temp_kelvin: a.color_temp_kelvin != null ? Number(a.color_temp_kelvin) : null,
-      effect: a.effect || null,
-      group: Array.isArray(a.entity_id),
+      rgb_color: arr(a.rgb_color),
+      hs_color: arr(a.hs_color),
+      xy_color: arr(a.xy_color),
+      rgbw_color: arr(a.rgbw_color),
+      rgbww_color: arr(a.rgbww_color),
+      color_temp_kelvin: num(a.color_temp_kelvin),
+      effect,
+      group: this._groupMembers(id).length > 0,
     };
   }
 
-  _snapshotUndoPool() {
-    const snap = {};
-    for (const id of this._undoEntityPool()) {
-      if (!this._isEntityAvailable(id)) continue;
-      const [domain] = id.split('.');
-      if (domain !== 'light' && domain !== 'switch' && domain !== 'input_boolean') continue;
+  _snapshotEntities(ids, into = {}) {
+    for (const id of ids) {
+      if (id in into || !this._isUndoableDomain(id) || !this._isEntityAvailable(id)) continue;
       const st = this._snapshotEntityState(id);
-      if (st) snap[id] = st;
+      if (st) into[id] = st;
     }
-    return snap;
+    return into;
   }
 
-  _sameEntityState(x, y) {
+  /**
+   * Equal for undo purposes. `loose` widens the thresholds so gradual drift
+   * (adaptive lighting, integrations that round colours) is not a change.
+   */
+  _sameEntityState(x, y, loose = false) {
     if (!x || !y) return false;
     if (x.state !== y.state) return false;
     if (x.state !== 'on') return true;
-    const near = (p, q, tol) => (p == null && q == null) || (p != null && q != null && Math.abs(p - q) <= tol);
-    if (!near(x.brightness, y.brightness, 2)) return false;
+    const near = (p, q, tol) => (p == null || q == null) ? (p == null && q == null) : Math.abs(p - q) <= tol;
+    if (!near(x.brightness, y.brightness, loose ? 26 : 4)) return false;
     if ((x.effect || null) !== (y.effect || null)) return false;
-    if (x.color_mode === 'color_temp' || y.color_mode === 'color_temp') {
-      return x.color_mode === y.color_mode && near(x.color_temp_kelvin, y.color_temp_kelvin, 25);
+    const xTemp = x.color_mode === 'color_temp', yTemp = y.color_mode === 'color_temp';
+    if (xTemp || yTemp) {
+      return xTemp === yTemp && near(x.color_temp_kelvin, y.color_temp_kelvin, loose ? 250 : SpatialLightColorCard.TEMP_TOLERANCE);
     }
     if (x.rgb_color && y.rgb_color) {
-      return x.rgb_color.every((v, i) => Math.abs(v - y.rgb_color[i]) <= 3);
+      return this._rgbDistance(x.rgb_color, y.rgb_color) < (loose ? 2 : 1) * SpatialLightColorCard.COLOR_TOLERANCE;
     }
     return !x.rgb_color === !y.rgb_color;
   }
 
+  /** Service payload that reproduces a snapshot (HA-scene style: the native attribute of the recorded colour mode). */
+  _restorePayload(id, want) {
+    const [domain] = id.split('.');
+    const service = want.state === 'on' ? 'turn_on' : 'turn_off';
+    const data = {};
+    if (domain === 'light' && service === 'turn_on') {
+      if (want.brightness != null) data.brightness = Math.round(want.brightness);
+      if (want.effect) data.effect = want.effect;
+      switch (want.color_mode) {
+        case 'color_temp': if (want.color_temp_kelvin != null) data.color_temp_kelvin = Math.round(want.color_temp_kelvin); break;
+        case 'hs': if (want.hs_color) data.hs_color = want.hs_color; else if (want.rgb_color) data.rgb_color = want.rgb_color; break;
+        case 'xy': if (want.xy_color) data.xy_color = want.xy_color; else if (want.rgb_color) data.rgb_color = want.rgb_color; break;
+        case 'rgbw': if (want.rgbw_color) data.rgbw_color = want.rgbw_color; else if (want.rgb_color) data.rgb_color = want.rgb_color; break;
+        case 'rgbww': if (want.rgbww_color) data.rgbww_color = want.rgbww_color; else if (want.rgb_color) data.rgb_color = want.rgb_color; break;
+        case 'rgb': if (want.rgb_color) data.rgb_color = want.rgb_color; break;
+        case 'white': if (want.brightness != null) { data.white = Math.round(want.brightness); delete data.brightness; } break;
+        default: break; // brightness / onoff / unknown: on + brightness is all there is
+      }
+    }
+    return { domain, service, data };
+  }
+
   _pruneHistory(now = Date.now()) {
     if (this._historyLastActivity && now - this._historyLastActivity > SpatialLightColorCard.UNDO_MAX_IDLE_MS) {
-      for (const step of [...this._lightUndoStack, ...this._lightRedoStack]) {
-        if (step.settleTimer) clearTimeout(step.settleTimer);
-      }
       this._lightUndoStack.length = 0;
       this._lightRedoStack.length = 0;
+      this._openUndoStep = null;
     }
   }
 
-  _captureUndo(kind) {
+  _expectChanges(ids, now = Date.now()) {
+    const until = now + SpatialLightColorCard.UNDO_EXPECT_MS;
+    for (const id of ids) this._expectedChanges.set(id, until);
+  }
+
+  _pushHistoryStep(step) {
+    this._lightRedoStack.length = 0;   // a fresh step invalidates redo
+    this._lightUndoStack.push(step);
+    while (this._lightUndoStack.length > SpatialLightColorCard.UNDO_MAX_STEPS) this._lightUndoStack.shift();
+    this._updateHistoryButtons();
+  }
+
+  /**
+   * Called before every write the card makes. `live` marks a call from a
+   * continuous gesture (mid-drag wheel colour) that must join the open step.
+   */
+  _captureUndo(kind, targets, { live = false } = {}) {
     if (!this._config.undo || !this._hass) return;
     const now = Date.now();
     this._pruneHistory(now);
     this._historyLastActivity = now;
+    const scope = this._expandUndoTargets(targets);
+    this._expectChanges(scope, now);
+    const targetsKey = JSON.stringify([...scope].sort());
     const last = this._lightUndoStack[this._lightUndoStack.length - 1];
-    if (last && !last.settled && last.kind === kind && now - last.touched <= SpatialLightColorCard.UNDO_COALESCE_MS) {
+    // Slider nudges on the same targets, or calls belonging to a wheel drag
+    // that already opened the step, extend it; a new drag never joins a
+    // preceding discrete tap.
+    const continuous = kind === 'brightness' || kind === 'temperature' || !!(last && last.live);
+    if (last && last.source === 'card' && !last.closed && last.kind === kind && last.targetsKey === targetsKey
+        && continuous && now - last.touched <= SpatialLightColorCard.UNDO_COALESCE_MS) {
       last.touched = now;
-      this._scheduleUndoSettle(last);
+      if (live) last.live = true; else if (last.live) last.closed = true;   // the drag's final commit ends the gesture
+      this._openUndoStep = last;
       return;
     }
-    const before = this._snapshotUndoPool();
-    if (Object.keys(before).length === 0) return;
-    // A fresh action invalidates whatever could have been redone.
-    for (const step of this._lightRedoStack) if (step.settleTimer) clearTimeout(step.settleTimer);
-    this._lightRedoStack.length = 0;
-    const step = { kind, at: now, touched: now, before, after: null, changed: null, settled: false, settleTimer: null };
-    this._lightUndoStack.push(step);
-    while (this._lightUndoStack.length > SpatialLightColorCard.UNDO_MAX_STEPS) {
-      const dropped = this._lightUndoStack.shift();
-      if (dropped.settleTimer) clearTimeout(dropped.settleTimer);
-    }
-    this._scheduleUndoSettle(step);
-    this._updateHistoryButtons();
+    const before = this._snapshotEntities(scope);
+    if (Object.keys(before).length === 0) { this._openUndoStep = null; return; }
+    const step = { source: 'card', kind, at: now, touched: now, before, after: null, calls: [], targetsKey, live, closed: false };
+    this._openUndoStep = step;
+    this._pushHistoryStep(step);
   }
 
-  _scheduleUndoSettle(step) {
-    if (step.settleTimer) clearTimeout(step.settleTimer);
-    step.settleTimer = setTimeout(() => {
-      step.settleTimer = null;
-      this._settleUndoStep(step);
-    }, SpatialLightColorCard.UNDO_SETTLE_MS);
+  /** Service call that is recorded on the open undo step (for redo). */
+  _svc(domain, service, data) {
+    const step = this._openUndoStep;
+    if (step && Date.now() - step.touched <= SpatialLightColorCard.UNDO_COALESCE_MS + 500) {
+      step.calls.push({ domain, service, data: JSON.parse(JSON.stringify(data || {})) });
+    }
+    return this._hass.callService(domain, service, data);
   }
 
-  /** Record which entities the step actually changed, and their new state. */
-  _settleUndoStep(step) {
-    if (step.settled) return;
-    if (step.settleTimer) { clearTimeout(step.settleTimer); step.settleTimer = null; }
-    const after = {};
-    const changed = [];
-    for (const [id, pre] of Object.entries(step.before)) {
-      const cur = this._snapshotEntityState(id);
-      if (!cur || this._sameEntityState(pre, cur)) continue;
-      changed.push(id);
-      after[id] = cur;
-    }
-    // If nothing has changed yet the state update may simply be late (slow
-    // Zigbee groups); leave the scope open so undo falls back to "everything
-    // that differs from the snapshot" instead of dropping the step.
-    if (changed.length > 0) {
-      step.after = after;
-      step.changed = changed;
-    }
-    step.settled = true;
-    this._updateHistoryButtons();
-  }
-
-  _undoLightState() { this._applyHistoryStep('undo'); }
-  _redoLightState() { this._applyHistoryStep('redo'); }
-
-  _applyHistoryStep(direction) {
-    if (!this._hass) return;
+  /**
+   * Record changes made outside the card as undoable steps. Runs on every
+   * hass update; cheap because HA state objects are immutable (`===` per id).
+   */
+  _trackExternalChanges(prev, next) {
+    if (!this._config.undo || !this._config.undo_external || !prev?.states || !next?.states) return;
     const now = Date.now();
-    this._pruneHistory(now);
-    const from = direction === 'undo' ? this._lightUndoStack : this._lightRedoStack;
-    const to = direction === 'undo' ? this._lightRedoStack : this._lightUndoStack;
-    const step = from.pop();
-    if (!step) { this._updateHistoryButtons(); return; }
-    this._historyLastActivity = now;
-    if (!step.settled) this._settleUndoStep(step);
-
-    const target = direction === 'undo' ? step.before : step.after;   // state to restore
-    const expect = direction === 'undo' ? step.after : step.before;   // state the step left behind
-    const ids = step.changed || Object.keys(step.before);
-    // A group is restored through its members when any member is in scope.
-    const idSet = new Set(ids);
-    const coveredGroups = new Set();
-    for (const id of ids) {
-      if (!step.before[id]?.group) continue;
-      const members = this._hass.states?.[id]?.attributes?.entity_id || [];
-      if (members.some(m => idSet.has(m))) coveredGroups.add(id);
-    }
-    const calls = new Map(); // "domain.service|payload" -> { domain, service, data, ids }
-    let restored = 0, skipped = 0;
-    for (const id of ids) {
-      if (coveredGroups.has(id) || !this._isEntityAvailable(id)) continue;
-      const want = target?.[id];
-      if (!want) continue;
-      const cur = this._snapshotEntityState(id);
-      if (this._sameEntityState(cur, want)) continue;
-      // Changed by someone else since the step? Leave it alone.
-      if (expect && expect[id] && !this._sameEntityState(cur, expect[id])) { skipped++; continue; }
-      const [domain] = id.split('.');
-      const service = want.state === 'on' ? 'turn_on' : 'turn_off';
-      const data = {};
-      if (domain === 'light' && service === 'turn_on') {
-        if (want.brightness != null) data.brightness = Math.round(want.brightness);
-        if (want.effect) data.effect = want.effect;
-        else if (want.color_mode === 'color_temp' && want.color_temp_kelvin != null) data.color_temp_kelvin = Math.round(want.color_temp_kelvin);
-        else if (want.rgb_color) data.rgb_color = want.rgb_color;
+    let step = null;
+    for (const id of this._expandUndoTargets(null)) {
+      const p = prev.states[id], n = next.states[id];
+      if (p === n || !p || !n || !this._isUndoableDomain(id)) continue;
+      const deadline = this._expectedChanges.get(id);
+      if (deadline && now <= deadline) continue;             // our own change arriving
+      if (deadline) this._expectedChanges.delete(id);
+      if (n.state === 'unavailable' || n.state === 'unknown' || p.state === 'unavailable' || p.state === 'unknown') continue;
+      const before = this._snapshotFromStateObj(id, p), after = this._snapshotFromStateObj(id, n);
+      if (this._sameEntityState(before, after, true)) continue;  // drift, not a change
+      if (!step) {
+        const last = this._lightUndoStack[this._lightUndoStack.length - 1];
+        if (last && last.source === 'external' && now - last.touched <= SpatialLightColorCard.UNDO_EXTERNAL_GROUP_MS) step = last;
+        else { step = { source: 'external', kind: 'external', at: now, touched: now, before: {}, after: {}, calls: [], targetsKey: '', live: false, closed: true }; this._pushHistoryStep(step); }
       }
+      step.touched = now;
+      if (!(id in step.before)) step.before[id] = before;
+      step.after[id] = after;
+    }
+    if (step) { this._historyLastActivity = now; this._updateHistoryButtons(); }
+  }
+
+  _snapshotFromStateObj(id, st) {
+    const saved = this._hass;
+    // Reuse the snapshot logic against an arbitrary state object.
+    this._hass = { states: { [id]: st } };
+    try { return Object.assign(this._snapshotEntityState(id), { group: this._groupMembersFrom(saved, id).length > 0 }); }
+    finally { this._hass = saved; }
+  }
+
+  _groupMembersFrom(hass, id) {
+    const attr = hass?.states?.[id]?.attributes?.entity_id;
+    if (Array.isArray(attr)) return attr;
+    const z2m = this._zigbeeGroups?.get(id);
+    return z2m ? [...z2m] : [];
+  }
+
+  /** Build batched restore calls that put `snap` back for every entity in it. */
+  _restoreCalls(snap, step) {
+    const ids = Object.keys(snap);
+    const idSet = new Set(ids);
+    const settled = Date.now() - step.touched > SpatialLightColorCard.UNDO_EXPECT_MS;
+    const calls = new Map();
+    let count = 0;
+    for (const id of ids) {
+      const want = snap[id];
+      if (want.group && this._groupMembers(id).some(m => idSet.has(m))) continue; // members carry it
+      if (!this._isEntityAvailable(id)) continue;
+      // Once propagation is surely over, skip lights already in the wanted state.
+      if (settled && this._sameEntityState(this._snapshotEntityState(id), want)) continue;
+      const { domain, service, data } = this._restorePayload(id, want);
       const key = `${domain}.${service}|${JSON.stringify(data)}`;
       if (!calls.has(key)) calls.set(key, { domain, service, data, ids: [] });
       calls.get(key).ids.push(id);
-      restored++;
+      count++;
     }
-    to.push(step);
+    return { calls: [...calls.values()], count, ids };
+  }
+
+  _undoLightState() {
+    if (!this._hass) return;
+    this._pruneHistory();
+    const step = this._lightUndoStack.pop();
+    if (!step) { this._updateHistoryButtons(); return; }
+    const now = Date.now();
+    this._historyLastActivity = now;
+    this._openUndoStep = null;
+    const { calls, count, ids } = this._restoreCalls(step.before, step);
+    this._expectChanges(ids, now);
+    this._lightRedoStack.push(step);
     this._updateHistoryButtons();
-    const verb = direction === 'undo' ? 'Undo' : 'Redo';
-    if (calls.size === 0) {
-      this._announce(skipped ? `${verb}: nothing restored, ${skipped} changed since` : `${verb}: nothing to restore`);
-      return;
-    }
-    const promises = [...calls.values()].map(({ domain, service, data, ids: entityIds }) =>
+    const promises = calls.map(({ domain, service, data, ids: entityIds }) =>
       this._hass.callService(domain, service, Object.assign({ entity_id: entityIds }, data)));
+    this._finishHistoryStep('Undo', step, promises, this._lightRedoStack, this._lightUndoStack, count);
+  }
+
+  _redoLightState() {
+    if (!this._hass) return;
+    this._pruneHistory();
+    const step = this._lightRedoStack.pop();
+    if (!step) { this._updateHistoryButtons(); return; }
+    const now = Date.now();
+    this._historyLastActivity = now;
+    this._openUndoStep = null;
+    let promises, count;
+    if (step.source === 'external') {
+      const r = this._restoreCalls(step.after, step);
+      this._expectChanges(r.ids, now);
+      promises = r.calls.map(({ domain, service, data, ids: entityIds }) =>
+        this._hass.callService(domain, service, Object.assign({ entity_id: entityIds }, data)));
+      count = r.count;
+    } else {
+      // Replay the recorded calls, keeping only the last call per target set so
+      // a live drag doesn't re-emit every intermediate colour.
+      const dedup = new Map();
+      for (const c of step.calls) {
+        const key = `${c.domain}.${c.service}|${JSON.stringify(c.data.entity_id)}`;
+        dedup.delete(key);
+        dedup.set(key, c);
+      }
+      this._expectChanges(Object.keys(step.before), now);
+      promises = [...dedup.values()].map(c => this._hass.callService(c.domain, c.service, c.data));
+      count = Object.keys(step.before).filter(id => !step.before[id].group).length;
+    }
+    this._lightUndoStack.push(step);
+    this._updateHistoryButtons();
+    this._finishHistoryStep('Redo', step, promises, this._lightUndoStack, this._lightRedoStack, count);
+  }
+
+  _finishHistoryStep(verb, step, promises, movedTo, cameFrom, count) {
+    if (typeof navigator !== 'undefined' && navigator.vibrate) navigator.vibrate(10);
+    if (promises.length === 0) { this._announce(`${verb}: nothing to restore`); return; }
     Promise.allSettled(promises).then(results => {
       const failed = results.filter(r => r.status === 'rejected');
       if (failed.length) {
         console.warn(`[spatial-light-card] ${verb.toLowerCase()} failed for ${failed.length} call(s):`, failed.map(f => f.reason));
-        // Put the step back so the user can try again.
-        const idx = to.indexOf(step);
-        if (idx !== -1) to.splice(idx, 1);
-        from.push(step);
+        const idx = movedTo.indexOf(step);
+        if (idx !== -1) movedTo.splice(idx, 1);
+        cameFrom.push(step);           // keep it available to try again
         this._updateHistoryButtons();
         this._announce(`${verb} failed — try again`);
         return;
       }
-      const noun = restored === 1 ? 'light' : 'lights';
-      this._announce(skipped ? `${verb}: restored ${restored} ${noun}, ${skipped} changed since` : `${verb}: restored ${restored} ${noun}`);
+      this._announce(`${verb}: ${count} ${count === 1 ? 'light' : 'lights'}`);
     });
-    if (typeof navigator !== 'undefined' && navigator.vibrate) navigator.vibrate(10);
   }
 
   _historyStepTitle(step, verb) {
     if (!step) return verb === 'Undo' ? 'Nothing to undo' : 'Nothing to redo';
-    const kinds = { toggle: 'on/off', color: 'colour', brightness: 'brightness', temperature: 'colour temperature', effect: 'effect', adaptive: 'adaptive lighting', element: 'action' };
+    const kinds = { toggle: 'on/off', color: 'colour', brightness: 'brightness', temperature: 'colour temperature', effect: 'effect', adaptive: 'adaptive lighting', element: 'action', external: 'external change' };
     const what = kinds[step.kind] || 'change';
-    const count = step.changed ? step.changed.filter(id => !step.before[id]?.group).length : 0;
+    const count = Object.keys(step.before).filter(id => !step.before[id].group).length;
     const shortcut = verb === 'Undo' ? 'Ctrl+Z' : 'Ctrl+Y';
     return count ? `${verb} ${what} · ${count} ${count === 1 ? 'light' : 'lights'} (${shortcut})` : `${verb} ${what} (${shortcut})`;
   }
@@ -6366,10 +6475,10 @@ class SpatialLightColorCard extends HTMLElement {
     const al = this._config.adaptive_lighting;
     const targets = this._getAdaptiveTargets();
     if (targets.length === 0) return;
-    this._captureUndo('adaptive');
+    this._captureUndo('adaptive', targets);
 
     if (this._isAdaptiveActive(ctx, targets)) {
-      this._hass.callService('adaptive_lighting', 'set_manual_control', {
+      this._svc('adaptive_lighting', 'set_manual_control', {
         entity_id: ctx.switchId,
         lights: targets,
         manual_control: true,
@@ -6386,7 +6495,7 @@ class SpatialLightColorCard extends HTMLElement {
       // manages; filter when the managed set is known.
       const managed = ctx.configLights ? targets.filter(id => ctx.configLights.has(id)) : targets;
       if (managed.length > 0) {
-        this._hass.callService('adaptive_lighting', 'set_manual_control', {
+        this._svc('adaptive_lighting', 'set_manual_control', {
           entity_id: ctx.switchId,
           lights: managed,
           manual_control: false,
@@ -6403,7 +6512,7 @@ class SpatialLightColorCard extends HTMLElement {
       prefer_rgb_color: al.prefer_rgb_color,
     };
     if (al.transition != null) data.transition = al.transition;
-    this._hass.callService('adaptive_lighting', 'apply', data)
+    this._svc('adaptive_lighting', 'apply', data)
       .catch(err => console.warn('[spatial-light-card] adaptive_lighting.apply failed:', err));
 
     this._announceApplied(`${al.name} lighting`, targets);
@@ -6491,7 +6600,7 @@ class SpatialLightColorCard extends HTMLElement {
       : (this._config.default_entity ? [this._config.default_entity] : []);
     if (controlled.length === 0 || !rgb) return;
 
-    this._captureUndo('color');
+    this._captureUndo('color', controlled, { live: !announce });
     if (announce) this._announceApplied('Color', controlled);
 
     // Cover as many selected lights as possible with Z2M group entities so
@@ -6499,13 +6608,13 @@ class SpatialLightColorCard extends HTMLElement {
     // a per-entity batched call.
     const plan = this._planGroupedDispatch(controlled, 'rgb');
     for (const groupId of plan.groups) {
-      this._hass.callService('light', 'turn_on', { entity_id: groupId, rgb_color: rgb })
+      this._svc('light', 'turn_on', { entity_id: groupId, rgb_color: rgb })
         .catch(err => console.warn('[spatial-light-card] light.turn_on (rgb, group) failed:', err));
     }
     if (plan.uncovered.length === 0) return;
     const targets = this._getServiceTargets(plan.uncovered, 'rgb');
     if (targets.length === 0) return;
-    this._hass.callService('light', 'turn_on', { entity_id: targets, rgb_color: rgb })
+    this._svc('light', 'turn_on', { entity_id: targets, rgb_color: rgb })
       .catch(err => console.warn('[spatial-light-card] light.turn_on (rgb) failed:', err));
   }
 
@@ -6880,16 +6989,16 @@ class SpatialLightColorCard extends HTMLElement {
       : (this._config.default_entity ? [this._config.default_entity] : []);
     if (controlled.length === 0 || !Number.isFinite(kelvin)) return;
 
-    this._captureUndo('temperature');
+    this._captureUndo('temperature', controlled);
     const plan = this._planGroupedDispatch(controlled, 'color_temp');
     for (const groupId of plan.groups) {
-      this._hass.callService('light', 'turn_on', { entity_id: groupId, color_temp_kelvin: kelvin })
+      this._svc('light', 'turn_on', { entity_id: groupId, color_temp_kelvin: kelvin })
         .catch(err => console.warn('[spatial-light-card] light.turn_on (color_temp, group) failed:', err));
     }
     if (plan.uncovered.length > 0) {
       const targets = this._getServiceTargets(plan.uncovered, 'color_temp');
       if (targets.length > 0) {
-        this._hass.callService('light', 'turn_on', { entity_id: targets, color_temp_kelvin: kelvin })
+        this._svc('light', 'turn_on', { entity_id: targets, color_temp_kelvin: kelvin })
           .catch(err => console.warn('[spatial-light-card] light.turn_on (color_temp) failed:', err));
       }
     }
@@ -6935,17 +7044,17 @@ class SpatialLightColorCard extends HTMLElement {
       return Array.isArray(effectList) && effectList.includes(effectName);
     });
     if (supported.length === 0) return;
-    this._captureUndo('effect');
+    this._captureUndo('effect', supported);
     // Try to cover the supporting subset with Z2M groups; remaining bulbs
     // go via the batched effect call.
     const plan = this._planGroupedDispatch(supported, 'effect', effectName);
     for (const groupId of plan.groups) {
-      this._hass.callService('light', 'turn_on', { entity_id: groupId, effect: effectName })
+      this._svc('light', 'turn_on', { entity_id: groupId, effect: effectName })
         .catch(err => console.warn('[spatial-light-card] light.turn_on (effect, group) failed:', err));
     }
     const leftover = plan.uncovered.filter(id => supported.includes(id));
     if (leftover.length > 0) {
-      this._hass.callService('light', 'turn_on', { entity_id: leftover, effect: effectName })
+      this._svc('light', 'turn_on', { entity_id: leftover, effect: effectName })
         .catch(err => console.warn('[spatial-light-card] light.turn_on (effect) failed:', err));
     }
     this._announceApplied(`Effect ${effectName}`, supported);
@@ -6975,16 +7084,16 @@ class SpatialLightColorCard extends HTMLElement {
 
     const b = this._pendingBrightness;
     this._pendingBrightness = null;
-    this._captureUndo('brightness');
+    this._captureUndo('brightness', controlled);
     const plan = this._planGroupedDispatch(controlled, 'brightness');
     for (const groupId of plan.groups) {
-      this._hass.callService('light', 'turn_on', { entity_id: groupId, brightness: b })
+      this._svc('light', 'turn_on', { entity_id: groupId, brightness: b })
         .catch(err => console.warn('[spatial-light-card] light.turn_on (brightness, group) failed:', err));
     }
     if (plan.uncovered.length === 0) return;
     const targets = this._getServiceTargets(plan.uncovered, 'brightness');
     if (targets.length === 0) return;
-    this._hass.callService('light', 'turn_on', { entity_id: targets, brightness: b })
+    this._svc('light', 'turn_on', { entity_id: targets, brightness: b })
       .catch(err => console.warn('[spatial-light-card] light.turn_on (brightness) failed:', err));
   }
 
@@ -7012,16 +7121,16 @@ class SpatialLightColorCard extends HTMLElement {
 
     const k = this._pendingTemperature;
     this._pendingTemperature = null;
-    this._captureUndo('temperature');
+    this._captureUndo('temperature', controlled);
     const plan = this._planGroupedDispatch(controlled, 'color_temp');
     for (const groupId of plan.groups) {
-      this._hass.callService('light', 'turn_on', { entity_id: groupId, color_temp_kelvin: k })
+      this._svc('light', 'turn_on', { entity_id: groupId, color_temp_kelvin: k })
         .catch(err => console.warn('[spatial-light-card] light.turn_on (color_temp, group) failed:', err));
     }
     if (plan.uncovered.length === 0) return;
     const targets = this._getServiceTargets(plan.uncovered, 'color_temp');
     if (targets.length === 0) return;
-    this._hass.callService('light', 'turn_on', { entity_id: targets, color_temp_kelvin: k })
+    this._svc('light', 'turn_on', { entity_id: targets, color_temp_kelvin: k })
       .catch(err => console.warn('[spatial-light-card] light.turn_on (color_temp) failed:', err));
   }
 
@@ -7887,6 +7996,7 @@ class SpatialLightColorCard extends HTMLElement {
     if (this._config.show_power_button === false) yamlLines.push('show_power_button: false');
     yamlLines.push(`switch_single_tap: ${!!this._config.switch_single_tap}`);
     if (this._config.undo === false) yamlLines.push('undo: false');
+    if (this._config.undo !== false && this._config.undo_external === false) yamlLines.push('undo_external: false');
     if (this._config.canvas_touch_scroll === false) yamlLines.push('canvas_touch_scroll: false');
     if (this._config.theme_mode && this._config.theme_mode !== 'auto') {
       yamlLines.push(`theme_mode: ${this._config.theme_mode}`);
@@ -9910,6 +10020,10 @@ class SpatialLightColorCardEditor extends HTMLElement {
               <ha-switch id="cfgUndo"></ha-switch>
             </div>
             <div class="option-row">
+              <div><div class="label">Undo External Changes</div><div class="sublabel">Also record changes made by automations or other users, so they can be undone here</div></div>
+              <ha-switch id="cfgUndoExternal"></ha-switch>
+            </div>
+            <div class="option-row">
               <div><div class="label">Scroll Page Over Canvas</div><div class="sublabel">Vertical touch swipes on the canvas scroll the dashboard; area selection needs a sideways drag. Turn off to reserve all canvas touches for selection.</div></div>
               <ha-switch id="cfgCanvasTouchScroll"></ha-switch>
             </div>
@@ -10100,6 +10214,7 @@ class SpatialLightColorCardEditor extends HTMLElement {
       cfgControlsBelow: c.controls_below !== false,
       cfgSwitchTap: c.switch_single_tap || false,
       cfgUndo: c.undo !== false,
+      cfgUndoExternal: c.undo_external !== false,
       cfgCanvasTouchScroll: c.canvas_touch_scroll !== false,
       cfgThemeGlass: !!(c.theme && c.theme.glass),
       cfgGlowEnabled: !!(g.enabled),
@@ -10450,6 +10565,7 @@ class SpatialLightColorCardEditor extends HTMLElement {
     this._bindSwitch('cfgControlsBelow', 'controls_below');
     this._bindSwitch('cfgSwitchTap', 'switch_single_tap');
     this._bindSwitch('cfgUndo', 'undo');
+    this._bindSwitch('cfgUndoExternal', 'undo_external');
     this._bindSwitch('cfgCanvasTouchScroll', 'canvas_touch_scroll');
 
     // --- Appearance (theme) ---

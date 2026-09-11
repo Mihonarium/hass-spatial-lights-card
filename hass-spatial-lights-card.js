@@ -2074,6 +2074,28 @@ class SpatialLightColorCard extends HTMLElement {
     return domain === 'light' || domain === 'switch' || domain === 'input_boolean';
   }
 
+  /**
+   * Entities whose state is derived from other entities: groups, and the
+   * default entity (normally a group). Their changes are never tracked as
+   * external — the members' changes are — otherwise recolouring two lights
+   * shifts the group's averaged state, that shift is recorded as "external",
+   * and the next undo would push the group's old average onto every member.
+   */
+  _isDerivedEntity(id) {
+    return id === this._config.default_entity || this._groupMembers(id).length > 0;
+  }
+
+  /** Pool groups that contain any of `ids` (their derived state will move too). */
+  _groupsContaining(ids) {
+    const set = new Set(ids);
+    const out = [];
+    for (const g of this._expandUndoTargets(null)) {
+      if (set.has(g) || !this._isDerivedEntity(g)) continue;
+      if (this._groupMembers(g).some(m => set.has(m))) out.push(g);
+    }
+    return out;
+  }
+
   /** The state that matters for restoring a light: on/off, brightness, the native colour of its colour mode, effect. */
   _snapshotEntityState(id) {
     const st = this._hass?.states?.[id];
@@ -2169,6 +2191,7 @@ class SpatialLightColorCard extends HTMLElement {
       const want = wants ? (wants[id] || wants['*'] || null) : null;
       this._expectedChanges.set(id, { until, want: want || this._expectedChanges.get(id)?.want || null });
     }
+    for (const g of this._groupsContaining(ids)) this._expectedChanges.set(g, { until, want: null });
   }
 
   /** The end state a light service call asks for (null when unknowable, e.g. toggle). */
@@ -2278,7 +2301,7 @@ class SpatialLightColorCard extends HTMLElement {
     let step = null;
     for (const id of this._expandUndoTargets(null)) {
       const p = prev.states[id], n = next.states[id];
-      if (p === n || !p || !n || !this._isUndoableDomain(id)) continue;
+      if (p === n || !p || !n || !this._isUndoableDomain(id) || this._isDerivedEntity(id)) continue;
       if (n.state === 'unavailable' || n.state === 'unknown' || p.state === 'unavailable' || p.state === 'unknown') continue;
       const before = this._snapshotFromStateObj(id, p), after = this._snapshotFromStateObj(id, n);
       if (this._isOwnChange(id, after, now)) continue;      // our own change arriving, however late

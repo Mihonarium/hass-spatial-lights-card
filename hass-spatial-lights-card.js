@@ -2272,7 +2272,26 @@ class SpatialLightColorCard extends HTMLElement {
       calls.get(key).ids.push(id);
       count++;
     }
-    return { calls: [...calls.values()], count, ids };
+    // Cover each same-payload light batch with Zigbee2MQTT groups where a
+    // group's members all need that payload: one groupcast instead of N
+    // unicasts (same planner the live controls use).
+    const out = [];
+    const groupIds = [];
+    for (const call of calls.values()) {
+      if (call.domain !== 'light' || call.ids.length < 2) { out.push(call); continue; }
+      const d = call.data;
+      const capability = d.effect ? 'effect'
+        : (d.rgb_color || d.hs_color || d.xy_color || d.rgbw_color || d.rgbww_color) ? 'rgb'
+        : d.color_temp_kelvin != null ? 'color_temp'
+        : d.brightness != null ? 'brightness' : null;
+      const plan = this._planGroupedDispatch(call.ids, capability, d.effect);
+      for (const groupId of plan.groups) {
+        out.push({ domain: 'light', service: call.service, data: d, ids: [groupId] });
+        groupIds.push(groupId);
+      }
+      if (plan.uncovered.length) out.push({ domain: 'light', service: call.service, data: d, ids: plan.uncovered });
+    }
+    return { calls: out, count, ids: [...ids, ...groupIds] };
   }
 
   _undoLightState() {

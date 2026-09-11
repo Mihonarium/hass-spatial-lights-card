@@ -148,7 +148,7 @@ class SpatialLightColorCard extends HTMLElement {
     this._lightUndoStack = [];
     this._lightRedoStack = [];
     this._openUndoStep = null;
-    this._expectedChanges = new Map(); // entity_id -> timestamp until which state changes are the card's own doing
+    this._expectedChanges = new Map(); // entity_id -> { until, want }: state changes that are the card's own doing
     this._historyLastActivity = 0;
     this._historyPulsed = false;
     this._historyHintTimer = null;
@@ -2042,7 +2042,7 @@ class SpatialLightColorCard extends HTMLElement {
   static get UNDO_MAX_STEPS() { return 20; }
   static get UNDO_MAX_IDLE_MS() { return 30 * 60 * 1000; }
   static get UNDO_COALESCE_MS() { return 1000; }
-  static get UNDO_EXPECT_MS() { return 10 * 1000; }
+  static get UNDO_EXPECT_MS() { return 15 * 1000; }
   static get UNDO_EXTERNAL_GROUP_MS() { return 2000; }
   static get UNDO_HINT_KEY() { return 'spatial-lights-card:undo-hint-seen'; }
 
@@ -2157,13 +2157,68 @@ class SpatialLightColorCard extends HTMLElement {
     }
   }
 
-  _expectChanges(ids, now = Date.now()) {
+  /**
+   * Mark entities whose next state changes are the card's own doing. `wants`
+   * (id → partial state) lets a report that arrives after the time window
+   * still be recognised as ours when it matches what we asked for — slow
+   * bulbs and big groups can take well over ten seconds to report back.
+   */
+  _expectChanges(ids, now = Date.now(), wants = null) {
     const until = now + SpatialLightColorCard.UNDO_EXPECT_MS;
-    for (const id of ids) this._expectedChanges.set(id, until);
+    for (const id of ids) {
+      const want = wants ? (wants[id] || wants['*'] || null) : null;
+      this._expectedChanges.set(id, { until, want: want || this._expectedChanges.get(id)?.want || null });
+    }
+  }
+
+  /** The end state a light service call asks for (null when unknowable, e.g. toggle). */
+  _wantFromCall(service, data) {
+    if (service === 'turn_off') return { state: 'off' };
+    if (service !== 'turn_on') return null;
+    const d = data || {};
+    const want = { state: 'on' };
+    if (d.brightness != null) want.brightness = Number(d.brightness);
+    else if (d.brightness_pct != null) want.brightness = Math.round(Number(d.brightness_pct) * 2.55);
+    if (d.white != null) want.brightness = Number(d.white);
+    if (d.rgb_color) want.rgb_color = d.rgb_color.map(Number);
+    if (d.hs_color) want.hs_color = d.hs_color.map(Number);
+    if (d.xy_color) want.xy_color = d.xy_color.map(Number);
+    if (d.rgbw_color) want.rgbw_color = d.rgbw_color.map(Number);
+    if (d.rgbww_color) want.rgbww_color = d.rgbww_color.map(Number);
+    if (d.color_temp_kelvin != null) want.color_temp_kelvin = Number(d.color_temp_kelvin);
+    if (d.effect) want.effect = String(d.effect);
+    return want;
+  }
+
+  /** Does a reported state agree with what we asked for, on the fields we asked about (within tolerance)? */
+  _matchesWant(snap, want) {
+    if (!snap || !want) return false;
+    if (want.state && snap.state !== want.state) return false;
+    if (snap.state !== 'on') return true;
+    const near = (p, q, tol) => p != null && q != null && Math.abs(p - q) <= tol;
+    if (want.brightness != null && !near(snap.brightness, want.brightness, 4)) return false;
+    if (want.effect && (snap.effect || null) !== want.effect) return false;
+    if (want.color_temp_kelvin != null && !near(snap.color_temp_kelvin, want.color_temp_kelvin, SpatialLightColorCard.TEMP_TOLERANCE)) return false;
+    if (want.rgb_color && !(snap.rgb_color && this._rgbDistance(snap.rgb_color, want.rgb_color) < SpatialLightColorCard.COLOR_TOLERANCE)) return false;
+    if (want.rgbw_color && !(snap.rgb_color && this._rgbDistance(snap.rgb_color, want.rgbw_color.slice(0, 3)) < SpatialLightColorCard.COLOR_TOLERANCE)) return false;
+    if (want.rgbww_color && !(snap.rgb_color && this._rgbDistance(snap.rgb_color, want.rgbww_color.slice(0, 3)) < SpatialLightColorCard.COLOR_TOLERANCE)) return false;
+    if (want.hs_color && snap.hs_color && !(near(snap.hs_color[0], want.hs_color[0], 8) && near(snap.hs_color[1], want.hs_color[1], 8))) return false;
+    if (want.xy_color && snap.xy_color && !(near(snap.xy_color[0], want.xy_color[0], 0.02) && near(snap.xy_color[1], want.xy_color[1], 0.02))) return false;
+    return true;
+  }
+
+  _isOwnChange(id, after, now) {
+    const e = this._expectedChanges.get(id);
+    if (!e) return false;
+    if (now <= e.until) return true;
+    // Past the window: still ours if the report lands on what we asked for.
+    return !!(e.want && this._matchesWant(after, e.want));
   }
 
   _pushHistoryStep(step) {
-    this._lightRedoStack.length = 0;   // a fresh step invalidates redo
+    // A fresh card action invalidates redo; an external change does not —
+    // automation noise must not break the user's own undo/redo chain.
+    if (step.source !== 'external') this._lightRedoStack.length = 0;
     this._lightUndoStack.push(step);
     while (this._lightUndoStack.length > SpatialLightColorCard.UNDO_MAX_STEPS) this._lightUndoStack.shift();
     this._updateHistoryButtons();
@@ -2206,6 +2261,10 @@ class SpatialLightColorCard extends HTMLElement {
     if (step && Date.now() - step.touched <= SpatialLightColorCard.UNDO_COALESCE_MS + 500) {
       step.calls.push({ domain, service, data: JSON.parse(JSON.stringify(data || {})) });
     }
+    if (this._config.undo && data && data.entity_id) {
+      const want = this._wantFromCall(service, data);
+      this._expectChanges(this._expandUndoTargets([].concat(data.entity_id)), Date.now(), { '*': want });
+    }
     return this._hass.callService(domain, service, data);
   }
 
@@ -2220,11 +2279,9 @@ class SpatialLightColorCard extends HTMLElement {
     for (const id of this._expandUndoTargets(null)) {
       const p = prev.states[id], n = next.states[id];
       if (p === n || !p || !n || !this._isUndoableDomain(id)) continue;
-      const deadline = this._expectedChanges.get(id);
-      if (deadline && now <= deadline) continue;             // our own change arriving
-      if (deadline) this._expectedChanges.delete(id);
       if (n.state === 'unavailable' || n.state === 'unknown' || p.state === 'unavailable' || p.state === 'unknown') continue;
       const before = this._snapshotFromStateObj(id, p), after = this._snapshotFromStateObj(id, n);
+      if (this._isOwnChange(id, after, now)) continue;      // our own change arriving, however late
       if (this._sameEntityState(before, after, true)) continue;  // drift, not a change
       if (!step) {
         const last = this._lightUndoStack[this._lightUndoStack.length - 1];
@@ -2303,7 +2360,7 @@ class SpatialLightColorCard extends HTMLElement {
     this._historyLastActivity = now;
     this._openUndoStep = null;
     const { calls, count, ids } = this._restoreCalls(step.before, step);
-    this._expectChanges(ids, now);
+    this._expectChanges(ids, now, step.before);
     this._lightRedoStack.push(step);
     this._updateHistoryButtons();
     const promises = calls.map(({ domain, service, data, ids: entityIds }) =>
@@ -2322,7 +2379,7 @@ class SpatialLightColorCard extends HTMLElement {
     let promises, count;
     if (step.source === 'external') {
       const r = this._restoreCalls(step.after, step);
-      this._expectChanges(r.ids, now);
+      this._expectChanges(r.ids, now, step.after);
       promises = r.calls.map(({ domain, service, data, ids: entityIds }) =>
         this._hass.callService(domain, service, Object.assign({ entity_id: entityIds }, data)));
       count = r.count;
@@ -2336,6 +2393,9 @@ class SpatialLightColorCard extends HTMLElement {
         dedup.set(key, c);
       }
       this._expectChanges(Object.keys(step.before), now);
+      for (const c of dedup.values()) {
+        if (c.data && c.data.entity_id) this._expectChanges(this._expandUndoTargets([].concat(c.data.entity_id)), now, { '*': this._wantFromCall(c.service, c.data) });
+      }
       promises = [...dedup.values()].map(c => this._hass.callService(c.domain, c.service, c.data));
       count = Object.keys(step.before).filter(id => !step.before[id].group).length;
     }

@@ -9622,6 +9622,32 @@ class SpatialLightColorCardEditor extends HTMLElement {
         </div>
 
         <!-- Display Section -->
+        <div class="section collapsed" id="section-interaction">
+          <div class="section-header" data-section="interaction">
+            <h3>Interaction</h3>
+            <span class="chevron">&#9660;</span>
+          </div>
+          <div class="section-body">
+            <div class="option-row">
+              <div><div class="label">Single-Tap for Switches &amp; Scenes</div><div class="sublabel">Toggle switches and activate scenes with one tap</div></div>
+              <ha-switch id="cfgSwitchTap"></ha-switch>
+            </div>
+            <div class="option-row">
+              <div><div class="label">Undo &amp; Redo Buttons</div><div class="sublabel">Add undo/redo buttons to the control strip so any change can be reverted (off by default)</div></div>
+              <ha-switch id="cfgUndo"></ha-switch>
+            </div>
+            <div class="option-row">
+              <div><div class="label">Undo External Changes</div><div class="sublabel">Also record changes made by automations or other users, so they can be undone here</div></div>
+              <ha-switch id="cfgUndoExternal"></ha-switch>
+            </div>
+            <div class="option-row">
+              <div><div class="label">Scroll Page Over Canvas</div><div class="sublabel">Vertical touch swipes on the canvas scroll the dashboard; area selection needs a sideways drag. Turn off to reserve all canvas touches for selection.</div></div>
+              <ha-switch id="cfgCanvasTouchScroll"></ha-switch>
+            </div>
+          </div>
+        </div>
+
+        <!-- Custom CSS Section -->
         <div class="section" id="section-display">
           <div class="section-header" data-section="display">
             <h3>Display</h3>
@@ -10114,32 +10140,6 @@ class SpatialLightColorCardEditor extends HTMLElement {
         </div>
 
         <!-- Interaction Section -->
-        <div class="section collapsed" id="section-interaction">
-          <div class="section-header" data-section="interaction">
-            <h3>Interaction</h3>
-            <span class="chevron">&#9660;</span>
-          </div>
-          <div class="section-body">
-            <div class="option-row">
-              <div><div class="label">Single-Tap for Switches &amp; Scenes</div><div class="sublabel">Toggle switches and activate scenes with one tap</div></div>
-              <ha-switch id="cfgSwitchTap"></ha-switch>
-            </div>
-            <div class="option-row">
-              <div><div class="label">Undo &amp; Redo Buttons</div><div class="sublabel">Add undo/redo buttons to the control strip so any change can be reverted (off by default)</div></div>
-              <ha-switch id="cfgUndo"></ha-switch>
-            </div>
-            <div class="option-row">
-              <div><div class="label">Undo External Changes</div><div class="sublabel">Also record changes made by automations or other users, so they can be undone here</div></div>
-              <ha-switch id="cfgUndoExternal"></ha-switch>
-            </div>
-            <div class="option-row">
-              <div><div class="label">Scroll Page Over Canvas</div><div class="sublabel">Vertical touch swipes on the canvas scroll the dashboard; area selection needs a sideways drag. Turn off to reserve all canvas touches for selection.</div></div>
-              <ha-switch id="cfgCanvasTouchScroll"></ha-switch>
-            </div>
-          </div>
-        </div>
-
-        <!-- Custom CSS Section -->
         <div class="section${config.custom_css ? '' : ' collapsed'}" id="section-custom-css">
           <div class="section-header" data-section="custom-css">
             <h3>Custom CSS</h3>

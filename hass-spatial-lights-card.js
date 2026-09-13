@@ -269,7 +269,7 @@ class SpatialLightColorCard extends HTMLElement {
       switch_single_tap: config.switch_single_tap || false,
       // Undo/redo buttons in the control strip. `undo_external` also records
       // changes made outside the card (automations, other users) as steps.
-      undo: config.undo !== false,
+      undo: config.undo === true,
       undo_external: config.undo_external !== false,
       // When true (default), vertical touch swipes on the canvas scroll the
       // page and pinch zooms; rubber-band selection needs a deliberate
@@ -3879,8 +3879,11 @@ class SpatialLightColorCard extends HTMLElement {
         }
         .presets-area {
           margin-left: 0; /* Reset desktop alignment offset */
-          justify-content: center;
+          justify-content: center; row-gap: 6px;
         }
+        /* Effect / adaptive buttons get their own row under the colour dots
+           instead of filling gaps in the dot grid. */
+        .presets-area .effect-separator { flex-basis: 100%; height: 0; margin: 0; background: none; }
         /* Narrow row: undo/redo take their own line under the presets, kept
            at the right edge (the natural end of a right-thumb arc). */
         .presets-row { flex-wrap: wrap; }
@@ -6668,7 +6671,9 @@ class SpatialLightColorCard extends HTMLElement {
     html += tempHtml || '';
     const beforeEffect = colorHtml || tempHtml;
     if (beforeEffect && effectHtml) {
-      html += '<div class="preset-separator" aria-hidden="true"></div>';
+      // On phones this separator becomes a line break so the effect/mode
+      // buttons form their own row under the colour dots (see mobile CSS).
+      html += '<div class="preset-separator effect-separator" aria-hidden="true"></div>';
     }
     html += effectHtml || '';
     return html;
@@ -6678,7 +6683,9 @@ class SpatialLightColorCard extends HTMLElement {
     if (!this.shadowRoot) return;
     // The power separator sits in the non-wrapping .presets-row and is
     // governed by CSS (.has-presets / :first-child), not by row measurement.
+    const phone = typeof window !== 'undefined' && window.matchMedia && window.matchMedia('(max-width: 768px)').matches;
     this.shadowRoot.querySelectorAll('.preset-separator:not(.power-separator)').forEach(sep => {
+      if (phone && sep.classList.contains('effect-separator')) { sep.style.display = ''; return; } // acts as a row break there
       const prev = sep.previousElementSibling;
       const next = sep.nextElementSibling;
       if (!prev || !next) {
@@ -8097,8 +8104,8 @@ class SpatialLightColorCard extends HTMLElement {
     yamlLines.push(`show_entity_icons: ${!!this._config.show_entity_icons}`);
     if (this._config.show_power_button === false) yamlLines.push('show_power_button: false');
     yamlLines.push(`switch_single_tap: ${!!this._config.switch_single_tap}`);
-    if (this._config.undo === false) yamlLines.push('undo: false');
-    if (this._config.undo !== false && this._config.undo_external === false) yamlLines.push('undo_external: false');
+    if (this._config.undo) yamlLines.push('undo: true');
+    if (this._config.undo && this._config.undo_external === false) yamlLines.push('undo_external: false');
     if (this._config.canvas_touch_scroll === false) yamlLines.push('canvas_touch_scroll: false');
     if (this._config.theme_mode && this._config.theme_mode !== 'auto') {
       yamlLines.push(`theme_mode: ${this._config.theme_mode}`);
@@ -10118,7 +10125,7 @@ class SpatialLightColorCardEditor extends HTMLElement {
               <ha-switch id="cfgSwitchTap"></ha-switch>
             </div>
             <div class="option-row">
-              <div><div class="label">Undo &amp; Redo Buttons</div><div class="sublabel">Show undo/redo buttons in the control strip for changes made from this card</div></div>
+              <div><div class="label">Undo &amp; Redo Buttons</div><div class="sublabel">Add undo/redo buttons to the control strip so any change can be reverted (off by default)</div></div>
               <ha-switch id="cfgUndo"></ha-switch>
             </div>
             <div class="option-row">
@@ -10315,7 +10322,7 @@ class SpatialLightColorCardEditor extends HTMLElement {
       cfgAlwaysControls: c.always_show_controls || false,
       cfgControlsBelow: c.controls_below !== false,
       cfgSwitchTap: c.switch_single_tap || false,
-      cfgUndo: c.undo !== false,
+      cfgUndo: c.undo === true,
       cfgUndoExternal: c.undo_external !== false,
       cfgCanvasTouchScroll: c.canvas_touch_scroll !== false,
       cfgThemeGlass: !!(c.theme && c.theme.glass),

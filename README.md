@@ -114,14 +114,14 @@ The **power button** sits at the start of the presets row — under the sliders 
 
 ### Undo & Redo
 
-The control strip ends with **↶ Undo** and **↷ Redo** buttons. Every change made from the card (toggle, power button, colour, brightness, temperature, preset, effect) first records the state of every light it can reach, including the members of the default entity, so a stray tap that recoloured the whole room is one tap away from being reverted. **Ctrl+Z / Cmd+Z** and **Ctrl+Y / Cmd+Shift+Z** do the same from the keyboard.
+With `undo: true` (or the **Undo & Redo Buttons** switch in the editor), the control strip ends with **↶ Undo** and **↷ Redo** buttons. Every change made from the card (toggle, power button, colour, brightness, temperature, preset, effect) first records the state of every light it can reach, including the members of the default entity, so a stray tap that recoloured the whole room is one tap away from being reverted. **Ctrl+Z / Cmd+Z** and **Ctrl+Y / Cmd+Shift+Z** do the same from the keyboard.
 
 - Undo puts every light the change targeted back to its prior state, whether or not the change has finished propagating, so it is safe to press immediately. Colour is restored in the bulb's own colour mode (hue/saturation, xy, RGBW, colour temperature, white), the way Home Assistant scenes do.
 - Groups are restored light by light, so per-light colours survive.
 - Each action is its own step; only a continuous wheel drag or repeated slider nudges on the same lights form one step. Up to 20 steps are kept; the history clears after 30 minutes of inactivity.
 - Changes made elsewhere (an automation, another dashboard, a wall switch) are recorded as steps too, so they can be undone from here. Gradual drift such as adaptive-lighting ticks is ignored. Set `undo_external: false` to record only the card's own changes.
 - Redo replays the change, so the pair doubles as a before/after comparison.
-- The buttons are greyed out when there is nothing to undo or redo. Set `undo: false` to remove them.
+- The buttons are greyed out when there is nothing to undo or redo.
 
 ### Opening Light Details
 
@@ -231,7 +231,7 @@ Position history stores up to 50 steps.
 | `controls_below` | boolean | `true` | Render controls below (`true`) or floating over (`false`). |
 | `default_entity` | string | `null` | Entity to control when nothing is selected. |
 | `switch_single_tap` | boolean | `false` | Toggle switches/scenes with a single tap instead of selecting them. |
-| `undo` | boolean | `true` | Show Undo/Redo buttons in the control strip (see [Undo & Redo](#undo--redo)). |
+| `undo` | boolean | `false` | Show Undo/Redo buttons in the control strip (see [Undo & Redo](#undo--redo)). |
 | `undo_external` | boolean | `true` | Also record changes made outside the card (automations, other users) as undoable steps. |
 | `show_entity_icons` | boolean | `true` | Show MDI icons inside the light circles. |
 | `icon_style` | string | `"mdi"` | Icon style (`mdi` or `emoji`). |

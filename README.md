@@ -96,7 +96,9 @@ resources:
 | Select all lights | Ctrl+A / Cmd+A | — |
 | Deselect all | Click/tap empty canvas, or press Escape | Tap empty canvas |
 
-When lights are selected, the color wheel, brightness slider, and temperature slider control all selected lights as a group. If you have a **default entity** configured, the controls affect that entity when nothing is selected.
+When lights are selected, the color wheel, brightness slider, and temperature slider control all selected lights as a group.
+
+**Group entities on the canvas.** Selecting a light group (a Home Assistant light group or a Zigbee2MQTT group) selects the group itself, and the card shows the group with a double ring and every member that is on the canvas with a dashed ring, so you can see what the group covers. Controls act on the group, so members that are not on the canvas change too. Shift/Ctrl/Cmd+click a dashed member to exclude it: the selection becomes the group's on-canvas members minus that one. If a marquee selects a group and some of its members, the members covered by the group are not sent a second command. Set `highlight_group_members: false` to show only the group. If you have a **default entity** configured, the controls affect that entity when nothing is selected.
 
 > **Note:** On touch devices the card shares the canvas with page scrolling: a drag on empty canvas that starts **near-vertically** (within ~22° of straight up/down) scrolls the dashboard, while any other drag draws the selection box — and once the box has started, it can travel in any direction without being interrupted. For a deliberately vertical box, hold your finger still for a moment first (a short vibration confirms it), then drag. Pinch-zoom always works. Set `canvas_touch_scroll: false` to reserve every canvas touch for selection instead.
 
@@ -220,6 +222,7 @@ Position history stores up to 50 steps.
 | `controls_below` | boolean | `true` | Render controls below (`true`) or floating over (`false`). |
 | `default_entity` | string | `null` | Entity to control when nothing is selected. |
 | `switch_single_tap` | boolean | `false` | Toggle switches/scenes with a single tap instead of selecting them. |
+| `highlight_group_members` | boolean | `true` | When a group entity on the canvas is selected, show its on-canvas members as selected (dashed ring) and let a modifier-click exclude one. |
 | `show_entity_icons` | boolean | `true` | Show MDI icons inside the light circles. |
 | `icon_style` | string | `"mdi"` | Icon style (`mdi` or `emoji`). |
 | `light_size` | number | `56` | Size of light circles in pixels. On mobile (≤768 px viewport), the rendered size is capped at 50 px regardless of this value. |

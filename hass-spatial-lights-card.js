@@ -259,6 +259,8 @@ class SpatialLightColorCard extends HTMLElement {
       // On/off toggle for the controlled lights, left of the sliders
       show_power_button: config.show_power_button !== false,
       switch_single_tap: config.switch_single_tap || false,
+      // Selecting a group entity on the canvas also shows its on-canvas members as selected
+      highlight_group_members: config.highlight_group_members !== false,
       // When true (default), vertical touch swipes on the canvas scroll the
       // page and pinch zooms; rubber-band selection needs a deliberate
       // horizontal-ish drag. Set false to restore gesture-exclusive canvas.
@@ -1770,6 +1772,72 @@ class SpatialLightColorCard extends HTMLElement {
     return domain !== 'binary_sensor';
   }
 
+  /** ---------- Group entities on the canvas ----------
+   * A selected group is the operand (one call fans out to every member, on
+   * the canvas or not). For display, its on-canvas members are shown as
+   * selected "via group" so the scope is visible; they are not part of
+   * `_selectedLights`, so nothing is applied twice. */
+  _groupMembersOf(id) {
+    const attr = this._hass?.states?.[id]?.attributes?.entity_id;   // HA light groups, scenes
+    if (Array.isArray(attr)) return attr;
+    const z2m = this._zigbeeGroups?.get(id);                        // Zigbee2MQTT groups
+    return z2m ? [...z2m] : [];
+  }
+
+  /** All (transitive) members of a group; empty for a plain entity. */
+  _expandGroupMembers(id, depth = 0, seen = new Set()) {
+    const out = new Set();
+    if (depth > 3) return out;
+    for (const m of this._groupMembersOf(id)) {
+      if (m === id || seen.has(m)) continue;
+      seen.add(m); out.add(m);
+      this._expandGroupMembers(m, depth + 1, seen).forEach(x => out.add(x));
+    }
+    return out;
+  }
+
+  /** Selection as displayed: explicit selection plus on-canvas members of selected groups. */
+  _displaySelection() {
+    const explicit = this._selectedLights;
+    const viaGroup = new Set();
+    const groups = new Set();
+    if (this._config.highlight_group_members) {
+      const onCanvas = new Set(this._config.entities || []);
+      for (const id of explicit) {
+        const members = this._expandGroupMembers(id);
+        if (members.size === 0) continue;
+        groups.add(id);
+        for (const m of members) if (onCanvas.has(m) && !explicit.has(m)) viaGroup.add(m);
+      }
+    }
+    return { viaGroup, groups };
+  }
+
+  /**
+   * The selection after a tap on `entity`. A modifier-tap on a member that is
+   * only selected through a group "excludes" it: the group is replaced by its
+   * on-canvas members minus that one.
+   */
+  _selectionAfterTap(entity, additive) {
+    const next = new Set(this._selectedLights);
+    if (!additive) { next.clear(); next.add(entity); return next; }
+    if (next.has(entity)) { next.delete(entity); return next; }
+    const { viaGroup } = this._displaySelection();
+    if (viaGroup.has(entity)) {
+      const onCanvas = new Set(this._config.entities || []);
+      for (const id of [...next]) {
+        const members = this._expandGroupMembers(id);
+        if (!members.has(entity)) continue;
+        next.delete(id);
+        for (const m of members) if (onCanvas.has(m) && m !== entity) next.add(m);
+      }
+      next.delete(entity);
+      return next;
+    }
+    next.add(entity);
+    return next;
+  }
+
   // Toggle a group of entities to a single target on/off state, batched per
   // domain. If any entity in the group is currently off, the target is "on";
   // if all are on, the target is "off". Scenes are always activated since
@@ -2019,7 +2087,12 @@ class SpatialLightColorCard extends HTMLElement {
   /** ---------- Aggregated state of selected lights ---------- */
   _getControlledEntities() {
     if (this._selectedLights.size > 0) {
-      return [...this._selectedLights];
+      // A member that is also covered by a selected group is served by the
+      // group's call — drop it so it is not applied twice.
+      const sel = [...this._selectedLights];
+      const covered = new Set();
+      for (const id of sel) this._expandGroupMembers(id).forEach(m => covered.add(m));
+      return sel.filter(id => !covered.has(id));
     }
     if (this._config.default_entity) {
       return [this._config.default_entity];
@@ -2826,6 +2899,16 @@ class SpatialLightColorCard extends HTMLElement {
       .light.selected { z-index: 3; }
       .light.selected::before {
         box-shadow: 0 0 0 2.5px color-mix(in srgb, var(--accent-primary) 90%, transparent), 0 0 0 5px color-mix(in srgb, var(--accent-primary) 25%, transparent), 0 0 15px color-mix(in srgb, var(--accent-primary) 50%, transparent);
+      }
+      /* Selected through a group: dashed ring, so it reads as "covered by
+         the group you tapped", not as an individually selected light. */
+      .light.selected.via-group::before {
+        box-shadow: 0 0 0 5px color-mix(in srgb, var(--accent-primary) 14%, transparent), 0 0 12px color-mix(in srgb, var(--accent-primary) 35%, transparent);
+        outline: 2.5px dashed color-mix(in srgb, var(--accent-primary) 90%, transparent); outline-offset: 1px;
+      }
+      /* The selected group itself: a double ring. */
+      .light.selected.group-selected::before {
+        box-shadow: 0 0 0 2.5px color-mix(in srgb, var(--accent-primary) 95%, transparent), 0 0 0 5px var(--surface-primary, #111), 0 0 0 7px color-mix(in srgb, var(--accent-primary) 70%, transparent), 0 0 18px color-mix(in srgb, var(--accent-primary) 50%, transparent);
       }
       /* Selected off lights should be more visible than normal off lights */
       .light.selected.off { opacity: 0.82; }
@@ -4565,10 +4648,7 @@ class SpatialLightColorCard extends HTMLElement {
           }
         } else if (this._isSelectableEntity(entity)) {
           // Enter → toggle this entity's membership in the selection.
-          const newSelection = new Set(this._selectedLights);
-          if (newSelection.has(entity)) newSelection.delete(entity);
-          else newSelection.add(entity);
-          this._commitSelection(newSelection);
+          this._commitSelection(this._selectionAfterTap(entity, true));
         }
       } else if (target.classList.contains('color-preset')) {
         const rgbAttr = target.dataset.presetRgb;
@@ -4680,15 +4760,7 @@ class SpatialLightColorCard extends HTMLElement {
             return;
           }
           if (this._isSelectableEntity(entity)) {
-            const newSelection = new Set(this._selectedLights);
-            if (additive) {
-              if (newSelection.has(entity)) newSelection.delete(entity);
-              else newSelection.add(entity);
-            } else {
-              newSelection.clear();
-              newSelection.add(entity);
-            }
-            this._commitSelection(newSelection);
+            this._commitSelection(this._selectionAfterTap(entity, additive));
           }
         }
         return;
@@ -5080,15 +5152,7 @@ class SpatialLightColorCard extends HTMLElement {
             this._lastTap = null;
           }
           if (this._isSelectableEntity(this._pendingTap.entity)) {
-            const newSelection = this._pendingTap.additive
-              ? new Set(this._selectedLights)
-              : new Set();
-            if (this._pendingTap.additive && newSelection.has(this._pendingTap.entity)) {
-              newSelection.delete(this._pendingTap.entity);
-            } else {
-              newSelection.add(this._pendingTap.entity);
-            }
-            this._commitSelection(newSelection);
+            this._commitSelection(this._selectionAfterTap(this._pendingTap.entity, this._pendingTap.additive));
           }
         }
       }
@@ -6132,9 +6196,7 @@ class SpatialLightColorCard extends HTMLElement {
   }
 
   _applyColorWheelSelection(rgb, { announce = true } = {}) {
-    const controlled = this._selectedLights.size > 0
-      ? [...this._selectedLights]
-      : (this._config.default_entity ? [this._config.default_entity] : []);
+    const controlled = this._getControlledEntities();
     if (controlled.length === 0 || !rgb) return;
 
     if (announce) this._announceApplied('Color', controlled);
@@ -6520,9 +6582,7 @@ class SpatialLightColorCard extends HTMLElement {
   }
 
   _applyTemperaturePreset(kelvin) {
-    const controlled = this._selectedLights.size > 0
-      ? [...this._selectedLights]
-      : (this._config.default_entity ? [this._config.default_entity] : []);
+    const controlled = this._getControlledEntities();
     if (controlled.length === 0 || !Number.isFinite(kelvin)) return;
 
     const plan = this._planGroupedDispatch(controlled, 'color_temp');
@@ -6611,9 +6671,7 @@ class SpatialLightColorCard extends HTMLElement {
       this._pendingBrightness = null;
       return;
     }
-    const controlled = this._selectedLights.size > 0
-      ? [...this._selectedLights]
-      : (this._config.default_entity ? [this._config.default_entity] : []);
+    const controlled = this._getControlledEntities();
     if (controlled.length === 0) { this._pendingBrightness = null; return; }
 
     const b = this._pendingBrightness;
@@ -6647,9 +6705,7 @@ class SpatialLightColorCard extends HTMLElement {
       this._pendingTemperature = null;
       return;
     }
-    const controlled = this._selectedLights.size > 0
-      ? [...this._selectedLights]
-      : (this._config.default_entity ? [this._config.default_entity] : []);
+    const controlled = this._getControlledEntities();
     if (controlled.length === 0) { this._pendingTemperature = null; return; }
 
     const k = this._pendingTemperature;
@@ -7260,6 +7316,7 @@ class SpatialLightColorCard extends HTMLElement {
 
   /** ---------- Light updates ---------- */
   updateLights() {
+    const display = this._displaySelection();
     if (!this._hass) return;
     const lights = this.shadowRoot.querySelectorAll('.light');
     lights.forEach(light => {
@@ -7368,9 +7425,13 @@ class SpatialLightColorCard extends HTMLElement {
         }
       }
 
-      // Ensure selected styling matches current selection set
+      // Ensure selected styling matches current selection set. Members of a
+      // selected group display as selected too ("via group"); the group gets
+      // its own highlight. aria-pressed reflects the explicit selection only.
       const selected = this._selectedLights.has(id);
-      light.classList.toggle('selected', selected);
+      light.classList.toggle('selected', selected || display.viaGroup.has(id));
+      light.classList.toggle('via-group', !selected && display.viaGroup.has(id));
+      light.classList.toggle('group-selected', selected && display.groups.has(id));
       // aria-pressed encodes selection; without this sync it goes stale
       // after the first selection change (it was only set at render time).
       const pressed = String(selected);
@@ -7527,6 +7588,7 @@ class SpatialLightColorCard extends HTMLElement {
     yamlLines.push(`show_entity_icons: ${!!this._config.show_entity_icons}`);
     if (this._config.show_power_button === false) yamlLines.push('show_power_button: false');
     yamlLines.push(`switch_single_tap: ${!!this._config.switch_single_tap}`);
+    if (this._config.highlight_group_members === false) yamlLines.push('highlight_group_members: false');
     if (this._config.canvas_touch_scroll === false) yamlLines.push('canvas_touch_scroll: false');
     if (this._config.theme_mode && this._config.theme_mode !== 'auto') {
       yamlLines.push(`theme_mode: ${this._config.theme_mode}`);
@@ -9546,6 +9608,10 @@ class SpatialLightColorCardEditor extends HTMLElement {
               <ha-switch id="cfgSwitchTap"></ha-switch>
             </div>
             <div class="option-row">
+              <div><div class="label">Show Group Members</div><div class="sublabel">When a group entity on the canvas is selected, also show its members on the canvas as selected</div></div>
+              <ha-switch id="cfgGroupMembers"></ha-switch>
+            </div>
+            <div class="option-row">
               <div><div class="label">Scroll Page Over Canvas</div><div class="sublabel">Vertical touch swipes on the canvas scroll the dashboard; area selection needs a sideways drag. Turn off to reserve all canvas touches for selection.</div></div>
               <ha-switch id="cfgCanvasTouchScroll"></ha-switch>
             </div>
@@ -9735,6 +9801,7 @@ class SpatialLightColorCardEditor extends HTMLElement {
       cfgAlwaysControls: c.always_show_controls || false,
       cfgControlsBelow: c.controls_below !== false,
       cfgSwitchTap: c.switch_single_tap || false,
+      cfgGroupMembers: c.highlight_group_members !== false,
       cfgCanvasTouchScroll: c.canvas_touch_scroll !== false,
       cfgThemeGlass: !!(c.theme && c.theme.glass),
       cfgGlowEnabled: !!(g.enabled),
@@ -10084,6 +10151,7 @@ class SpatialLightColorCardEditor extends HTMLElement {
     this._bindSwitch('cfgShowPowerButton', 'show_power_button');
     this._bindSwitch('cfgControlsBelow', 'controls_below');
     this._bindSwitch('cfgSwitchTap', 'switch_single_tap');
+    this._bindSwitch('cfgGroupMembers', 'highlight_group_members');
     this._bindSwitch('cfgCanvasTouchScroll', 'canvas_touch_scroll');
 
     // --- Appearance (theme) ---

@@ -3893,6 +3893,11 @@ class SpatialLightColorCard extends HTMLElement {
         .history-group { position: absolute; top: 20px; right: 16px; display: inline-flex; margin: 0; }
         .history-separator { display: none; }
         .controls-floating .history-group { top: 16px; }
+        /* No presets: nothing to align to, so power (+ undo/redo) sit as one
+           compact group centred on the wheel instead of at the column top. */
+        .presets-row:not(.has-presets) { align-self: center; min-height: 0; justify-content: center; gap: 8px; }
+        .presets-row:not(.has-presets) .history-group { position: static; margin: 0; }
+        .presets-row:not(.has-presets) .history-separator { display: block; margin: 0 2px 0 6px; }
         /* Sits in the panel's top padding, right-aligned above the rail. */
         .history-hint {
           left: auto; right: 4px; bottom: calc(100% - 3px); top: auto; transform: none;

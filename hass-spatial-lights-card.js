@@ -3635,6 +3635,7 @@ class SpatialLightColorCard extends HTMLElement {
         grid-column: 2; grid-row: 2;
         display: flex; align-items: center; gap: 6px; min-width: 0;
       }
+      .preset-bank { display: contents; }
       .presets-area {
         display: flex; flex-wrap: wrap; gap: 0; align-items: center; min-width: 0;
         margin-left: -4px; /* Align visual preset circles with slider left edge */
@@ -3865,13 +3866,13 @@ class SpatialLightColorCard extends HTMLElement {
           gap: 12px;
           left: 16px; right: 16px; width: auto; transform: none;
         }
-        .controls-below.visible {
+        .controls-floating.visible {
           display: flex; flex-wrap: wrap; justify-content: center;
           gap: 12px;
         }
         .light { --light-size: ${Math.min(this._config.light_size, 50)}px; }
-        .color-wheel-mini { order: 1; flex-shrink: 0; align-self: start; }
-        .presets-row {
+        .controls-floating .color-wheel-mini { order: 1; flex-shrink: 0; align-self: start; }
+        .controls-floating .presets-row {
           order: 2; flex: 0 1 auto; align-self: center;
           max-width: calc(100% - 140px); /* 128px wheel + 12px gap */
           justify-content: center;
@@ -3882,24 +3883,165 @@ class SpatialLightColorCard extends HTMLElement {
            effect/mode buttons continue leftwards after the separator. Growth
            is always towards the wheel, so a selection adding effects never
            moves anything already placed, and the rail never moves. */
-        .presets-row {
+        .controls-floating .presets-row {
           position: static; flex: 1 1 auto; flex-direction: row-reverse; flex-wrap: wrap;
           justify-content: flex-start; align-content: start; row-gap: 8px; align-self: start; min-height: 128px;
         }
-        .presets-area { display: contents; }
-        .history-group { order: -2; margin: 0; }
-        .history-separator { display: block; margin: 0 6px 0 2px; }
-        .history-btn { margin: -4px 0; }
-        .power-toggle { order: -1; flex: 0 0 auto; }
+        .controls-floating .presets-area { display: contents; }
+        .controls-floating .history-group { order: -2; margin: 0; }
+        .controls-floating .history-separator { display: block; margin: 0 6px 0 2px; }
+        .controls-floating .history-btn { margin: -4px 0; }
+        .controls-floating .power-toggle { order: -1; flex: 0 0 auto; }
         /* The power separator becomes the line break after row 1. */
-        .presets-row.has-presets .power-separator { display: block; flex-basis: 100%; height: 0; margin: 0; background: none; }
+        .controls-floating .presets-row.has-presets .power-separator { display: block; flex-basis: 100%; height: 0; margin: 0; background: none; }
         /* Sits in the panel's top padding, right-aligned above the rail. */
-        .history-hint {
+        .controls-floating .history-hint {
           left: auto; right: 4px; bottom: calc(100% - 3px); top: auto; transform: none;
           font-size: 11px; line-height: 14px; padding: 1px 8px; border-radius: 8px; background: var(--surface-elevated);
           border: 1px solid var(--border-subtle); z-index: 2;
         }
-        .slider-group { order: 3; flex: 1 1 100%; min-width: 0; }
+        .controls-floating .slider-group { order: 3; flex: 1 1 100%; min-width: 0; }
+        /* Phone: central wheel, full-width sliders, independent preset banks. */
+
+        .controls-below.visible {
+          position: relative;
+          display: grid;
+          grid-template-columns: 1fr 128px 1fr;
+          grid-template-rows: 128px auto;
+          gap: 16px 12px;
+          padding: 20px;
+        }
+        .controls-below .presets-row {
+          display: contents;
+        }
+        .controls-below .color-wheel-mini {
+          grid-column: 2;
+          grid-row: 1;
+          order: 0;
+        }
+        .controls-below .power-toggle {
+          grid-column: 1;
+          grid-row: 1;
+          align-self: center;
+          justify-self: center;
+          order: 0;
+        }
+        .controls-below .history-group {
+          grid-column: 3;
+          grid-row: 1;
+          align-self: center;
+          justify-self: center;
+          flex-direction: column;
+          order: 0;
+          margin: 0;
+          gap: 4px;
+        }
+        .controls-below .history-btn {
+          margin: 0;
+        }
+        .controls-below .history-separator,.controls-below .power-separator {
+          display: none!important;
+        }
+        .controls-below .slider-group {
+          grid-column: 1/-1;
+          grid-row: 2;
+          min-width: 0;
+          order: 0;
+        }
+        .controls-below .presets-area {
+          display: flex;
+          grid-column: 1/-1;
+          grid-row: 3;
+          justify-content: center;
+          gap: 4px;
+          flex-wrap: wrap;
+          margin: 0;
+        }
+        .controls-below .presets-row:not(.has-presets) .presets-area {
+          display: none;
+        }
+        .controls-below .color-preset,.controls-below .temp-preset,.controls-below .effect-preset {
+          width: 40px;
+          height: 40px;
+        }
+        .controls-below .color-preset::after,.controls-below .temp-preset::after,.controls-below .effect-preset::after {
+          inset: 2px;
+          border-color: var(--border-medium);
+        }
+        /* Without history, center the wheel and power together as a 184px pair. */
+        .controls-below:not(.has-history) .color-wheel-mini {
+          grid-column: 1/-1;
+          justify-self: center;
+          position: relative;
+          left: -28px;
+        }
+        .controls-below:not(.has-history) .power-toggle {
+          grid-column: 1/-1;
+          justify-self: center;
+          position: relative;
+          left: 74px;
+        }
+        /* The hint overlays the wheel rail; it never participates in layout. */
+        .controls-below .history-hint {
+          display: block;
+          right: 0;
+          left: auto;
+          top: -36px;
+          bottom: auto;
+          transform: none;
+          font-size: 11px;
+          line-height: 14px;
+          padding: 2px 6px;
+          border: 1px solid var(--border-medium);
+          border-radius: 8px;
+          background: var(--surface-elevated);
+          z-index: 2;
+        }
+        .controls-below .presets-area {
+          flex-direction: column;
+          align-items: stretch;
+          gap: 8px;
+        }
+        .controls-below .preset-bank {
+          display: flex;
+          flex-wrap: wrap;
+          gap: 4px;
+          justify-content: center;
+        }
+        .controls-below .preset-bank-live {
+          justify-content: flex-start;
+          border-top: 1px solid var(--border-medium);
+          padding-top: 8px;
+        }
+        .controls-below .presets-area .preset-separator {
+          display: none!important;
+        }
+        .controls-below .preset-bank-effects {
+          padding-top: 4px;
+        }
+        .controls-below .color-preset.active::after,.controls-below .temp-preset.active::after {
+          box-shadow: 0 0 0 2px var(--text-secondary);
+        }
+        .controls-below .color-preset:hover::after,.controls-below .temp-preset:hover::after {
+          border-color: var(--text-secondary);
+          box-shadow: var(--shadow-sm);
+        }
+        .controls-below .power-toggle.on {
+          color: var(--text-on-accent,var(--text-primary));
+        }
+        .controls-below .slider {
+          min-width: 0;
+        }
+
+      }
+
+      /* Eight saved colors form a balanced 4 × 2 grid on the narrowest phones. */
+      @media (max-width: 379px) {
+        .controls-below .preset-bank-saved:has(> :nth-child(8)) {
+          display: grid;
+          grid-template-columns: repeat(4, 40px);
+          justify-content: center;
+        }
       }
 
       .empty-state {
@@ -4287,7 +4429,7 @@ class SpatialLightColorCard extends HTMLElement {
       ? Math.min(100, Math.max(0, ((clampedTemp - tempRange.min) / (tempRange.max - tempRange.min)) * 100))
       : 0;
     const brightnessColor = Array.isArray(avgState.color) ? `rgb(${avgState.color.join(',')})` : 'var(--accent-primary)';
-    const presetsHtml = this._renderPresetsContent();
+    const presetsHtml = this._renderPresetsContent(true);
     return `
       <div class="controls-below ${(this._config.always_show_controls || this._selectedLights.size > 0 || this._config.default_entity) ? 'visible' : ''}${this._config.undo ? ' has-history' : ''}" id="controlsBelow" role="region" aria-label="Light controls">
         <canvas id="colorWheelMini" class="color-wheel-mini" width="256" height="256" role="img" aria-label="Color picker"></canvas>
@@ -6045,7 +6187,7 @@ class SpatialLightColorCard extends HTMLElement {
       this._lastPresetsHtml = combinedHtml;
       const presetsAreas = this.shadowRoot.querySelectorAll('.presets-area');
       presetsAreas.forEach(area => {
-        area.innerHTML = combinedHtml;
+        area.innerHTML = area.closest('.controls-below') ? this._renderPresetsContent(true) : combinedHtml;
         const row = area.closest('.presets-row');
         if (row) row.classList.toggle('has-presets', !!combinedHtml);
       });
@@ -6665,13 +6807,28 @@ class SpatialLightColorCard extends HTMLElement {
     return html;
   }
 
-  _renderPresetsContent() {
+  _renderPresetsContent(forBelow = false) {
     const colorHtml = this._renderColorPresets();
     const tempHtml = this._renderTemperaturePresets();
     // The adaptive preset lives in the effect block: it's a mode button, not
     // a color swatch, and shares the effect-preset look and separators.
     const effectHtml = this._renderEffectPresets() + this._renderAdaptivePreset();
     if (!colorHtml && !tempHtml && !effectHtml) return '';
+    // Separate banks are layout-transparent on desktop. On phones, dynamic
+    // live swatches and modes cannot reflow the saved palette or main controls.
+    if (forBelow) {
+      const colors = colorHtml.match(/<div class="color-preset[^>]*><\/div>/g) || [];
+      const saved = colors.filter(h => !h.includes('data-preset-rgb=')).join('');
+      const live = colors.filter(h => h.includes('data-preset-rgb=')).join('');
+      const temperatureSeparator = colorHtml && tempHtml
+        ? '<div class="preset-separator" aria-hidden="true"></div>' : '';
+      const effectSeparator = (colorHtml || tempHtml) && effectHtml
+        ? '<div class="preset-separator effect-separator" aria-hidden="true"></div>' : '';
+      return (saved ? `<div class="preset-bank preset-bank-saved">${saved}</div>` : '')
+        + (live || tempHtml ? `<div class="preset-bank preset-bank-live">${live}${temperatureSeparator}${tempHtml}</div>` : '')
+        + effectSeparator
+        + (effectHtml ? `<div class="preset-bank preset-bank-effects">${effectHtml}</div>` : '');
+    }
     let html = colorHtml || '';
     if (colorHtml && tempHtml) {
       html += '<div class="preset-separator" aria-hidden="true"></div>';
@@ -6692,8 +6849,11 @@ class SpatialLightColorCard extends HTMLElement {
     // The power separator sits in the non-wrapping .presets-row and is
     // governed by CSS (.has-presets / :first-child), not by row measurement.
     this.shadowRoot.querySelectorAll('.preset-separator:not(.power-separator)').forEach(sep => {
-      const prev = sep.previousElementSibling;
-      const next = sep.nextElementSibling;
+      let prev = sep.previousElementSibling;
+      let next = sep.nextElementSibling;
+      if (!prev && sep.parentElement.classList.contains('preset-bank')) prev = sep.parentElement.previousElementSibling;
+      while (prev?.classList.contains('preset-bank')) prev = prev.lastElementChild;
+      while (next?.classList.contains('preset-bank')) next = next.firstElementChild;
       if (!prev || !next) {
         sep.style.display = 'none';
         return;

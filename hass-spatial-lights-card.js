@@ -3877,20 +3877,23 @@ class SpatialLightColorCard extends HTMLElement {
           max-width: calc(100% - 140px); /* 128px wheel + 12px gap */
           justify-content: center;
         }
-        .presets-area {
-          margin-left: 0; /* Reset desktop alignment offset */
-          justify-content: center; row-gap: 6px;
-        }
-        /* Effect / adaptive buttons get their own row under the colour dots
-           instead of filling gaps in the dot grid. */
+        /* Phones: power, colour dots, effect/mode buttons and undo/redo flow
+           as ONE centred wrapping group beside the wheel, so the block is
+           content-sized and balanced whatever the count. The colour/effect
+           separator becomes a line break so the round buttons form their own
+           row under the dots. */
+        .presets-row { position: relative; flex-wrap: wrap; justify-content: center; row-gap: 6px; }
+        .presets-area { display: contents; }
         .presets-area .effect-separator { flex-basis: 100%; height: 0; margin: 0; background: none; }
-        /* Narrow row: undo/redo take their own line under the presets, kept
-           at the right edge (the natural end of a right-thumb arc). */
-        .presets-row { flex-wrap: wrap; }
-        .presets-row.has-presets .presets-area { flex: 1 1 0; }
-        .history-group { flex-basis: 100%; justify-content: flex-end; margin-left: 0; }
-        .history-group .history-separator { display: none; }
-        .history-hint { right: 92px; font-size: 11px; } /* just left of the 89px pair */
+        /* Undo/redo wrap as ONE unit — never split across lines. */
+        .history-group { display: inline-flex; flex: 0 0 auto; margin-left: 0; }
+        .history-separator { display: none; }
+        .history-btn { margin: -4px 0; } /* 44px hit area, but the row spacing follows the 36px circle */
+        .history-hint {
+          right: auto; bottom: auto; left: 50%; top: calc(100% + 4px); transform: translateX(-50%);
+          font-size: 11px; padding: 2px 8px; border-radius: 8px; background: var(--surface-elevated);
+          border: 1px solid var(--border-subtle); z-index: 2;
+        }
         .slider-group { order: 3; flex: 1 1 100%; min-width: 0; }
       }
 

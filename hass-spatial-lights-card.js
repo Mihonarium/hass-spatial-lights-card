@@ -3877,21 +3877,27 @@ class SpatialLightColorCard extends HTMLElement {
           max-width: calc(100% - 140px); /* 128px wheel + 12px gap */
           justify-content: center;
         }
-        /* Phones: power, colour dots, effect/mode buttons and undo/redo flow
-           as ONE centred wrapping group beside the wheel, so the block is
-           content-sized and balanced whatever the count. The colour/effect
-           separator becomes a line break so the round buttons form their own
-           row under the dots. */
-        .presets-row { position: relative; flex-wrap: wrap; justify-content: center; row-gap: 6px; }
+        /* Phones: power and undo/redo are a fixed "action rail" in the panel's
+           top-right corner, so they never move when effect/mode buttons come
+           and go with the selection. Only the colour dots and effect buttons
+           flow, centred in the column beside the wheel, under the rail. */
+        .controls-below.visible { position: relative; }
+        .presets-row {
+          position: static; flex: 1 1 auto; flex-wrap: wrap; justify-content: center; align-content: start; row-gap: 6px;
+          align-self: start; padding-top: 52px; min-height: 128px;
+        }
         .presets-area { display: contents; }
         .presets-area .effect-separator { flex-basis: 100%; height: 0; margin: 0; background: none; }
-        /* Undo/redo wrap as ONE unit — never split across lines. */
-        .history-group { display: inline-flex; flex: 0 0 auto; margin-left: 0; }
-        .history-separator { display: none; }
-        .history-btn { margin: -4px 0; } /* 44px hit area, but the row spacing follows the 36px circle */
+        .power-separator, .history-separator { display: none; }
+        .power-toggle { position: absolute; top: 24px; right: 20px; }
+        .has-history .power-toggle { right: 114px; } /* leaves room for the 89px undo/redo pair + gap */
+        .history-group { position: absolute; top: 20px; right: 16px; display: inline-flex; margin: 0; }
+        .controls-floating .power-toggle { top: 20px; }
+        .controls-floating .history-group { top: 16px; }
+        /* Sits in the panel's top padding, right-aligned above the rail. */
         .history-hint {
-          right: auto; bottom: auto; left: 50%; top: calc(100% + 4px); transform: translateX(-50%);
-          font-size: 11px; padding: 2px 8px; border-radius: 8px; background: var(--surface-elevated);
+          left: auto; right: 4px; bottom: calc(100% - 3px); top: auto; transform: none;
+          font-size: 11px; line-height: 14px; padding: 1px 8px; border-radius: 8px; background: var(--surface-elevated);
           border: 1px solid var(--border-subtle); z-index: 2;
         }
         .slider-group { order: 3; flex: 1 1 100%; min-width: 0; }
@@ -4253,7 +4259,7 @@ class SpatialLightColorCard extends HTMLElement {
     const brightnessColor = Array.isArray(avgState.color) ? `rgb(${avgState.color.join(',')})` : 'var(--accent-primary)';
     const presetsHtml = this._renderPresetsContent();
     return `
-      <div class="controls-floating ${visible ? 'visible' : ''}" id="controlsFloating" role="region" aria-label="Light controls">
+      <div class="controls-floating ${visible ? 'visible' : ''}${this._config.undo ? ' has-history' : ''}" id="controlsFloating" role="region" aria-label="Light controls">
         <canvas id="colorWheelMini" class="color-wheel-mini" width="256" height="256" role="img" aria-label="Color picker"></canvas>
         <div class="slider-group">
           <div class="slider-row">
@@ -4284,7 +4290,7 @@ class SpatialLightColorCard extends HTMLElement {
     const brightnessColor = Array.isArray(avgState.color) ? `rgb(${avgState.color.join(',')})` : 'var(--accent-primary)';
     const presetsHtml = this._renderPresetsContent();
     return `
-      <div class="controls-below ${(this._config.always_show_controls || this._selectedLights.size > 0 || this._config.default_entity) ? 'visible' : ''}" id="controlsBelow" role="region" aria-label="Light controls">
+      <div class="controls-below ${(this._config.always_show_controls || this._selectedLights.size > 0 || this._config.default_entity) ? 'visible' : ''}${this._config.undo ? ' has-history' : ''}" id="controlsBelow" role="region" aria-label="Light controls">
         <canvas id="colorWheelMini" class="color-wheel-mini" width="256" height="256" role="img" aria-label="Color picker"></canvas>
         <div class="slider-group">
           <div class="slider-row">

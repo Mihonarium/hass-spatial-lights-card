@@ -112,6 +112,17 @@ When lights are selected, the color wheel, brightness slider, and temperature sl
 
 The **power button** sits at the start of the presets row — under the sliders on desktop, beside the color wheel on mobile — so the sliders keep their full width. It acts on whatever the sliders control: the selected lights, or the default entity when nothing is selected. It is filled when every one of them is on (pressing turns them all off), outlined when only some are on (pressing turns the rest on), and neutral when all are off. Hide it with `show_power_button: false`.
 
+### Undo & Redo
+
+With `undo: true` (or the **Undo & Redo Buttons** switch in the editor), the control strip ends with **↶ Undo** and **↷ Redo** buttons. Every change made from the card (toggle, power button, colour, brightness, temperature, preset, effect) first records the state of every light it can reach, including the members of the default entity, so a stray tap that recoloured the whole room is one tap away from being reverted. **Ctrl+Z / Cmd+Z** and **Ctrl+Y / Cmd+Shift+Z** do the same from the keyboard.
+
+- Undo puts every light the change targeted back to its prior state, whether or not the change has finished propagating, so it is safe to press immediately. Colour is restored in the bulb's own colour mode (hue/saturation, xy, RGBW, colour temperature, white), the way Home Assistant scenes do.
+- Groups are restored light by light, so per-light colours survive.
+- Each action is its own step; only a continuous wheel drag or repeated slider nudges on the same lights form one step. Up to 20 steps are kept; the history clears after 30 minutes of inactivity.
+- Changes made elsewhere (an automation, another dashboard, a wall switch) are recorded as steps too, so they can be undone from here. Gradual drift such as adaptive-lighting ticks is ignored. Set `undo_external: false` to record only the card's own changes.
+- Redo replays the change, so the pair doubles as a before/after comparison.
+- The buttons are greyed out when there is nothing to undo or redo.
+
 ### Opening Light Details
 
 | Action | Desktop | Mobile |
@@ -170,8 +181,8 @@ Position history stores up to 50 steps.
 |----------|--------|
 | Ctrl+A / Cmd+A | Select all lights |
 | Escape | Deselect all / close color wheel / close dialogs |
-| Ctrl+Z / Cmd+Z | Undo position change |
-| Ctrl+Y / Cmd+Shift+Z | Redo position change |
+| Ctrl+Z / Cmd+Z | Undo the last light change (or position change while editing positions) |
+| Ctrl+Y / Cmd+Shift+Z | Redo the last undone light change (or position change while editing positions) |
 | Arrow keys | Nudge selected lights (when positions unlocked) |
 | Alt + Arrow keys | Fine-nudge selected lights |
 
@@ -220,6 +231,8 @@ Position history stores up to 50 steps.
 | `controls_below` | boolean | `true` | Render controls below (`true`) or floating over (`false`). |
 | `default_entity` | string | `null` | Entity to control when nothing is selected. |
 | `switch_single_tap` | boolean | `false` | Toggle switches/scenes with a single tap instead of selecting them. |
+| `undo` | boolean | `false` | Show Undo/Redo buttons in the control strip (see [Undo & Redo](#undo--redo)). |
+| `undo_external` | boolean | `true` | Also record changes made outside the card (automations, other users) as undoable steps. |
 | `show_entity_icons` | boolean | `true` | Show MDI icons inside the light circles. |
 | `icon_style` | string | `"mdi"` | Icon style (`mdi` or `emoji`). |
 | `light_size` | number | `56` | Size of light circles in pixels. On mobile (≤768 px viewport), the rendered size is capped at 50 px regardless of this value. |

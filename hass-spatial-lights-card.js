@@ -3876,28 +3876,23 @@ class SpatialLightColorCard extends HTMLElement {
           max-width: calc(100% - 140px); /* 128px wheel + 12px gap */
           justify-content: center;
         }
-        /* Phones: the desktop action row, folded into the column beside the
-           wheel. Row 1: power button at the left, undo/redo pinned at the
-           right. Row 2+: colour dots left-aligned under the power button,
-           effect/mode buttons appended after them in reading order — so a
-           selection adding effects never moves anything already placed. */
-        .controls-below.visible { position: relative; }
+        /* Phones: the action row is mirrored and anchored to the panel's right
+           edge. Row 1: power, then undo/redo, ending at the right edge. Rows
+           2+: colour dots hang from the right edge (first preset rightmost),
+           effect/mode buttons continue leftwards after the separator. Growth
+           is always towards the wheel, so a selection adding effects never
+           moves anything already placed, and the rail never moves. */
         .presets-row {
-          position: static; flex: 1 1 auto; flex-wrap: wrap; justify-content: flex-start; align-content: start;
-          row-gap: 8px; align-self: start; min-height: 128px;
+          position: static; flex: 1 1 auto; flex-direction: row-reverse; flex-wrap: wrap;
+          justify-content: flex-start; align-content: start; row-gap: 8px; align-self: start; min-height: 128px;
         }
         .presets-area { display: contents; }
-        .power-toggle { flex: 0 0 auto; }
+        .history-group { order: -2; margin: 0; }
+        .history-separator { display: block; margin: 0 6px 0 2px; }
+        .history-btn { margin: -4px 0; }
+        .power-toggle { order: -1; flex: 0 0 auto; }
         /* The power separator becomes the line break after row 1. */
         .presets-row.has-presets .power-separator { display: block; flex-basis: 100%; height: 0; margin: 0; background: none; }
-        .history-group { position: absolute; top: 20px; right: 16px; display: inline-flex; margin: 0; }
-        .history-separator { display: none; }
-        .controls-floating .history-group { top: 16px; }
-        /* No presets: nothing to align to, so power (+ undo/redo) sit as one
-           compact group centred on the wheel instead of at the column top. */
-        .presets-row:not(.has-presets) { align-self: center; min-height: 0; justify-content: center; gap: 8px; }
-        .presets-row:not(.has-presets) .history-group { position: static; margin: 0; }
-        .presets-row:not(.has-presets) .history-separator { display: block; margin: 0 2px 0 6px; }
         /* Sits in the panel's top padding, right-aligned above the rail. */
         .history-hint {
           left: auto; right: 4px; bottom: calc(100% - 3px); top: auto; transform: none;

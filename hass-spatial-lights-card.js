@@ -3723,20 +3723,19 @@ class SpatialLightColorCard extends HTMLElement {
       }
       .effect-preset::after {
         content: ''; position: absolute; inset: 4px; border-radius: 9999px;
-        background: rgba(255,255,255,0.08); border: 2px solid rgba(255,255,255,0.15);
+        background: var(--surface-elevated); border: 2px solid var(--border-medium);
         box-shadow: var(--shadow-sm);
         transition: transform var(--transition-fast), border-color var(--transition-fast), box-shadow var(--transition-fast);
       }
-      .effect-preset:hover::after { transform: scale(1.15); border-color: rgba(255,255,255,0.5); box-shadow: 0 0 8px rgba(255,255,255,0.2); }
+      .effect-preset:hover::after { transform: scale(1.15); border-color: var(--text-secondary); }
       .effect-preset:active::after { transform: scale(0.92); }
-      .effect-preset.active::after { box-shadow: 0 0 0 2px rgba(255,255,255,0.5); background: rgba(255,255,255,0.15); }
-      .effect-preset.active:hover::after { box-shadow: 0 0 0 2px rgba(255,255,255,0.5), 0 0 8px rgba(255,255,255,0.2); }
+      .effect-preset.active::after { border-color: var(--text-primary); box-shadow: 0 0 0 2px color-mix(in srgb, var(--text-primary) 35%, transparent); }
       .effect-preset ha-icon {
         position: relative; z-index: 1;
-        --mdc-icon-size: 18px; color: rgba(255,255,255,0.7);
+        --mdc-icon-size: 18px; color: var(--text-secondary);
         pointer-events: none;
       }
-      .effect-preset.active ha-icon { color: rgba(255,255,255,0.95); }
+      .effect-preset.active ha-icon { color: var(--text-primary); }
       .effect-preset .effect-label {
         position: absolute; top: calc(100% + 2px); left: 50%; transform: translateX(-50%);
         font-size: 9px; color: var(--text-tertiary); white-space: nowrap; pointer-events: none;
@@ -3877,22 +3876,22 @@ class SpatialLightColorCard extends HTMLElement {
           max-width: calc(100% - 140px); /* 128px wheel + 12px gap */
           justify-content: center;
         }
-        /* Phones: power and undo/redo are a fixed "action rail" in the panel's
-           top-right corner, so they never move when effect/mode buttons come
-           and go with the selection. Only the colour dots and effect buttons
-           flow, centred in the column beside the wheel, under the rail. */
+        /* Phones: the desktop action row, folded into the column beside the
+           wheel. Row 1: power button at the left, undo/redo pinned at the
+           right. Row 2+: colour dots left-aligned under the power button,
+           effect/mode buttons appended after them in reading order — so a
+           selection adding effects never moves anything already placed. */
         .controls-below.visible { position: relative; }
         .presets-row {
-          position: static; flex: 1 1 auto; flex-wrap: wrap; justify-content: center; align-content: start; row-gap: 6px;
-          align-self: start; padding-top: 52px; min-height: 128px;
+          position: static; flex: 1 1 auto; flex-wrap: wrap; justify-content: flex-start; align-content: start;
+          row-gap: 8px; align-self: start; min-height: 128px;
         }
         .presets-area { display: contents; }
-        .presets-area .effect-separator { flex-basis: 100%; height: 0; margin: 0; background: none; }
-        .power-separator, .history-separator { display: none; }
-        .power-toggle { position: absolute; top: 24px; right: 20px; }
-        .has-history .power-toggle { right: 114px; } /* leaves room for the 89px undo/redo pair + gap */
+        .power-toggle { flex: 0 0 auto; }
+        /* The power separator becomes the line break after row 1. */
+        .presets-row.has-presets .power-separator { display: block; flex-basis: 100%; height: 0; margin: 0; background: none; }
         .history-group { position: absolute; top: 20px; right: 16px; display: inline-flex; margin: 0; }
-        .controls-floating .power-toggle { top: 20px; }
+        .history-separator { display: none; }
         .controls-floating .history-group { top: 16px; }
         /* Sits in the panel's top padding, right-aligned above the rail. */
         .history-hint {
@@ -6692,9 +6691,7 @@ class SpatialLightColorCard extends HTMLElement {
     if (!this.shadowRoot) return;
     // The power separator sits in the non-wrapping .presets-row and is
     // governed by CSS (.has-presets / :first-child), not by row measurement.
-    const phone = typeof window !== 'undefined' && window.matchMedia && window.matchMedia('(max-width: 768px)').matches;
     this.shadowRoot.querySelectorAll('.preset-separator:not(.power-separator)').forEach(sep => {
-      if (phone && sep.classList.contains('effect-separator')) { sep.style.display = ''; return; } // acts as a row break there
       const prev = sep.previousElementSibling;
       const next = sep.nextElementSibling;
       if (!prev || !next) {

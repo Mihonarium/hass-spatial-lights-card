@@ -1617,7 +1617,12 @@ class SpatialLightColorCard extends HTMLElement {
       if (entity_id.startsWith('scene.')) return { type: 'mdi', value: 'mdi:palette' };
       return { type: 'mdi', value: 'mdi:lightbulb' };
     }
-    const icon = st.attributes.icon || (entity_id.startsWith('scene.') ? 'mdi:palette' : 'mdi:lightbulb');
+    // Groups get a group icon by default so they read as "fans out" before
+    // they are tapped; an explicit icon on the entity still wins.
+    const fallback = entity_id.startsWith('scene.') ? 'mdi:palette'
+      : (entity_id.startsWith('light.') && this._groupMembersOf(entity_id).length > 0) ? 'mdi:lightbulb-group'
+      : 'mdi:lightbulb';
+    const icon = st.attributes.icon || fallback;
     if (this._config.icon_style === 'emoji') {
       // Fallback only; discouraged in this upgrade
       return { type: 'emoji', value: '💡' };
@@ -1821,9 +1826,15 @@ class SpatialLightColorCard extends HTMLElement {
   _selectionAfterTap(entity, additive) {
     const next = new Set(this._selectedLights);
     if (!additive) { next.clear(); next.add(entity); return next; }
-    if (next.has(entity)) { next.delete(entity); return next; }
-    const { viaGroup } = this._displaySelection();
-    if (viaGroup.has(entity)) {
+    // Excluding a light that a selected group covers: replace each covering
+    // group by its on-canvas members minus that light. This applies whether
+    // the light is shown "via group" or was also selected explicitly (e.g. a
+    // marquee caught the group and its members) — otherwise the group would
+    // keep covering it and the tap would appear to do nothing.
+    const coveringGroup = this._config.highlight_group_members
+      && [...next].some(id => id !== entity && this._expandGroupMembers(id).has(entity));
+    if (next.has(entity) && !coveringGroup) { next.delete(entity); return next; }
+    if (coveringGroup) {
       const onCanvas = new Set(this._config.entities || []);
       for (const id of [...next]) {
         const members = this._expandGroupMembers(id);

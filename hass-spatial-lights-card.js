@@ -263,6 +263,9 @@ class SpatialLightColorCard extends HTMLElement {
       highlight_group_members: config.highlight_group_members !== false,
       // Draw group entities as a rounded diamond instead of a circle
       group_diamond: config.group_diamond !== false,
+      // Single tap toggles lights; they join the selection only via marquee
+      // drag (or a modifier-click on desktop).
+      light_single_tap: config.light_single_tap || false,
       // When true (default), vertical touch swipes on the canvas scroll the
       // page and pinch zooms; rubber-band selection needs a deliberate
       // horizontal-ish drag. Set false to restore gesture-exclusive canvas.
@@ -1853,6 +1856,15 @@ class SpatialLightColorCard extends HTMLElement {
     }
     next.add(entity);
     return next;
+  }
+
+  // Whether a plain tap on this entity toggles it (instead of selecting it),
+  // per `switch_single_tap` / `light_single_tap`.
+  _togglesOnSingleTap(entity) {
+    const [domain] = entity.split('.');
+    if (domain === 'light') return !!this._config.light_single_tap;
+    if (domain === 'switch' || domain === 'input_boolean' || domain === 'scene') return !!this._config.switch_single_tap;
+    return false;
   }
 
   // Toggle a group of entities to a single target on/off state, batched per
@@ -4658,11 +4670,10 @@ class SpatialLightColorCard extends HTMLElement {
       if (target.classList.contains('light')) {
         const entity = target.dataset.entity;
         if (!entity) return;
-        const [domain] = entity.split('.');
-        const toggleOnSingleTap = this._config.switch_single_tap && (domain === 'switch' || domain === 'input_boolean' || domain === 'scene');
+        const toggleOnSingleTap = this._togglesOnSingleTap(entity);
         if (toggleOnSingleTap) {
-          // Enter on a switch/scene/input_boolean with switch_single_tap:
-          // mirror tap and toggle just this entity.
+          // Enter on an entity configured for single-tap toggling: mirror tap
+          // and toggle just this entity.
           this._toggleEntity(entity);
         } else if (isSpace) {
           // Space → group action. If there's any selection at all, drive the
@@ -4746,12 +4757,11 @@ class SpatialLightColorCard extends HTMLElement {
     if (targetLight) {
       const entity = targetLight.dataset.entity;
       const pointerType = e.pointerType || 'mouse';
-      const [domain] = entity.split('.');
-      // Check if this entity type is configured to toggle on single tap
-      const toggleOnSingleTap = this._config.switch_single_tap && (domain === 'switch' || domain === 'input_boolean' || domain === 'scene');
-      
       if (this._lockPositions && !this._editPositionsMode) {
         const additive = e.shiftKey || e.ctrlKey || e.metaKey;
+        // Single-tap toggling per config; a modifier-click on a light still
+        // adds it to the selection so desktop keeps a click-based path.
+        const toggleOnSingleTap = this._togglesOnSingleTap(entity) && !(additive && entity.startsWith('light.'));
         if (this._longPressTimer) {
           clearTimeout(this._longPressTimer);
           this._longPressTimer = null;
@@ -5249,8 +5259,7 @@ class SpatialLightColorCard extends HTMLElement {
     if (!targetLight) return;
     const entity = targetLight.dataset.entity;
     if (!entity) return;
-    const [domain] = entity.split('.');
-    if (this._config.switch_single_tap && (domain === 'switch' || domain === 'input_boolean' || domain === 'scene')) {
+    if (this._togglesOnSingleTap(entity)) {
       return;
     }
     e.preventDefault();
@@ -7622,6 +7631,7 @@ class SpatialLightColorCard extends HTMLElement {
     yamlLines.push(`switch_single_tap: ${!!this._config.switch_single_tap}`);
     if (this._config.highlight_group_members === false) yamlLines.push('highlight_group_members: false');
     if (this._config.group_diamond === false) yamlLines.push('group_diamond: false');
+    if (this._config.light_single_tap) yamlLines.push('light_single_tap: true');
     if (this._config.canvas_touch_scroll === false) yamlLines.push('canvas_touch_scroll: false');
     if (this._config.theme_mode && this._config.theme_mode !== 'auto') {
       yamlLines.push(`theme_mode: ${this._config.theme_mode}`);
@@ -9649,6 +9659,10 @@ class SpatialLightColorCardEditor extends HTMLElement {
               <ha-switch id="cfgGroupDiamond"></ha-switch>
             </div>
             <div class="option-row">
+              <div><div class="label">Single-Tap for Lights</div><div class="sublabel">Toggle a light with one tap; select lights by dragging a box around them (Shift/Ctrl-click still adds one)</div></div>
+              <ha-switch id="cfgLightTap"></ha-switch>
+            </div>
+            <div class="option-row">
               <div><div class="label">Scroll Page Over Canvas</div><div class="sublabel">Vertical touch swipes on the canvas scroll the dashboard; area selection needs a sideways drag. Turn off to reserve all canvas touches for selection.</div></div>
               <ha-switch id="cfgCanvasTouchScroll"></ha-switch>
             </div>
@@ -9840,6 +9854,7 @@ class SpatialLightColorCardEditor extends HTMLElement {
       cfgSwitchTap: c.switch_single_tap || false,
       cfgGroupMembers: c.highlight_group_members !== false,
       cfgGroupDiamond: c.group_diamond !== false,
+      cfgLightTap: c.light_single_tap || false,
       cfgCanvasTouchScroll: c.canvas_touch_scroll !== false,
       cfgThemeGlass: !!(c.theme && c.theme.glass),
       cfgGlowEnabled: !!(g.enabled),
@@ -10191,6 +10206,7 @@ class SpatialLightColorCardEditor extends HTMLElement {
     this._bindSwitch('cfgSwitchTap', 'switch_single_tap');
     this._bindSwitch('cfgGroupMembers', 'highlight_group_members');
     this._bindSwitch('cfgGroupDiamond', 'group_diamond');
+    this._bindSwitch('cfgLightTap', 'light_single_tap');
     this._bindSwitch('cfgCanvasTouchScroll', 'canvas_touch_scroll');
 
     // --- Appearance (theme) ---

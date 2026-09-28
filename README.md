@@ -820,7 +820,7 @@ This card made turning dozens of lights to nice colors in arbitrary ways much ea
 ## ToDo
 - [ ] Think about adding arbitrary templates/HTML
 - [x] Color effects (not just colors) among presets (with icons?)
-- [ ] Add a setting for toggling lights with a single tap
+- [x] Add a setting for toggling lights with a single tap
 - [x] Toggling selected lights in a (double-?) tap (somewhere? on a button?)
 - [x] Think about a way to toggle groups of lights?
 - [ ] Possibly remove the global wall occlusion and do local walls for specific lights instead

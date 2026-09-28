@@ -2464,6 +2464,11 @@ class SpatialLightColorCard extends HTMLElement {
 
       this._zigbeeGroups = groups;
       this._zigbeeGroupsLoaded = true;
+      // Group shape and icon depend on group membership; refresh once known.
+      if (groups.size > 0 && this.shadowRoot?.querySelector('.light')) {
+        this._rerenderLightIconsOnly();
+        this.updateLights();
+      }
     } finally {
       this._zigbeeGroupsLoading = false;
     }

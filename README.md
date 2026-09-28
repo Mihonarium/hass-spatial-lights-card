@@ -110,7 +110,7 @@ When lights are selected, the color wheel, brightness slider, and temperature sl
 | Toggle a switch/scene | Double-click (or single click if `switch_single_tap` is on) | Double-tap (or single tap if `switch_single_tap` is on) |
 | Turn the whole selection on/off | Power button under the sliders | Power button beside the color wheel |
 
-> **Note:** If `switch_single_tap` is enabled, switches and scenes activate immediately on a single tap/click instead of being selected. Likewise, `light_single_tap` makes a single tap toggle a light; lights then join the selection only by dragging a box around them (on desktop, Shift/Ctrl/Cmd+click still adds one).
+> **Note:** If `switch_single_tap` is enabled, switches and scenes activate immediately on a single tap/click instead of being selected. Likewise, `light_single_tap` makes a single tap toggle a light; lights then join the selection only by dragging a box around them (on desktop, Shift/Ctrl/Cmd+click still adds one); from the keyboard, Enter toggles the focused light and Ctrl/Cmd+A selects all.
 
 The **power button** sits at the start of the presets row — under the sliders on desktop, beside the color wheel on mobile — so the sliders keep their full width. It acts on whatever the sliders control: the selected lights, or the default entity when nothing is selected. It is filled when every one of them is on (pressing turns them all off), outlined when only some are on (pressing turns the rest on), and neutral when all are off. Hide it with `show_power_button: false`.
 
@@ -833,7 +833,7 @@ This card made turning dozens of lights to nice colors in arbitrary ways much ea
 ## ToDo
 - [ ] Think about adding arbitrary templates/HTML
 - [x] Color effects (not just colors) among presets (with icons?)
-- [ ] Add a setting for toggling lights with a single tap
+- [x] Add a setting for toggling lights with a single tap
 - [x] Toggling selected lights in a (double-?) tap (somewhere? on a button?)
 - [x] Think about a way to toggle groups of lights?
 - [ ] Possibly remove the global wall occlusion and do local walls for specific lights instead

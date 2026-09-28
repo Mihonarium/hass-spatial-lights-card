@@ -179,7 +179,7 @@ class SpatialLightColorCard extends HTMLElement {
      * Zigbee groupcast — all bulbs respond simultaneously, which a flat
      * `entity_id: [array]` cannot achieve no matter how it's batched.
      */
-    this._zigbeeGroups = null;            // Map<sortedMemberKey, groupEntityId>
+    this._zigbeeGroups = null;            // Map<groupEntityId, Set<memberEntityId>>
     this._zigbeeGroupsLoading = false;
     this._zigbeeGroupsLoaded = false;
     this._zigbeeGroupsUnsub = null;       // entity_registry_updated unsubscribe
@@ -2143,12 +2143,7 @@ class SpatialLightColorCard extends HTMLElement {
   static get UNDO_EXTERNAL_GROUP_MS() { return 2000; }
   static get UNDO_HINT_KEY() { return 'spatial-lights-card:undo-hint-seen'; }
 
-  _groupMembers(id) {
-    const attr = this._hass?.states?.[id]?.attributes?.entity_id;
-    if (Array.isArray(attr)) return attr;
-    const z2m = this._zigbeeGroups?.get(id);
-    return z2m ? [...z2m] : [];
-  }
+  _groupMembers(id) { return this._groupMembersOf(id); }
 
   /** Targets plus, recursively, the members of any group among them. No targets → everything the card can reach. */
   _expandUndoTargets(targets) {

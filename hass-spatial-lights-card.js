@@ -261,6 +261,8 @@ class SpatialLightColorCard extends HTMLElement {
       switch_single_tap: config.switch_single_tap || false,
       // Selecting a group entity on the canvas also shows its on-canvas members as selected
       highlight_group_members: config.highlight_group_members !== false,
+      // Draw group entities as a rounded diamond instead of a circle
+      group_diamond: config.group_diamond !== false,
       // When true (default), vertical touch swipes on the canvas scroll the
       // page and pinch zooms; rubber-band selection needs a deliberate
       // horizontal-ish drag. Set false to restore gesture-exclusive canvas.
@@ -1789,6 +1791,10 @@ class SpatialLightColorCard extends HTMLElement {
     return z2m ? [...z2m] : [];
   }
 
+  _isGroupShaped(id) {
+    return !!this._config.group_diamond && id.startsWith('light.') && this._groupMembersOf(id).length > 0;
+  }
+
   /** All (transitive) members of a group; empty for a plain entity. */
   _expandGroupMembers(id, depth = 0, seen = new Set()) {
     const out = new Set();
@@ -2746,6 +2752,16 @@ class SpatialLightColorCard extends HTMLElement {
         content:''; position:absolute; inset:-6px; border-radius:inherit; background:inherit; filter: blur(10px);
         opacity: 0.22; z-index: -1;
       }
+      /* Group entities: a rounded diamond. The body is drawn by ::before
+         (rotated) from --light-bg so selection rings and glow follow the
+         shape, while the icon stays upright. */
+      .light.is-group:not(.icon-only):not(.minimal-ui) { background: transparent !important; }
+      .light.is-group:not(.icon-only):not(.minimal-ui)::before,
+      .light.is-group:not(.icon-only):not(.minimal-ui)::after {
+        background: var(--light-bg, var(--light-off-bg, linear-gradient(135deg,#3a3a3a 0%, #2a2a2a 100%)));
+        border-radius: 22%; transform: rotate(45deg) scale(0.85);
+      }
+      .light.is-group.off:not(.icon-only):not(.minimal-ui)::before { background: var(--light-off-bg, linear-gradient(135deg,#3a3a3a 0%, #2a2a2a 100%)); }
       /* Remove forced gradient, allow JS to override background if needed */
       .light.off { opacity: 0.55; }
       .light.off:not([style*="background"]) { background: var(--light-off-bg, linear-gradient(135deg,#3a3a3a 0%, #2a2a2a 100%)); }
@@ -3625,7 +3641,7 @@ class SpatialLightColorCard extends HTMLElement {
         style += `--light-color:${color};`;
       } else if (!isIconOnly && !isMinimalUI) {
         if (color !== 'transparent') {
-          style += `background:${color};`;
+          style += `background:${color};--light-bg:${color};`;
         } else {
           // Omit background property entirely — let CSS gradient fallback handle it
         }
@@ -3660,7 +3676,7 @@ class SpatialLightColorCard extends HTMLElement {
         : '';
 
       return `
-        <div class="light ${stateClass} ${isSelected ? 'selected' : ''} ${iconOnlyClass}${isUnavailable ? ' unavailable' : ''}"
+        <div class="light ${stateClass} ${isSelected ? 'selected' : ''} ${iconOnlyClass}${isUnavailable ? ' unavailable' : ''}${this._isGroupShaped(entity_id) ? ' is-group' : ''}"
              style="${style}"
              data-entity="${entity_id}"
              tabindex="0"
@@ -4502,8 +4518,10 @@ class SpatialLightColorCard extends HTMLElement {
         light.style.removeProperty('--light-color');
         if (color !== 'transparent') {
           light.style.background = color;
+          light.style.setProperty('--light-bg', color);
         } else {
           light.style.background = '';
+          light.style.removeProperty('--light-bg');
         }
       }
 
@@ -7360,10 +7378,13 @@ class SpatialLightColorCard extends HTMLElement {
         light.style.removeProperty('--light-color');
         if (color !== 'transparent') {
           light.style.background = color;
+          light.style.setProperty('--light-bg', color);
         } else {
           light.style.background = ''; // Fallback to CSS
+          light.style.removeProperty('--light-bg');
         }
       }
+      light.classList.toggle('is-group', this._isGroupShaped(id));
 
       // Set the halo's box-shadow inline with a literal color value.
       // Box-shadow renders without a filter region (unlike filter:blur),
@@ -7600,6 +7621,7 @@ class SpatialLightColorCard extends HTMLElement {
     if (this._config.show_power_button === false) yamlLines.push('show_power_button: false');
     yamlLines.push(`switch_single_tap: ${!!this._config.switch_single_tap}`);
     if (this._config.highlight_group_members === false) yamlLines.push('highlight_group_members: false');
+    if (this._config.group_diamond === false) yamlLines.push('group_diamond: false');
     if (this._config.canvas_touch_scroll === false) yamlLines.push('canvas_touch_scroll: false');
     if (this._config.theme_mode && this._config.theme_mode !== 'auto') {
       yamlLines.push(`theme_mode: ${this._config.theme_mode}`);
@@ -9623,6 +9645,10 @@ class SpatialLightColorCardEditor extends HTMLElement {
               <ha-switch id="cfgGroupMembers"></ha-switch>
             </div>
             <div class="option-row">
+              <div><div class="label">Diamond Shape for Groups</div><div class="sublabel">Draw light groups as a diamond so they stand apart from single lights</div></div>
+              <ha-switch id="cfgGroupDiamond"></ha-switch>
+            </div>
+            <div class="option-row">
               <div><div class="label">Scroll Page Over Canvas</div><div class="sublabel">Vertical touch swipes on the canvas scroll the dashboard; area selection needs a sideways drag. Turn off to reserve all canvas touches for selection.</div></div>
               <ha-switch id="cfgCanvasTouchScroll"></ha-switch>
             </div>
@@ -9813,6 +9839,7 @@ class SpatialLightColorCardEditor extends HTMLElement {
       cfgControlsBelow: c.controls_below !== false,
       cfgSwitchTap: c.switch_single_tap || false,
       cfgGroupMembers: c.highlight_group_members !== false,
+      cfgGroupDiamond: c.group_diamond !== false,
       cfgCanvasTouchScroll: c.canvas_touch_scroll !== false,
       cfgThemeGlass: !!(c.theme && c.theme.glass),
       cfgGlowEnabled: !!(g.enabled),
@@ -10163,6 +10190,7 @@ class SpatialLightColorCardEditor extends HTMLElement {
     this._bindSwitch('cfgControlsBelow', 'controls_below');
     this._bindSwitch('cfgSwitchTap', 'switch_single_tap');
     this._bindSwitch('cfgGroupMembers', 'highlight_group_members');
+    this._bindSwitch('cfgGroupDiamond', 'group_diamond');
     this._bindSwitch('cfgCanvasTouchScroll', 'canvas_touch_scroll');
 
     // --- Appearance (theme) ---

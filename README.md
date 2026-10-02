@@ -104,11 +104,11 @@ When lights are selected, the color wheel, brightness slider, and temperature sl
 
 | Action | Desktop | Mobile |
 |--------|---------|--------|
-| Toggle a light | Double-click | Double-tap |
+| Toggle a light | Double-click (or single click if `light_single_tap` is on) | Double-tap (or single tap if `light_single_tap` is on) |
 | Toggle a switch/scene | Double-click (or single click if `switch_single_tap` is on) | Double-tap (or single tap if `switch_single_tap` is on) |
 | Turn the whole selection on/off | Power button under the sliders | Power button beside the color wheel |
 
-> **Note:** If `switch_single_tap` is enabled, switches and scenes activate immediately on a single tap/click instead of being selected.
+> **Note:** If `switch_single_tap` is enabled, switches and scenes activate immediately on a single tap/click instead of being selected. Likewise, `light_single_tap` makes a single tap toggle a light; lights then join the selection only by dragging a box around them (on desktop, Shift/Ctrl/Cmd+click still adds one).
 
 The **power button** sits at the start of the presets row — under the sliders on desktop, beside the color wheel on mobile — so the sliders keep their full width. It acts on whatever the sliders control: the selected lights, or the default entity when nothing is selected. It is filled when every one of them is on (pressing turns them all off), outlined when only some are on (pressing turns the rest on), and neutral when all are off. Hide it with `show_power_button: false`.
 
@@ -220,6 +220,7 @@ Position history stores up to 50 steps.
 | `controls_below` | boolean | `true` | Render controls below (`true`) or floating over (`false`). |
 | `default_entity` | string | `null` | Entity to control when nothing is selected. |
 | `switch_single_tap` | boolean | `false` | Toggle switches/scenes with a single tap instead of selecting them. |
+| `light_single_tap` | boolean | `false` | Toggle lights with a single tap instead of selecting them; select lights by dragging a box (or modifier-click on desktop). |
 | `show_entity_icons` | boolean | `true` | Show MDI icons inside the light circles. |
 | `icon_style` | string | `"mdi"` | Icon style (`mdi` or `emoji`). |
 | `light_size` | number | `56` | Size of light circles in pixels. On mobile (≤768 px viewport), the rendered size is capped at 50 px regardless of this value. |
